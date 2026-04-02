@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"pgregory.net/rapid"
@@ -21,6 +22,10 @@ func TestCryptoBotWebhookSignatureRoundTrip(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		// Use StringMatching to ensure token is non-empty after trimming (not all whitespace)
 		token := rapid.StringMatching(`\S.*`).Draw(t, "token")
+		// \S in Go regexp excludes [\t\n\f\r ] but NOT \v (0x0B); TrimSpace trims \v too.
+		if strings.TrimSpace(token) == "" {
+			t.Skip("token is all whitespace after TrimSpace (e.g. \\v); skipping")
+		}
 		body := rapid.SliceOfN(rapid.Byte(), 1, 500).Draw(t, "body")
 
 		// Compute correct signature: SHA256(token) → HMAC-SHA256(body) → hex
