@@ -1,0 +1,27 @@
+# Secrets and local config
+.env
+.env.local
+.env.*.local
+
+# Local agent / IDE state
+.claude/
+.gemini/
+.serena/
+
+# Runtime data
+data/*.db
+data/*.db-*
+data/*.sqlite
+backups/*
+!data/.gitkeep
+!backups/.gitkeep
+
+# Build outputs
+bin/
+dist/
+coverage.out
+*.test
+
+# OS / editor noise
+.DS_Store
+Thumbs.db

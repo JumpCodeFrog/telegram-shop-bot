@@ -1,0 +1,70 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": "-- Grafana --",
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "gnetId": null,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "title": "Active Carts",
+      "type": "gauge",
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "shop_active_carts_total",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "title": "Successful Payments (24h)",
+      "type": "stat",
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum(increase(shop_payments_successful_total[24h]))",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "title": "Request Duration (95th percentile)",
+      "type": "timeseries",
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(shop_request_duration_seconds_bucket[5m])) by (le, type))",
+          "refId": "A"
+        }
+      ]
+    }
+  ],
+  "schemaVersion": 30,
+  "style": "dark",
+  "tags": ["shop-bot"],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "",
+  "title": "Shop Bot Dashboard",
+  "uid": "shop-bot-metrics",
+  "version": 1
+}

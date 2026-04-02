@@ -1,0 +1,1 @@
+-- no-op: folded into 001_init.sql during recovery baseline alignment
