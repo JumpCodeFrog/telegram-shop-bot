@@ -1,225 +1,235 @@
-# Telegram Shop Bot
+<p align="center">
+  <img src="https://readme-typing-svg.demolab.com?font=Fira+Code&size=28&pause=1000&color=229ED9&center=true&vCenter=true&width=600&lines=Telegram+Shop+Bot;Built+with+Go+%F0%9F%90%B9;Open+Source+%E2%9C%A8" alt="Typing SVG" />
+</p>
 
-Open-source Telegram shop bot written in Go — ready-to-deploy solution for running a storefront entirely inside Telegram.
+<p align="center">
+  <a href="https://github.com/JumpCodeFrog/telegram-shop-bot/actions/workflows/ci.yml">
+    <img src="https://github.com/JumpCodeFrog/telegram-shop-bot/actions/workflows/ci.yml/badge.svg" alt="CI" />
+  </a>
+  <img src="https://img.shields.io/badge/Go-1.23+-00ADD8?logo=go&logoColor=white" alt="Go version" />
+  <img src="https://img.shields.io/badge/SQLite-embedded-003B57?logo=sqlite&logoColor=white" alt="SQLite" />
+  <img src="https://img.shields.io/badge/Redis-optional-DC382D?logo=redis&logoColor=white" alt="Redis" />
+  <img src="https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white" alt="Docker" />
+  <img src="https://img.shields.io/github/license/JumpCodeFrog/telegram-shop-bot?color=green" alt="License" />
+</p>
 
-Catalog, cart, checkout, Telegram Stars payments, optional CryptoBot (USDT) checkout, promo codes, admin panel, i18n, background workers, health checks, and Prometheus metrics — all in a single binary.
-
----
-
-## Features
-
-### Buyer flows
-- Inline Telegram UI: `/start`, catalog, product cards, cart, checkout, orders, profile, wishlist, support, terms
-- Single-message navigation (no message spam — the bot updates one message in-place)
-- Telegram Stars payments (built-in)
-- Optional CryptoBot checkout for USDT
-- Promo codes with category restrictions and usage limits
-- Product search: `/search <query>`
-- Wishlist with price-drop and back-in-stock notifications
-
-### Admin flows
-- Product and category management (add / edit / delete)
-- Order management and status updates
-- Promo code CRUD
-- Analytics dashboard with CSV export
-- Admin entrypoint: `/admin`
-
-### Infrastructure
-- SQLite storage with embedded auto-migrations
-- Redis-backed FSM and cache (optional — graceful fallback to in-memory)
-- Health endpoint and Prometheus metrics on `:8080`
-- Background workers: backups, cart recovery, onboarding, wishlist watch, CryptoBot polling
-- Polling mode or Webhook mode (auto-selected by config)
-- Docker-ready with multi-stage build and non-root runtime
-- i18n support (Russian and English out of the box)
+<p align="center">
+  Полноценный магазин внутри Telegram — каталог, корзина, оплата Stars и USDT, промокоды, витрина, админка.<br/>
+  Один бинарник. Без лишних зависимостей.
+</p>
 
 ---
 
-## Quick Start
+## ✨ Что умеет бот
 
-### Option 1: Docker Compose (recommended)
+### 🛍️ Для покупателей
+- Каталог товаров с категориями и карточками
+- Корзина и оформление заказа прямо в Telegram
+- Оплата **Telegram Stars** (встроено) и **USDT через CryptoBot** (опционально)
+- Промокоды со скидками, лимитами и ограничениями по категориям
+- Список желаний — уведомления о снижении цены и появлении товара
+- Поиск: `/search <запрос>`
+- Реферальная программа с защитой от фрода
+
+### 🔧 Для администратора
+- Управление товарами и категориями (добавить / изменить / удалить)
+- Управление заказами и статусами
+- Промокоды: создание, редактирование, удаление
+- Аналитика с выгрузкой в CSV
+- Вход: `/admin`
+
+### ⚙️ Инфраструктура
+- **SQLite** — встроенная база данных, миграции автоматически
+- **Redis** — FSM состояний и кэш (опционально, при отсутствии — fallback в память)
+- **Prometheus + Grafana** — метрики из коробки
+- **Health check** на `:8080/health`
+- Фоновые воркеры: бэкапы, восстановление брошенных корзин, вишлист, CryptoBot polling
+- Polling или Webhook режим — выбирается автоматически по конфигу
+- Docker с multi-stage сборкой и запуском от non-root пользователя
+- i18n: русский и английский из коробки
+
+---
+
+## 🚀 Быстрый старт
+
+### Вариант 1: Docker Compose (рекомендуется)
+
+> Нужен только Docker. Go устанавливать не нужно.
 
 ```bash
-# 1. Clone the repo
+# 1. Клонируй репозиторий
 git clone https://github.com/JumpCodeFrog/telegram-shop-bot.git
 cd telegram-shop-bot
 
-# 2. Create config
+# 2. Создай файл конфигурации
 cp .env.example .env
 
-# 3. Edit .env — set BOT_TOKEN (required)
+# 3. Открой .env и вставь токен бота (обязательно!)
 nano .env
+# BOT_TOKEN=твой_токен_от_@BotFather
 
-# 4. Start
+# 4. Запусти
 docker compose up -d --build
 
-# 5. Verify
+# 5. Проверь что всё работает
 docker compose ps
 curl http://127.0.0.1:8080/health
+```
+
+Готово! Бот работает. Логи:
+```bash
 docker compose logs -f bot
 ```
 
-Docker Compose automatically:
-- Sets `REDIS_ADDR=redis:6379`
-- Stores bot data in the `bot_data` named volume
-- Stores backups in the `bot_backups` named volume
-- Runs health checks every 15 seconds
+---
 
-### Option 2: Local binary
+### Вариант 2: Локальный запуск
 
-**Requirements:**
-- Go 1.23+
-- `BOT_TOKEN` from [@BotFather](https://t.me/BotFather)
-- Redis (optional)
-- `sqlite3` CLI (optional, for backup worker)
+**Требования:**
+- [Go 1.23+](https://go.dev/dl/)
+- Токен бота от [@BotFather](https://t.me/BotFather)
+- Redis (опционально)
 
 ```bash
-# 1. Clone and configure
+# 1. Клонируй и настрой
 git clone https://github.com/JumpCodeFrog/telegram-shop-bot.git
 cd telegram-shop-bot
 cp .env.example .env
-nano .env   # set BOT_TOKEN
+nano .env   # вставь BOT_TOKEN
 
-# 2. Build and verify
+# 2. Собери и проверь
 go mod tidy
 go build ./...
 go test ./...
 
-# 3. Run environment checks
+# 3. Проверь окружение (без реального бота)
 go run ./cmd/preflight
 
-# 4. Start the bot
+# 4. Запусти бота
 go run ./cmd/bot
 ```
 
 ---
 
-## Configuration
+## 🔑 Получить токен бота
 
-All settings are in `.env`. Copy `.env.example` to get started.
-
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `BOT_TOKEN` | **yes** | — | Telegram Bot API token from @BotFather |
-| `BOT_USERNAME` | no | — | Bot's @username (without @), used for referral deep-links |
-| `CRYPTOBOT_TOKEN` | no | — | CryptoBot API token for USDT payments |
-| `ADMIN_IDS` | no | — | Comma-separated Telegram user IDs for admin access |
-| `DB_PATH` | no | `data/shop.db` | SQLite database file path |
-| `LOG_LEVEL` | no | `info` | Log level: `debug`, `info`, `warn`, `error` |
-| `APP_ENV` | no | `development` | Set `production` for JSON logs |
-| `REDIS_ADDR` | no | `localhost:6379` | Redis address |
-| `REDIS_PASSWORD` | no | — | Redis password |
-| `USD_TO_STARS_RATE` | no | `50` | Stars per 1 USD (Telegram sells 50 Stars ≈ $0.99) |
-| `WEBHOOK_URL` | no | — | Public URL for Telegram webhook mode |
-| `TELEGRAM_WEBHOOK_SECRET` | no | — | Secret token for webhook verification |
-| `LOCALES_DIR` | no | `locales` | Path to i18n locale files |
-
-**Behavior notes:**
-- When `WEBHOOK_URL` is empty → polling mode (good for development)
-- When `WEBHOOK_URL` is set → webhook mode (recommended for production)
-- When Redis is unavailable → automatic fallback to in-memory FSM/cache
-- When `CRYPTOBOT_TOKEN` is empty → USDT checkout disabled, Stars still works
+1. Открой Telegram и найди [@BotFather](https://t.me/BotFather)
+2. Напиши `/newbot`
+3. Придумай имя и username для бота
+4. Скопируй токен — он выглядит так: `1234567890:ABCdefGHIjklMNOpqrsTUVwxyz`
+5. Вставь в `.env` → `BOT_TOKEN=твой_токен`
 
 ---
 
-## Seed Demo Data
+## ⚙️ Конфигурация
 
-Populates the database with demo categories, products, and promo codes:
+Все настройки в файле `.env`. Скопируй `.env.example` для начала.
+
+| Переменная | Обязательна | По умолчанию | Описание |
+|---|---|---|---|
+| `BOT_TOKEN` | **да** | — | Токен от @BotFather |
+| `BOT_USERNAME` | нет | — | @username бота (без @), для реферальных ссылок |
+| `CRYPTOBOT_TOKEN` | нет | — | Токен CryptoBot для оплаты USDT |
+| `ADMIN_IDS` | нет | — | Telegram ID администраторов через запятую |
+| `DB_PATH` | нет | `data/shop.db` | Путь к файлу SQLite |
+| `LOG_LEVEL` | нет | `info` | Уровень логов: `debug`, `info`, `warn`, `error` |
+| `APP_ENV` | нет | `development` | `production` для JSON-логов |
+| `REDIS_ADDR` | нет | `localhost:6379` | Адрес Redis |
+| `REDIS_PASSWORD` | нет | — | Пароль Redis |
+| `USD_TO_STARS_RATE` | нет | `50` | Stars за 1 USD |
+| `WEBHOOK_URL` | нет | — | Публичный URL для webhook-режима |
+| `TELEGRAM_WEBHOOK_SECRET` | нет | — | Секрет для верификации webhook |
+| `LOCALES_DIR` | нет | `locales` | Путь к папке с переводами |
+
+> 💡 Без `WEBHOOK_URL` бот работает в режиме polling (удобно для разработки).
+> Без Redis — автоматически использует хранилище в памяти.
+
+---
+
+## 🌱 Тестовые данные
+
+Заполни базу демо-товарами, категориями и промокодами:
 
 ```bash
 go run ./cmd/seed
 ```
 
-Safe to run multiple times (uses `INSERT OR IGNORE`).
+Создаст:
+- **Категории:** Одежда 👕, Обувь 👟, Аксессуары 🎒
+- **Товары:** 6 позиций с ценами в USD и Stars
+- **Промокоды:** `WELCOME10` (−10%, 100 использований), `SALE20` (−20%, 50 использований)
 
-Creates:
-- **Categories:** Одежда (👕), Обувь (👟), Аксессуары (🎒)
-- **Products:** 6 items across categories, with USD and Stars prices
-- **Promo codes:** `WELCOME10` (10% off, 100 uses), `SALE20` (20% off, 50 uses)
-
----
-
-## Bot Commands
-
-### User commands
-
-| Command | Description |
-|---------|-------------|
-| `/start` | Main menu |
-| `/catalog` | Browse product catalog |
-| `/search <query>` | Search products |
-| `/cart` | View cart |
-| `/orders` | Order history |
-| `/profile` | User profile |
-| `/wishlist` | Saved items |
-| `/support` | Customer support |
-| `/paysupport` | Payment help |
-| `/terms` | Terms and conditions |
-| `/help` | Command list |
-| `/cancel` | Cancel current action |
-
-### Admin commands
-
-| Command | Description |
-|---------|-------------|
-| `/admin` | Admin panel entry |
-
-Admin access requires your Telegram user ID in the `ADMIN_IDS` environment variable.
+Безопасно запускать повторно.
 
 ---
 
-## Payments
+## 📋 Команды бота
+
+### Для покупателей
+
+| Команда | Описание |
+|---|---|
+| `/start` | Главное меню |
+| `/catalog` | Каталог товаров |
+| `/search <запрос>` | Поиск товаров |
+| `/cart` | Корзина |
+| `/orders` | История заказов |
+| `/profile` | Профиль |
+| `/wishlist` | Список желаний |
+| `/support` | Поддержка |
+| `/paysupport` | Помощь с оплатой |
+| `/terms` | Условия использования |
+| `/help` | Список команд |
+| `/cancel` | Отмена действия |
+
+### Для администратора
+
+| Команда | Описание |
+|---|---|
+| `/admin` | Панель администратора |
+
+> Добавь свой Telegram ID в `ADMIN_IDS` чтобы получить доступ.
+
+---
+
+## 💳 Оплата
 
 ### Telegram Stars
-
-Built-in, works out of the box. The bot sends a Telegram Stars invoice and handles the `successful_payment` callback automatically.
-
-Rate is configurable via `USD_TO_STARS_RATE` (default: 50 Stars = $1).
+Встроено, работает сразу. Бот отправляет инвойс Stars и автоматически обрабатывает `successful_payment`.
+Курс настраивается через `USD_TO_STARS_RATE` (по умолчанию: 50 Stars = $1).
 
 ### CryptoBot (USDT)
-
-Optional. Set `CRYPTOBOT_TOKEN` to enable.
-
-- The bot creates invoices via CryptoBot API
-- A background polling worker checks invoice status every 30 seconds
-- Webhook signature verification uses HMAC-SHA256
+Опционально. Установи `CRYPTOBOT_TOKEN` для включения.
+- Создаёт инвойсы через CryptoBot API
+- Фоновый воркер проверяет статус платежей каждые 30 секунд
+- Верификация подписи через HMAC-SHA256
 
 ---
 
-## Deployment
+## 🚢 Деплой в продакшн
 
-### Production checklist
+### Чеклист
 
-1. Set a real `BOT_TOKEN`
-2. Set `ADMIN_IDS` to your Telegram user ID
-3. Choose polling or webhook mode
-4. If using webhooks — ensure `WEBHOOK_URL` is publicly reachable (HTTPS required by Telegram)
-5. Run pre-flight checks:
+1. Установи настоящий `BOT_TOKEN`
+2. Установи `ADMIN_IDS` — свой Telegram ID
+3. Выбери режим: polling или webhook
+4. Если webhook — `WEBHOOK_URL` должен быть публичным HTTPS-адресом
+5. Запусти проверки:
 
 ```bash
-go run ./cmd/preflight        # env, DB, Redis, webhook checks
-go run ./cmd/telegram-smoke   # live Telegram API validation
+go run ./cmd/preflight        # env, БД, Redis, webhook
+go run ./cmd/telegram-smoke   # проверка токена через Telegram API
 ```
 
-6. Start the bot and verify:
+6. Запусти и проверь:
 
 ```bash
-# Docker
 docker compose up -d --build
 curl http://127.0.0.1:8080/health
 curl http://127.0.0.1:8080/metrics
-
-# or local
-go run ./cmd/bot
 ```
 
-7. Manual smoke test in Telegram:
-   - `/start` → navigate catalog → add item → cart → checkout → pay
-   - `/terms`, `/support`, `/paysupport`
-
-### Webhook mode with reverse proxy
-
-For production webhook mode, put the bot behind nginx or Caddy with TLS:
+### Webhook + nginx
 
 ```nginx
 server {
@@ -237,108 +247,98 @@ server {
 }
 ```
 
-Then set:
-```
+```env
 WEBHOOK_URL=https://shop.example.com/webhook/telegram
-TELEGRAM_WEBHOOK_SECRET=your-random-secret-here
+TELEGRAM_WEBHOOK_SECRET=случайная-строка
 ```
 
-### Docker commands
+### Docker команды
 
 ```bash
-docker compose up -d --build   # start / rebuild
-docker compose logs -f bot     # follow logs
-docker compose restart bot     # restart bot only
-docker compose down            # stop everything
+docker compose up -d --build   # старт / пересборка
+docker compose logs -f bot     # логи в реальном времени
+docker compose restart bot     # перезапуск бота
+docker compose down            # остановка
 ```
 
 ---
 
-## Smoke Tests
-
-| Command | What it checks |
-|---------|---------------|
-| `go run ./cmd/preflight` | Env vars, SQLite, Redis, webhook config, helper CLIs |
-| `go run ./cmd/telegram-smoke` | Live `BOT_TOKEN` against Telegram API (getMe, webhook, pending updates) |
-| `go run ./cmd/usability-smoke` | Buyer journey against a fake local Telegram API (no real bot needed) |
-
----
-
-## Project Structure
+## 🏗️ Структура проекта
 
 ```
-.
+telegram-shop-bot/
 ├── cmd/
-│   ├── bot/               # Main runtime entrypoint
-│   ├── preflight/         # Environment readiness checks
-│   ├── seed/              # Demo data seeder
-│   ├── telegram-smoke/    # Telegram API smoke test
-│   └── usability-smoke/   # Local buyer-journey simulation
+│   ├── bot/               # Точка входа — запуск бота
+│   ├── preflight/         # Проверка окружения перед запуском
+│   ├── seed/              # Заполнение демо-данными
+│   ├── telegram-smoke/    # Smoke-тест Telegram API (нужен токен)
+│   └── usability-smoke/   # Smoke-тест пути покупателя (без токена)
 ├── internal/
-│   ├── bot/               # Telegram handlers, middleware, UI
-│   ├── config/            # Env config loading
-│   ├── payment/           # Stars and CryptoBot adapters
-│   ├── service/           # Business logic (i18n, loyalty, metrics, payments)
-│   ├── shop/              # Catalog, cart, order domain logic
-│   └── storage/           # SQLite / Redis stores and migrations
-├── locales/               # i18n bundles (ru.json, en.json)
-├── worker/                # Background workers
-├── Dockerfile             # Multi-stage production build
-├── docker-compose.yml     # Full stack (bot + Redis)
-├── Makefile               # Dev shortcuts
-└── .env.example           # Configuration template
+│   ├── bot/               # Telegram-хендлеры, middleware, UI
+│   ├── config/            # Загрузка конфигурации
+│   ├── payment/           # Адаптеры Stars и CryptoBot
+│   ├── service/           # Бизнес-логика
+│   ├── shop/              # Каталог, корзина, заказы
+│   └── storage/           # SQLite / Redis, миграции
+├── locales/               # Переводы (ru.json, en.json)
+├── worker/                # Фоновые воркеры
+├── monitoring/            # Grafana dashboard JSON
+├── Dockerfile
+├── docker-compose.yml
+├── Makefile
+└── .env.example
 ```
 
 ---
 
-## Makefile
+## 🛠️ Makefile
 
 ```bash
-make build      # go build ./...
-make test       # go test ./...
-make lint       # go vet ./...
-make run        # go run ./cmd/bot
-make seed       # go run ./cmd/seed
-make preflight  # go run ./cmd/preflight
+make build      # Собрать все бинарники
+make test       # Запустить тесты
+make lint       # go vet
+make run        # Запустить бота
+make seed       # Загрузить демо-данные
+make preflight  # Проверить окружение
 ```
 
 ---
 
-## Localization
+## 🌍 Локализация
 
-The bot supports multiple languages via JSON locale files in the `locales/` directory.
+Переводы хранятся в `locales/`. Сейчас доступны:
+- 🇷🇺 `ru.json` — русский (по умолчанию)
+- 🇬🇧 `en.json` — английский
 
-Currently included:
-- `ru.json` — Russian (default)
-- `en.json` — English
-
-To add a new language, create a new JSON file (e.g., `locales/de.json`) following the same key structure. Language selection is based on the user's Telegram language setting.
-
----
-
-## Security
-
-- Webhook signature verification (HMAC-SHA256) for CryptoBot
-- Telegram webhook secret token support
-- Admin access gated by explicit user ID allowlist
-- Non-root Docker runtime
-- No secrets in logs or error messages
-
-See [SECURITY.md](SECURITY.md) for vulnerability reporting and best practices.
+Чтобы добавить новый язык — создай `locales/de.json` по образцу существующих.
+Язык выбирается автоматически по настройке Telegram у пользователя.
 
 ---
 
-## Contributing
+## 🔒 Безопасность
 
-1. Fork the repository
-2. Create a feature branch: `git checkout -b feature/my-feature`
-3. Run tests: `go test ./...`
-4. Run linter: `go vet ./...`
-5. Commit your changes
-6. Open a Pull Request
+- Верификация подписи webhook (HMAC-SHA256) для CryptoBot
+- Поддержка секретного токена для Telegram webhook
+- Доступ в админку только по явному списку Telegram ID
+- Docker-контейнер работает от non-root пользователя
+- Токены и секреты не попадают в логи
+
+Нашёл уязвимость? Смотри [SECURITY.md](SECURITY.md).
 
 ---
 
-## License
+## 🤝 Участие в разработке
 
-MIT License. See [LICENSE](LICENSE) for details.
+1. Форкни репозиторий
+2. Создай ветку: `git checkout -b feature/my-feature`
+3. Запусти тесты: `go test ./...`
+4. Запусти линтер: `go vet ./...`
+5. Открой Pull Request
+
+Подробнее в [CONTRIBUTING.md](CONTRIBUTING.md).
+
+---
+
+## 📄 Лицензия
+
+MIT — делай что хочешь. Смотри [LICENSE](LICENSE).
