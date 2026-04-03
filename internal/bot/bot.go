@@ -9,6 +9,7 @@ import (
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/redis/go-redis/v9"
+	"golang.org/x/time/rate"
 
 	"shop_bot/internal/bot/middleware"
 	"shop_bot/internal/config"
@@ -47,21 +48,24 @@ type Bot struct {
 }
 
 // New creates a new Bot with all dependencies injected.
-func New(cfg *config.Config, db *storage.DB, metrics *service.MetricsService, fsm storage.FSMStore, redisClient *redis.Client) (*Bot, error) {
+func New(cfg *config.Config, db *storage.DB, metrics *service.MetricsService, fsm storage.FSMStore, redisClient *redis.Client, logger *slog.Logger) (*Bot, error) {
 	api, err := tgbotapi.NewBotAPI(cfg.BotToken)
 	if err != nil {
 		return nil, err
 	}
 
-	return NewWithAPI(cfg, api, db, metrics, fsm, redisClient)
+	return NewWithAPI(cfg, api, db, metrics, fsm, redisClient, logger)
 }
 
 // NewWithAPI creates a new Bot using the provided Bot API client.
 // This is primarily useful for local smoke tooling and tests that need to
 // intercept outgoing Telegram requests without hitting the real Bot API.
-func NewWithAPI(cfg *config.Config, api *tgbotapi.BotAPI, db *storage.DB, metrics *service.MetricsService, fsm storage.FSMStore, redisClient *redis.Client) (*Bot, error) {
+func NewWithAPI(cfg *config.Config, api *tgbotapi.BotAPI, db *storage.DB, metrics *service.MetricsService, fsm storage.FSMStore, redisClient *redis.Client, logger *slog.Logger) (*Bot, error) {
 	if api == nil {
 		return nil, fmt.Errorf("bot api client is required")
+	}
+	if logger == nil {
+		logger = slog.Default()
 	}
 
 	ps := storage.NewSQLProductStore(db)
@@ -85,7 +89,7 @@ func NewWithAPI(cfg *config.Config, api *tgbotapi.BotAPI, db *storage.DB, metric
 		cfg:             cfg,
 		catalog:         shop.NewCatalogService(cachedPS, exchangeSvc),
 		cart:            shop.NewCartService(cs, cachedPS, exchangeSvc),
-		order:           shop.NewOrderService(os, cs, cachedPS, slog.Default()),
+		order:           shop.NewOrderService(os, cs, cachedPS, logger),
 		users:           us,
 		products:        cachedPS,
 		promos:          promoStore,
@@ -94,7 +98,7 @@ func NewWithAPI(cfg *config.Config, api *tgbotapi.BotAPI, db *storage.DB, metric
 		referralService: referralSvc,
 		stars:           payment.NewStarsPayment(api),
 		crypto:          payment.NewCryptoBotPayment(cfg.CryptoBotToken),
-		logger:          slog.Default(),
+		logger:          logger,
 		metrics:         metrics,
 		fsm:             fsm,
 		i18n:            i18nSvc,
@@ -107,11 +111,12 @@ func NewWithAPI(cfg *config.Config, api *tgbotapi.BotAPI, db *storage.DB, metric
 // prepareHandler builds the fully-chained update handler and stores it in b.handler.
 // ctx controls the lifetime of the rate-limit cleanup goroutine.
 func (b *Bot) prepareHandler(ctx context.Context) {
+	// 30 requests per 10 seconds with a burst of 10 per user.
 	b.handler = Chain(b.route,
 		LoggingMiddleware(b.logger, b.metrics),
 		RecoverMiddleware(b.logger),
 		middleware.Auth(b.users),
-		RateLimitMiddleware(ctx, 500*time.Millisecond),
+		RateLimitMiddleware(ctx, rate.Every(10*time.Second/30), 10),
 	)
 }
 
@@ -143,13 +148,19 @@ func (b *Bot) Run(ctx context.Context) error {
 
 	updates := b.api.GetUpdatesChan(u)
 
+	var wg sync.WaitGroup
 	for {
 		select {
 		case <-ctx.Done():
 			b.api.StopReceivingUpdates()
+			wg.Wait()
 			return ctx.Err()
 		case update := <-updates:
-			b.handler(update)
+			wg.Add(1)
+			go func(upd tgbotapi.Update) {
+				defer wg.Done()
+				b.handler(upd)
+			}(update)
 		}
 	}
 }
@@ -194,3 +205,15 @@ func (b *Bot) notifyAdmins(text string) {
 		b.send(tgbotapi.NewMessage(adminID, text))
 	}
 }
+
+// sendError logs err and sends a localized error message to the user.
+// If the user is an admin, the raw error is appended.
+func (b *Bot) sendError(chatID int64, lang string, key string, err error) {
+	b.logger.Error(key, "chat_id", chatID, "error", err)
+	text := b.t(lang, key)
+	if b.isAdmin(chatID) && err != nil {
+		text += "\n\n⚠️ " + err.Error()
+	}
+	b.send(tgbotapi.NewMessage(chatID, text))
+}
+

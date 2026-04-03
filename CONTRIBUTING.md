@@ -2,7 +2,7 @@
 
 ## Requirements
 
-- Go 1.23+
+- Go 1.24+
 - Docker (optional, for container workflow)
 
 ## Development

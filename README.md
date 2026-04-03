@@ -6,7 +6,7 @@
   <a href="https://github.com/JumpCodeFrog/telegram-shop-bot/actions/workflows/ci.yml">
     <img src="https://github.com/JumpCodeFrog/telegram-shop-bot/actions/workflows/ci.yml/badge.svg" alt="CI" />
   </a>
-  <img src="https://img.shields.io/badge/Go-1.23+-00ADD8?logo=go&logoColor=white" alt="Go" />
+  <img src="https://img.shields.io/badge/Go-1.24+-00ADD8?logo=go&logoColor=white" alt="Go" />
   <img src="https://img.shields.io/badge/SQLite-embedded-003B57?logo=sqlite&logoColor=white" alt="SQLite" />
   <img src="https://img.shields.io/badge/Redis-optional-DC382D?logo=redis&logoColor=white" alt="Redis" />
   <img src="https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white" alt="Docker" />
@@ -92,7 +92,7 @@ docker compose logs -f bot
 
 #### Option 2 — Local binary
 
-**Requirements:** [Go 1.23+](https://go.dev/dl/) · Bot token from [@BotFather](https://t.me/BotFather)
+**Requirements:** [Go 1.24+](https://go.dev/dl/) · Bot token from [@BotFather](https://t.me/BotFather)
 
 ```bash
 git clone https://github.com/JumpCodeFrog/telegram-shop-bot.git
@@ -369,7 +369,7 @@ docker compose logs -f bot
 
 #### Вариант 2 — Локальный запуск
 
-**Требования:** [Go 1.23+](https://go.dev/dl/) · Токен от [@BotFather](https://t.me/BotFather)
+**Требования:** [Go 1.24+](https://go.dev/dl/) · Токен от [@BotFather](https://t.me/BotFather)
 
 ```bash
 git clone https://github.com/JumpCodeFrog/telegram-shop-bot.git

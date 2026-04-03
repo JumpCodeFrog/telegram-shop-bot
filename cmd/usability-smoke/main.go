@@ -399,7 +399,7 @@ func main() {
 		LocalesDir:     filepath.Join(workdir, "locales"),
 	}
 
-	b, err := bot.NewWithAPI(cfg, api, db, service.NewMetricsService(), storage.NewMemoryFSMStore(), nil)
+	b, err := bot.NewWithAPI(cfg, api, db, service.NewMetricsService(), storage.NewMemoryFSMStore(), nil, nil)
 	if err != nil {
 		panic(err)
 	}

@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"time"
 )
 
 type ReferralStore struct {
@@ -65,8 +66,11 @@ func (s *ReferralStore) SetReferrer(ctx context.Context, userID, referrerID int6
 	return err
 }
 
-func (s *ReferralStore) UpdateReferralCode(ctx context.Context, userID int64, code string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE users SET referral_code = ? WHERE id = ?`, code, userID)
+func (s *ReferralStore) UpdateReferralCode(ctx context.Context, userID int64, code string, expiresAt time.Time) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE users SET referral_code = ?, referral_code_expires_at = ? WHERE id = ?`,
+		code, expiresAt, userID,
+	)
 	return err
 }
 

@@ -1,6 +1,6 @@
 module shop_bot
 
-go 1.23
+go 1.24.0
 
 require (
 	github.com/go-telegram-bot-api/telegram-bot-api/v5 v5.5.1
@@ -8,6 +8,7 @@ require (
 	github.com/joho/godotenv v1.5.1
 	github.com/prometheus/client_golang v1.23.2
 	github.com/redis/go-redis/v9 v9.18.0
+	golang.org/x/time v0.5.0
 	modernc.org/sqlite v1.46.1
 	pgregory.net/rapid v1.2.0
 )

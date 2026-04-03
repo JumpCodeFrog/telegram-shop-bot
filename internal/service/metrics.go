@@ -6,9 +6,11 @@ import (
 )
 
 type MetricsService struct {
-	ActiveCarts      prometheus.Gauge
+	ActiveCarts        prometheus.Gauge
 	SuccessfulPayments prometheus.CounterVec
-	RequestDuration  prometheus.HistogramVec
+	OrdersCreated      prometheus.Counter
+	CartsAbandoned     prometheus.Counter
+	RequestDuration    prometheus.HistogramVec
 }
 
 func NewMetricsService() *MetricsService {
@@ -20,7 +22,15 @@ func NewMetricsService() *MetricsService {
 		SuccessfulPayments: *promauto.NewCounterVec(prometheus.CounterOpts{
 			Name: "shop_payments_successful_total",
 			Help: "The total number of successful payments",
-		}, []string{"currency"}),
+		}, []string{"type"}),
+		OrdersCreated: promauto.NewCounter(prometheus.CounterOpts{
+			Name: "shop_orders_created_total",
+			Help: "The total number of created orders",
+		}),
+		CartsAbandoned: promauto.NewCounter(prometheus.CounterOpts{
+			Name: "shop_carts_abandoned_total",
+			Help: "The total number of abandoned carts recovered by the worker",
+		}),
 		RequestDuration: *promauto.NewHistogramVec(prometheus.HistogramOpts{
 			Name:    "shop_request_duration_seconds",
 			Help:    "Time spent processing updates",

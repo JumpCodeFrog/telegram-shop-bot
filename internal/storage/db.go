@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
@@ -37,6 +38,10 @@ func New(dbPath string) (*DB, error) {
 		conn.Close()
 		return nil, fmt.Errorf("storage: ping db: %w", err)
 	}
+
+	conn.SetMaxOpenConns(25)
+	conn.SetMaxIdleConns(10)
+	conn.SetConnMaxLifetime(5 * time.Minute)
 
 	if _, err := conn.Exec("PRAGMA foreign_keys = ON"); err != nil {
 		conn.Close()

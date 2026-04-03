@@ -57,7 +57,7 @@ func main() {
 	// 2. Initialize Logger
 	opts := &slog.HandlerOptions{Level: logLevel(cfg.LogLevel)}
 	var handler slog.Handler
-	if os.Getenv("APP_ENV") == "production" {
+	if cfg.AppEnv == "production" {
 		handler = slog.NewJSONHandler(os.Stdout, opts)
 	} else {
 		handler = slog.NewTextHandler(os.Stdout, opts)
@@ -98,7 +98,7 @@ func main() {
 	loyaltySvc := service.NewLoyaltyService(loyaltyStore, 1)
 
 	// 5. Initialize Bot
-	b, err := bot.New(cfg, db, metrics, fsm, redisClient)
+	b, err := bot.New(cfg, db, metrics, fsm, redisClient, slog.Default())
 	if err != nil {
 		slog.Error("Bot initialization error", "error", err)
 		os.Exit(1)

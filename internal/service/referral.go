@@ -27,12 +27,29 @@ func NewReferralService(bonusRef, bonusNew float64, bonusPts int, rdb *redis.Cli
 	}
 }
 
-func (s *ReferralService) GenerateCode() string {
+const referralCodeTTL = 30 * 24 * time.Hour
+
+// ReferralCode holds a generated code and its expiry time.
+type ReferralCode struct {
+	Code      string
+	ExpiresAt time.Time
+}
+
+func (s *ReferralService) GenerateCode() ReferralCode {
 	b := make([]byte, 8)
 	for i := range b {
 		b[i] = charset[rand.Intn(len(charset))]
 	}
-	return string(b)
+	return ReferralCode{
+		Code:      string(b),
+		ExpiresAt: time.Now().Add(referralCodeTTL),
+	}
+}
+
+// IsCodeExpired reports whether the given expiry time has passed.
+// A zero time is treated as no expiry (always valid).
+func IsCodeExpired(expiresAt time.Time) bool {
+	return !expiresAt.IsZero() && time.Now().After(expiresAt)
 }
 
 func (s *ReferralService) GetReferralLink(botUsername, code string) string {

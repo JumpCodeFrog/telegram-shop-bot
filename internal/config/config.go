@@ -18,6 +18,7 @@ type Config struct {
 	WebhookURL            string
 	DBPath                string
 	LogLevel              string
+	AppEnv                string
 	RedisAddr             string
 	RedisPassword         string
 	TelegramWebhookSecret string
@@ -43,17 +44,25 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("USD_TO_STARS_RATE: %w", err)
 	}
 
+	webhookURL := os.Getenv("WEBHOOK_URL")
+	webhookSecret := os.Getenv("TELEGRAM_WEBHOOK_SECRET")
+
+	if os.Getenv("APP_ENV") == "production" && webhookURL != "" && webhookSecret == "" {
+		return nil, errors.New("TELEGRAM_WEBHOOK_SECRET is required in production when WEBHOOK_URL is set")
+	}
+
 	return &Config{
 		BotToken:              botToken,
 		BotUsername:           os.Getenv("BOT_USERNAME"),
 		CryptoBotToken:        os.Getenv("CRYPTOBOT_TOKEN"),
 		AdminIDs:              adminIDs,
-		WebhookURL:            os.Getenv("WEBHOOK_URL"),
+		WebhookURL:            webhookURL,
 		DBPath:                getEnv("DB_PATH", "data/shop.db"),
 		LogLevel:              getEnv("LOG_LEVEL", "info"),
+		AppEnv:                getEnv("APP_ENV", "development"),
 		RedisAddr:             getEnv("REDIS_ADDR", "localhost:6379"),
 		RedisPassword:         os.Getenv("REDIS_PASSWORD"),
-		TelegramWebhookSecret: os.Getenv("TELEGRAM_WEBHOOK_SECRET"),
+		TelegramWebhookSecret: webhookSecret,
 		USDToStarsRate:        usdToStars,
 		LocalesDir:            getEnv("LOCALES_DIR", "locales"),
 	}, nil

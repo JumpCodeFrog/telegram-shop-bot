@@ -4,11 +4,13 @@ import (
 	"context"
 	"log/slog"
 	"runtime/debug"
-	"shop_bot/internal/service"
 	"sync"
 	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	"golang.org/x/time/rate"
+
+	"shop_bot/internal/service"
 )
 
 // Middleware wraps a handler function, adding cross-cutting behavior.
@@ -112,14 +114,20 @@ func AdminOnly(adminIDs []int64) Middleware {
 	}
 }
 
-// RateLimitMiddleware drops updates from users who send more frequently than
-// the given cooldown. Updates without a user ID (e.g. PreCheckoutQuery) are
-// always allowed through. Stale entries are purged every hour to prevent
-// unbounded memory growth. ctx controls the lifetime of the cleanup goroutine.
-func RateLimitMiddleware(ctx context.Context, cooldown time.Duration) Middleware {
-	var last sync.Map // map[int64]time.Time
+// userLimiter holds a per-user token bucket and the time it was last used.
+type userLimiter struct {
+	limiter  *rate.Limiter
+	lastSeen time.Time
+}
 
-	// Background goroutine to evict entries older than 1 hour.
+// RateLimitMiddleware enforces a per-user token bucket rate limit.
+// Each user gets a burst of burstSize requests, replenishing at r per second.
+// Updates without a user ID (e.g. PreCheckoutQuery) always pass through.
+// Stale entries are evicted every hour. ctx controls the cleanup goroutine.
+func RateLimitMiddleware(ctx context.Context, r rate.Limit, burstSize int) Middleware {
+	var mu sync.Mutex
+	limiters := make(map[int64]*userLimiter)
+
 	go func() {
 		ticker := time.NewTicker(time.Hour)
 		defer ticker.Stop()
@@ -129,25 +137,34 @@ func RateLimitMiddleware(ctx context.Context, cooldown time.Duration) Middleware
 				return
 			case <-ticker.C:
 				cutoff := time.Now().Add(-time.Hour)
-				last.Range(func(key, value any) bool {
-					if value.(time.Time).Before(cutoff) {
-						last.Delete(key)
+				mu.Lock()
+				for id, ul := range limiters {
+					if ul.lastSeen.Before(cutoff) {
+						delete(limiters, id)
 					}
-					return true
-				})
+				}
+				mu.Unlock()
 			}
 		}
 	}()
 
+	getLimiter := func(userID int64) *rate.Limiter {
+		mu.Lock()
+		defer mu.Unlock()
+		ul, ok := limiters[userID]
+		if !ok {
+			ul = &userLimiter{limiter: rate.NewLimiter(r, burstSize)}
+			limiters[userID] = ul
+		}
+		ul.lastSeen = time.Now()
+		return ul.limiter
+	}
+
 	return func(handler func(update tgbotapi.Update)) func(update tgbotapi.Update) {
 		return func(update tgbotapi.Update) {
 			userID := extractUserID(update)
-			if userID != 0 {
-				now := time.Now()
-				if v, ok := last.Load(userID); ok && now.Sub(v.(time.Time)) < cooldown {
-					return
-				}
-				last.Store(userID, now)
+			if userID != 0 && !getLimiter(userID).Allow() {
+				return
 			}
 			handler(update)
 		}
