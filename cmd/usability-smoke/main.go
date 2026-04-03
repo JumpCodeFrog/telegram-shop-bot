@@ -240,8 +240,8 @@ func commandUpdate(updateID int, chatID, userID int64, text, lang string) tgbota
 			Chat:      &tgbotapi.Chat{ID: chatID, Type: "private"},
 			From: &tgbotapi.User{
 				ID:           userID,
-				FirstName:    "Thomas",
-				UserName:     "thom",
+				FirstName:    "TestUser",
+				UserName:     "testuser",
 				LanguageCode: lang,
 			},
 			Text: text,
@@ -260,8 +260,8 @@ func callbackUpdate(updateID int, chatID, userID int64, msgID int, data, lang st
 			Data: data,
 			From: &tgbotapi.User{
 				ID:           userID,
-				FirstName:    "Thomas",
-				UserName:     "thom",
+				FirstName:    "TestUser",
+				UserName:     "testuser",
 				LanguageCode: lang,
 			},
 			Message: &tgbotapi.Message{

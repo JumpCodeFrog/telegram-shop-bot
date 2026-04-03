@@ -1,305 +1,344 @@
 # Telegram Shop Bot
 
-Open-source Telegram shop bot written in Go.
+Open-source Telegram shop bot written in Go — ready-to-deploy solution for running a storefront entirely inside Telegram.
 
-It gives you a ready-to-deploy baseline for a catalog, cart, orders, Telegram Stars checkout, optional CryptoBot checkout, promo codes, admin flows, health checks, metrics, and background workers.
+Catalog, cart, checkout, Telegram Stars payments, optional CryptoBot (USDT) checkout, promo codes, admin panel, i18n, background workers, health checks, and Prometheus metrics — all in a single binary.
 
-The project is designed so that a developer can clone it, add a bot token, and launch it locally or in Docker without rebuilding the architecture from scratch.
+---
 
 ## Features
 
-- Inline Telegram UI for `/start`, catalog, product cards, cart, checkout, orders, profile, support, payment support, and terms.
-- SQLite storage with embedded migrations.
-- Telegram Stars payments.
-- Optional CryptoBot checkout for USDT.
-- Promo codes and guarded pending-order payment flow.
-- Admin flows for products, categories, orders, promos, analytics, and CSV export.
-- Health endpoint and Prometheus metrics on `:8080`.
-- Redis-backed FSM/cache helpers with graceful fallback to in-memory mode.
-- Background workers for backups, cart recovery, onboarding, wishlist watch, and optional CryptoBot polling.
+### Buyer flows
+- Inline Telegram UI: `/start`, catalog, product cards, cart, checkout, orders, profile, wishlist, support, terms
+- Single-message navigation (no message spam — the bot updates one message in-place)
+- Telegram Stars payments (built-in)
+- Optional CryptoBot checkout for USDT
+- Promo codes with category restrictions and usage limits
+- Product search: `/search <query>`
+- Wishlist with price-drop and back-in-stock notifications
 
-## Project Status
+### Admin flows
+- Product and category management (add / edit / delete)
+- Order management and status updates
+- Promo code CRUD
+- Analytics dashboard with CSV export
+- Admin entrypoint: `/admin`
 
-This repository is a stable, deployable baseline.
+### Infrastructure
+- SQLite storage with embedded auto-migrations
+- Redis-backed FSM and cache (optional — graceful fallback to in-memory)
+- Health endpoint and Prometheus metrics on `:8080`
+- Background workers: backups, cart recovery, onboarding, wishlist watch, CryptoBot polling
+- Polling mode or Webhook mode (auto-selected by config)
+- Docker-ready with multi-stage build and non-root runtime
+- i18n support (Russian and English out of the box)
 
-- `go test ./...` is green.
-- `go build ./...` is green.
-- `go run ./cmd/preflight` is available for environment checks.
-- `go run ./cmd/telegram-smoke` validates live Telegram API access.
-- `go run ./cmd/usability-smoke` simulates the main buyer journey without a real Telegram client.
-
-The current runtime uses `go-telegram-bot-api/v5`.
-Long-term v3 planning docs for a later `telego` migration are kept in:
-
-- `tz_telegram_shop_bot.md`
-- `docs/superpowers/specs/2026-03-30-telegram-shop-bot-v3-design.md`
-
-For actual runtime behavior, trust the code, `README.md`, and `internal/storage/migrations/`.
+---
 
 ## Quick Start
 
-### Option 1: Docker Compose
-
-This is the easiest way to deploy the bot.
-
-1. Copy the environment template:
+### Option 1: Docker Compose (recommended)
 
 ```bash
+# 1. Clone the repo
+git clone https://github.com/YOUR_USERNAME/go_tg_shop.git
+cd go_tg_shop
+
+# 2. Create config
 cp .env.example .env
-```
 
-2. Edit `.env` and set at least:
+# 3. Edit .env — set BOT_TOKEN (required)
+nano .env
 
-- `BOT_TOKEN`
-- optionally `CRYPTOBOT_TOKEN`
-- optionally `ADMIN_IDS`
-
-3. Start the stack:
-
-```bash
+# 4. Start
 docker compose up -d --build
-```
 
-4. Check that the bot is healthy:
-
-```bash
+# 5. Verify
 docker compose ps
 curl http://127.0.0.1:8080/health
 docker compose logs -f bot
 ```
 
-Notes:
+Docker Compose automatically:
+- Sets `REDIS_ADDR=redis:6379`
+- Stores bot data in the `bot_data` named volume
+- Stores backups in the `bot_backups` named volume
+- Runs health checks every 15 seconds
 
-- Docker Compose automatically overrides `REDIS_ADDR` to `redis:6379`.
-- Bot data is stored in the named volume `bot_data`.
-- Backups are stored in the named volume `bot_backups`.
-- If `CRYPTOBOT_TOKEN` is empty, the bot still works, but USDT checkout stays disabled.
+### Option 2: Local binary
 
-### Option 2: Local Run
-
-Requirements:
-
-- Go `1.26.1` or compatible
-- `BOT_TOKEN`
-- optional Redis
-- optional `sqlite3` CLI if you want the backup worker to actually create dumps
-
-Run:
+**Requirements:**
+- Go 1.26+ 
+- `BOT_TOKEN` from [@BotFather](https://t.me/BotFather)
+- Redis (optional)
+- `sqlite3` CLI (optional, for backup worker)
 
 ```bash
+# 1. Clone and configure
+git clone https://github.com/YOUR_USERNAME/go_tg_shop.git
+cd go_tg_shop
 cp .env.example .env
+nano .env   # set BOT_TOKEN
+
+# 2. Build and verify
 go mod tidy
-go run ./cmd/preflight
-go test ./...
 go build ./...
+go test ./...
+
+# 3. Run environment checks
+go run ./cmd/preflight
+
+# 4. Start the bot
 go run ./cmd/bot
 ```
 
+---
+
 ## Configuration
 
-Copy `.env.example` to `.env`.
+All settings are in `.env`. Copy `.env.example` to get started.
 
-Required:
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `BOT_TOKEN` | **yes** | — | Telegram Bot API token from @BotFather |
+| `BOT_USERNAME` | no | — | Bot's @username (without @), used for referral deep-links |
+| `CRYPTOBOT_TOKEN` | no | — | CryptoBot API token for USDT payments |
+| `ADMIN_IDS` | no | — | Comma-separated Telegram user IDs for admin access |
+| `DB_PATH` | no | `data/shop.db` | SQLite database file path |
+| `LOG_LEVEL` | no | `info` | Log level: `debug`, `info`, `warn`, `error` |
+| `APP_ENV` | no | `development` | Set `production` for JSON logs |
+| `REDIS_ADDR` | no | `localhost:6379` | Redis address |
+| `REDIS_PASSWORD` | no | — | Redis password |
+| `USD_TO_STARS_RATE` | no | `50` | Stars per 1 USD (Telegram sells 50 Stars ≈ $0.99) |
+| `WEBHOOK_URL` | no | — | Public URL for Telegram webhook mode |
+| `TELEGRAM_WEBHOOK_SECRET` | no | — | Secret token for webhook verification |
+| `LOCALES_DIR` | no | `locales` | Path to i18n locale files |
 
-- `BOT_TOKEN`
+**Behavior notes:**
+- When `WEBHOOK_URL` is empty → polling mode (good for development)
+- When `WEBHOOK_URL` is set → webhook mode (recommended for production)
+- When Redis is unavailable → automatic fallback to in-memory FSM/cache
+- When `CRYPTOBOT_TOKEN` is empty → USDT checkout disabled, Stars still works
 
-Common optional values:
-
-- `CRYPTOBOT_TOKEN`
-- `ADMIN_IDS`
-- `DB_PATH`
-- `LOG_LEVEL`
-- `APP_ENV`
-- `REDIS_ADDR`
-- `REDIS_PASSWORD`
-- `USD_TO_STARS_RATE`
-- `WEBHOOK_URL`
-- `TELEGRAM_WEBHOOK_SECRET`
-- `LOCALES_DIR`
-
-Behavior:
-
-- `APP_ENV=production` switches logs to JSON.
-- When `WEBHOOK_URL` is empty, the bot runs in polling mode.
-- When `WEBHOOK_URL` is set, the bot registers a Telegram webhook and exposes webhook handlers on the same `:8080` server.
-- Redis is optional. If it is unavailable, the bot falls back to in-memory FSM/cache behavior where possible.
-
-## Deploy Checklist
-
-Before exposing the bot publicly:
-
-1. Set a real `BOT_TOKEN`.
-2. Set `ADMIN_IDS` to your Telegram user ID if you need admin features.
-3. Decide whether you want polling mode or webhook mode.
-4. If you use webhook mode, make sure `WEBHOOK_URL` is publicly reachable by Telegram.
-5. Run:
-
-```bash
-go run ./cmd/preflight
-go run ./cmd/telegram-smoke
-```
-
-6. After startup, check:
-
-```bash
-curl http://127.0.0.1:8080/health
-curl http://127.0.0.1:8080/metrics
-```
-
-7. In Telegram, manually test:
-
-- `/start`
-- catalog navigation
-- adding items to cart
-- checkout
-- `/terms`
-- `/support`
-- `/paysupport`
+---
 
 ## Seed Demo Data
 
-Populates the database with demo categories, products, and promo codes for local testing:
+Populates the database with demo categories, products, and promo codes:
 
 ```bash
 go run ./cmd/seed
 ```
 
-Safe to run multiple times — inserts use `INSERT OR IGNORE`, so no duplicates are created.
+Safe to run multiple times (uses `INSERT OR IGNORE`).
 
-What it creates:
-
+Creates:
 - **Categories:** Одежда (👕), Обувь (👟), Аксессуары (🎒)
-- **Products:** 6 items spread across the categories, with USD and Stars prices
+- **Products:** 6 items across categories, with USD and Stars prices
 - **Promo codes:** `WELCOME10` (10% off, 100 uses), `SALE20` (20% off, 50 uses)
 
-## Smoke Commands
+---
 
-### Preflight
+## Bot Commands
 
-Checks env, SQLite, Redis reachability, webhook mode, and helper CLIs:
+### User commands
+
+| Command | Description |
+|---------|-------------|
+| `/start` | Main menu |
+| `/catalog` | Browse product catalog |
+| `/search <query>` | Search products |
+| `/cart` | View cart |
+| `/orders` | Order history |
+| `/profile` | User profile |
+| `/wishlist` | Saved items |
+| `/support` | Customer support |
+| `/paysupport` | Payment help |
+| `/terms` | Terms and conditions |
+| `/help` | Command list |
+| `/cancel` | Cancel current action |
+
+### Admin commands
+
+| Command | Description |
+|---------|-------------|
+| `/admin` | Admin panel entry |
+
+Admin access requires your Telegram user ID in the `ADMIN_IDS` environment variable.
+
+---
+
+## Payments
+
+### Telegram Stars
+
+Built-in, works out of the box. The bot sends a Telegram Stars invoice and handles the `successful_payment` callback automatically.
+
+Rate is configurable via `USD_TO_STARS_RATE` (default: 50 Stars = $1).
+
+### CryptoBot (USDT)
+
+Optional. Set `CRYPTOBOT_TOKEN` to enable.
+
+- The bot creates invoices via CryptoBot API
+- A background polling worker checks invoice status every 30 seconds
+- Webhook signature verification uses HMAC-SHA256
+
+---
+
+## Deployment
+
+### Production checklist
+
+1. Set a real `BOT_TOKEN`
+2. Set `ADMIN_IDS` to your Telegram user ID
+3. Choose polling or webhook mode
+4. If using webhooks — ensure `WEBHOOK_URL` is publicly reachable (HTTPS required by Telegram)
+5. Run pre-flight checks:
 
 ```bash
-go run ./cmd/preflight
+go run ./cmd/preflight        # env, DB, Redis, webhook checks
+go run ./cmd/telegram-smoke   # live Telegram API validation
 ```
 
-### Telegram Smoke
-
-Validates the live `BOT_TOKEN` against the Telegram Bot API without starting the full bot:
+6. Start the bot and verify:
 
 ```bash
-go run ./cmd/telegram-smoke
-```
-
-It checks:
-
-- `getMe`
-- webhook visibility
-- pending updates
-- webhook mismatch signals
-
-### Usability Smoke
-
-Runs the buyer journey against a fake local Telegram API and prints the actual bot screens:
-
-```bash
-go run ./cmd/usability-smoke
-```
-
-It currently simulates:
-
-- `/start`
-- catalog navigation
-- product card quantity changes
-- cart edits
-- checkout
-- payment method screen
-- terms/payment support flows
-- Stars invoice request
-
-## Docker Notes
-
-The production image now:
-
-- builds with Go `1.26`
-- uses a Linux static binary (`CGO_ENABLED=0`)
-- runs as a non-root user
-- exposes `/health`
-- includes `sqlite` in the runtime image so the backup worker can use the `sqlite3` CLI
-
-Useful commands:
-
-```bash
+# Docker
 docker compose up -d --build
-docker compose logs -f bot
-docker compose restart bot
-docker compose down
+curl http://127.0.0.1:8080/health
+curl http://127.0.0.1:8080/metrics
+
+# or local
+go run ./cmd/bot
 ```
 
-## Public Repo Safety
+7. Manual smoke test in Telegram:
+   - `/start` → navigate catalog → add item → cart → checkout → pay
+   - `/terms`, `/support`, `/paysupport`
 
-This repository is intended for public use, so local secrets and runtime data should not be committed.
+### Webhook mode with reverse proxy
 
-The project now ignores:
+For production webhook mode, put the bot behind nginx or Caddy with TLS:
 
-- `.env`
-- local agent folders such as `.claude/`, `.gemini/`, `.serena/`
-- SQLite runtime databases
-- generated backups
+```nginx
+server {
+    listen 443 ssl;
+    server_name shop.example.com;
 
-If you publish this repo:
+    ssl_certificate     /etc/letsencrypt/live/shop.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/shop.example.com/privkey.pem;
 
-- never commit a real `.env`
-- never commit real bot tokens, GitHub tokens, Stripe keys, or similar local connector credentials
-- rotate any secret that has already been stored in local helper files before publishing
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+}
+```
 
-## Commands
+Then set:
+```
+WEBHOOK_URL=https://shop.example.com/webhook/telegram
+TELEGRAM_WEBHOOK_SECRET=your-random-secret-here
+```
 
-Main user commands:
+### Docker commands
 
-- `/start`
-- `/catalog`
-- `/search <query>`
-- `/cart`
-- `/orders`
-- `/profile`
-- `/wishlist`
-- `/support`
-- `/paysupport`
-- `/terms`
-- `/help`
-- `/cancel`
+```bash
+docker compose up -d --build   # start / rebuild
+docker compose logs -f bot     # follow logs
+docker compose restart bot     # restart bot only
+docker compose down            # stop everything
+```
 
-Admin entrypoint:
+---
 
-- `/admin`
+## Smoke Tests
 
-## Project Layout
+| Command | What it checks |
+|---------|---------------|
+| `go run ./cmd/preflight` | Env vars, SQLite, Redis, webhook config, helper CLIs |
+| `go run ./cmd/telegram-smoke` | Live `BOT_TOKEN` against Telegram API (getMe, webhook, pending updates) |
+| `go run ./cmd/usability-smoke` | Buyer journey against a fake local Telegram API (no real bot needed) |
 
-```text
+---
+
+## Project Structure
+
+```
 .
 ├── cmd/
-│   ├── bot/               # main runtime entrypoint
-│   ├── preflight/         # environment readiness check
-│   ├── seed/              # local demo data seeder
-│   ├── telegram-smoke/    # Telegram API connectivity smoke
-│   └── usability-smoke/   # local buyer-journey smoke
+│   ├── bot/               # Main runtime entrypoint
+│   ├── preflight/         # Environment readiness checks
+│   ├── seed/              # Demo data seeder
+│   ├── telegram-smoke/    # Telegram API smoke test
+│   └── usability-smoke/   # Local buyer-journey simulation
 ├── internal/
-│   ├── bot/               # Telegram handlers, middleware, UI formatting
-│   ├── config/            # env config loading
+│   ├── bot/               # Telegram handlers, middleware, UI
+│   ├── config/            # Env config loading
 │   ├── payment/           # Stars and CryptoBot adapters
-│   ├── service/           # business services
-│   ├── shop/              # catalog/cart/order logic
-│   └── storage/           # SQLite/Redis stores and migrations
-├── locales/               # i18n bundles
-├── worker/                # background workers
-├── Dockerfile
-└── docker-compose.yml
+│   ├── service/           # Business logic (i18n, loyalty, metrics, payments)
+│   ├── shop/              # Catalog, cart, order domain logic
+│   └── storage/           # SQLite / Redis stores and migrations
+├── locales/               # i18n bundles (ru.json, en.json)
+├── worker/                # Background workers
+├── Dockerfile             # Multi-stage production build
+├── docker-compose.yml     # Full stack (bot + Redis)
+├── Makefile               # Dev shortcuts
+└── .env.example           # Configuration template
 ```
 
-## Runtime Source Of Truth
+---
 
-- Active DB schema: `internal/storage/migrations/`
-- Current project tracker / handoff: `AGENT_WORK_PLAN.md`
-- Public runtime guide: this `README.md`
+## Makefile
 
-If docs disagree, prefer the runtime code and `internal/storage/migrations/`.
+```bash
+make build      # go build ./...
+make test       # go test ./...
+make lint       # go vet ./...
+make run        # go run ./cmd/bot
+make seed       # go run ./cmd/seed
+make preflight  # go run ./cmd/preflight
+```
+
+---
+
+## Localization
+
+The bot supports multiple languages via JSON locale files in the `locales/` directory.
+
+Currently included:
+- `ru.json` — Russian (default)
+- `en.json` — English
+
+To add a new language, create a new JSON file (e.g., `locales/de.json`) following the same key structure. Language selection is based on the user's Telegram language setting.
+
+---
+
+## Security
+
+- Webhook signature verification (HMAC-SHA256) for CryptoBot
+- Telegram webhook secret token support
+- Admin access gated by explicit user ID allowlist
+- Non-root Docker runtime
+- No secrets in logs or error messages
+
+See [SECURITY.md](SECURITY.md) for vulnerability reporting and best practices.
+
+---
+
+## Contributing
+
+1. Fork the repository
+2. Create a feature branch: `git checkout -b feature/my-feature`
+3. Run tests: `go test ./...`
+4. Run linter: `go vet ./...`
+5. Commit your changes
+6. Open a Pull Request
+
+---
+
+## License
+
+MIT License. See [LICENSE](LICENSE) for details.
