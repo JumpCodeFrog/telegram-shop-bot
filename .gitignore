@@ -16,6 +16,9 @@ backups/*
 !data/.gitkeep
 !backups/.gitkeep
 
+# rapid property-based testing artifacts
+internal/payment/testdata/rapid/
+
 # Build outputs
 bin/
 dist/

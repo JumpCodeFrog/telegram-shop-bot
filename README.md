@@ -41,8 +41,8 @@ Catalog, cart, checkout, Telegram Stars payments, optional CryptoBot (USDT) chec
 
 ```bash
 # 1. Clone the repo
-git clone https://github.com/YOUR_USERNAME/go_tg_shop.git
-cd go_tg_shop
+git clone https://github.com/JumpCodeFrog/telegram-shop-bot.git
+cd telegram-shop-bot
 
 # 2. Create config
 cp .env.example .env
@@ -75,8 +75,8 @@ Docker Compose automatically:
 
 ```bash
 # 1. Clone and configure
-git clone https://github.com/YOUR_USERNAME/go_tg_shop.git
-cd go_tg_shop
+git clone https://github.com/JumpCodeFrog/telegram-shop-bot.git
+cd telegram-shop-bot
 cp .env.example .env
 nano .env   # set BOT_TOKEN
 

@@ -3,9 +3,8 @@
 
 Текущий статус:
 
-- runtime всё ещё на `go-telegram-bot-api/v5`
+- runtime на `go-telegram-bot-api/v5`
 - активные runtime-миграции находятся в `internal/storage/migrations/`
-- каталог работ и handoff ведутся в `AGENT_WORK_PLAN.md`
 
 ---
 
@@ -47,12 +46,3 @@
 - [x] **Abandoned Cart Recovery (V2):** Написан воркер, генерирующий персональные промокоды для брошенных корзин (>24ч).
 - [x] **Multi-Currency Support:** Динамический пересчет цен USDT <-> Stars на основе курса в ExchangeService.
 
----
-
-## 5. Инструкции для Gemini CLI / Cursor
-При работе над задачами из этого списка:
-1. Соблюдать **Clean Architecture** (Storage -> Service -> Handler). (СДЕЛАНО: Рефакторинг на `internal/bot.Bot`)
-2. Все новые тексты добавлять в `locales/*.json`.
-3. Любые runtime-изменения схемы БД оформлять в виде новых файлов в `internal/storage/migrations/`.
-4. Использовать **Dependency Injection**: новые сервисы (Redis, Metrics) должны пробрасываться через конструкторы. (СОБЛЮДЕНО)
-5. Не использовать ORM, только сырой SQL (github.com/mattn/go-sqlite3). (СОБЛЮДЕНО)
