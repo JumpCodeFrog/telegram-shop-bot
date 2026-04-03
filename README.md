@@ -68,7 +68,7 @@ Docker Compose automatically:
 ### Option 2: Local binary
 
 **Requirements:**
-- Go 1.26+ 
+- Go 1.23+
 - `BOT_TOKEN` from [@BotFather](https://t.me/BotFather)
 - Redis (optional)
 - `sqlite3` CLI (optional, for backup worker)
