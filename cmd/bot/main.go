@@ -175,7 +175,9 @@ func main() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		server.Shutdown(shutdownCtx)
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			slog.Error("metrics server shutdown", "error", err)
+		}
 	}()
 
 	// 9. Run Bot (webhook or polling)

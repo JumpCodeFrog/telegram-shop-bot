@@ -174,9 +174,6 @@ func (b *Bot) registerCommands() {
 	}
 
 	// Set the chat menu button to show commands list (visible as "/" button in input field).
-	if _, err := b.api.MakeRequest("setMyDefaultAdministratorRights", tgbotapi.Params{}); err == nil {
-		// ignore — just warming up MakeRequest
-	}
 	if _, err := b.api.MakeRequest("setChatMenuButton", tgbotapi.Params{
 		"menu_button": `{"type":"commands"}`,
 	}); err != nil {
@@ -254,14 +251,4 @@ func (b *Bot) notifyAdmins(text string) {
 	}
 }
 
-// sendError logs err and sends a localized error message to the user.
-// If the user is an admin, the raw error is appended.
-func (b *Bot) sendError(chatID int64, lang string, key string, err error) {
-	b.logger.Error(key, "chat_id", chatID, "error", err)
-	text := b.t(lang, key)
-	if b.isAdmin(chatID) && err != nil {
-		text += "\n\n⚠️ " + err.Error()
-	}
-	b.send(tgbotapi.NewMessage(chatID, text))
-}
 

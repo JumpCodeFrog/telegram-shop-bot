@@ -314,6 +314,7 @@ func TestCategoryRoundTrip_Property(t *testing.T) {
 		}
 		if found == nil {
 			t.Fatalf("category with ID %d not found in GetCategories result", catID)
+			return
 		}
 
 		if found.Name != name {
