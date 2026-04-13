@@ -1,0 +1,1 @@
+-- updated_at already present in 001_init.sql; no-op migration kept for sequence continuity.

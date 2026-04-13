@@ -40,6 +40,9 @@ type WishlistEntry struct {
 	StockAtAdded int
 	LanguageCode string
 	Product      Product
+
+	PriceDropNotifiedAt    sql.NullTime
+	BackInStockNotifiedAt  sql.NullTime
 }
 
 // GetAllWithProducts returns all wishlist entries joined with current product data.
@@ -50,7 +53,8 @@ func (s *WishlistStore) GetAllWithProducts(ctx context.Context) ([]WishlistEntry
 		       COALESCE(u.language_code, 'en'),
 		       p.id, p.category_id, p.name, p.description, p.photo_url,
 		       p.price_usd, p.price_stars, p.stock, p.is_digital, p.digital_content,
-		       p.is_active, p.created_at
+		       p.is_active, p.created_at,
+		       w.price_drop_notified_at, w.back_in_stock_notified_at
 		FROM wishlist w
 		JOIN products p ON w.product_id = p.id
 		LEFT JOIN users u ON w.user_id = u.telegram_id
@@ -71,12 +75,47 @@ func (s *WishlistStore) GetAllWithProducts(ctx context.Context) ([]WishlistEntry
 			&e.Product.ID, &e.Product.CategoryID, &e.Product.Name, &e.Product.Description, &e.Product.PhotoURL,
 			&e.Product.PriceUSD, &e.Product.PriceStars, &e.Product.Stock, &e.Product.IsDigital, &e.Product.DigitalContent,
 			&e.Product.IsActive, &e.Product.CreatedAt,
+			&e.PriceDropNotifiedAt, &e.BackInStockNotifiedAt,
 		); err != nil {
 			return nil, err
 		}
 		entries = append(entries, e)
 	}
 	return entries, rows.Err()
+}
+
+// MarkPriceDropNotified records that a price-drop notification was sent for the
+// given wishlist entry. Prevents repeated notifications while price stays down.
+func (s *WishlistStore) MarkPriceDropNotified(ctx context.Context, userID, productID int64) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE wishlist SET price_drop_notified_at = CURRENT_TIMESTAMP WHERE user_id = ? AND product_id = ?`,
+		userID, productID)
+	return err
+}
+
+// ClearPriceDropNotified clears the notification flag when the price rises back.
+// Called so that a future price drop triggers a fresh notification.
+func (s *WishlistStore) ClearPriceDropNotified(ctx context.Context, userID, productID int64) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE wishlist SET price_drop_notified_at = NULL WHERE user_id = ? AND product_id = ?`,
+		userID, productID)
+	return err
+}
+
+// MarkBackInStockNotified records that a back-in-stock notification was sent.
+func (s *WishlistStore) MarkBackInStockNotified(ctx context.Context, userID, productID int64) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE wishlist SET back_in_stock_notified_at = CURRENT_TIMESTAMP WHERE user_id = ? AND product_id = ?`,
+		userID, productID)
+	return err
+}
+
+// ClearBackInStockNotified clears the back-in-stock flag when item goes out of stock again.
+func (s *WishlistStore) ClearBackInStockNotified(ctx context.Context, userID, productID int64) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE wishlist SET back_in_stock_notified_at = NULL WHERE user_id = ? AND product_id = ?`,
+		userID, productID)
+	return err
 }
 
 // GetUserWishlistIDs returns the set of product IDs in a user's wishlist.

@@ -29,11 +29,9 @@
   "support_welcome": "📞 <b>Customer Support</b>\n\nPlease describe your problem or ask a question. Our team will get back to you soon.",
   "paysupport_welcome": "🆘 <b>Payment Support</b>\n\nIf you have a question about a purchase or payment, please contact us and include your order number.\n\nTelegram Support can't help with purchases made through this bot — we handle those requests directly.",
   "terms_text": "📄 <b>Terms and Conditions</b>\n\nBy paying for an order, you confirm that you reviewed the product description and agree to the purchase terms.\n\nIf you need help with a payment or your order, use <code>/paysupport</code> or the support button on the payment screen.\n\nFor disputes or refunds, contact us directly — we process those requests ourselves.",
-
   "cancel_add_product": "❌ Product addition cancelled",
   "cancel_promo": "❌ Promo code entry cancelled",
   "cancel_nothing": "No active action to cancel",
-
   "start_welcome": "👋 Welcome to the shop!\n\nBrowse our catalog, add items to your cart and pay with Telegram Stars or crypto (USDT).\n\nChoose an action:",
   "btn_catalog": "🛍 Catalog",
   "btn_cart": "🛒 Cart",
@@ -49,9 +47,7 @@
   "btn_cancel_order": "❌ Cancel order",
   "btn_generating_invoice": "🔄 Generating invoice...",
   "active_orders": "Active orders",
-
   "help_text": "📋 Available commands:\n\n/start — Main menu\n/catalog — Product catalog\n/search <query> — Search products\n/cart — Cart\n/orders — My orders\n/wishlist — Wishlist\n/support — Customer support\n/paysupport — Payment help\n/terms — Terms and conditions\n/cancel — Cancel current action\n/help — Command list",
-
   "catalog_empty": "Catalog is empty",
   "catalog_choose_category": "📂 Choose a category:",
   "category_no_products": "No products available in this category",
@@ -59,12 +55,10 @@
   "product_list_no_description": "Description coming soon.",
   "product_list_item": "%d. <b>%s</b>\n%s\n💰 <b>$%.2f / %d ⭐</b>\n%s\n\n",
   "product_list_page": "Page %d/%d",
-
   "cart_empty_text": "Your cart is empty",
   "cart_item_added": "✅ Item added to cart",
   "cart_item_line": "• %s × %d — <b>$%.2f / %d ⭐</b>\n",
   "cart_total": "\n💰 <b>Total: $%.2f / %d ⭐</b>",
-
   "orders_empty": "You have no orders yet",
   "orders_title": "📦 <b>My Orders</b>\n\n",
   "orders_order_line": "<code>#%d</code>\n",
@@ -77,7 +71,6 @@
   "order_status_paid": "✅ Paid",
   "order_status_delivered": "📦 Delivered",
   "order_status_cancelled": "❌ Cancelled",
-
   "checkout_title": "💳 <b>Checkout</b>\n——\n",
   "checkout_items_header": "🛒 Items:\n",
   "checkout_item_line": "• %s × %d — $%.2f / %d ⭐\n",
@@ -93,7 +86,6 @@
   "btn_confirm_no_promo": "❌ Order without promo code",
   "promo_expired": "❌ Promo code is no longer available. Check your cart and try again.",
   "promo_pending_order": "❌ You already have an unpaid order with this promo code.",
-
   "order_empty_cart": "Your cart is empty",
   "order_created": "💳 <b>Order <code>#%d</code> created</b>\n\nChoose a payment method:",
   "order_created_no_crypto": "\n\n💡 CryptoBot is not configured in this environment, so only Telegram Stars payment is available.",
@@ -106,7 +98,6 @@
   "payment_methods_item_line": "• %s × %d — $%.2f / %d ⭐\n",
   "payment_methods_total": "\n💰 <b>To pay: $%.2f / %d ⭐</b>",
   "payment_methods_hint": "\n\nChoose a payment method:",
-
   "payment_success": "✅ Payment for order #%d was successful!\n\nThank you for your purchase!",
   "payment_error": "Error creating payment. Please try again later.",
   "crypto_unavailable": "💎 CryptoBot payment is not available right now. Try Telegram Stars or contact the administrator.",
@@ -116,11 +107,9 @@
   "payment_method_stars": "Telegram Stars",
   "payment_method_crypto": "CryptoBot (USDT)",
   "payment_method_balance": "Internal balance",
-
   "search_too_short": "🔍 Enter at least 2 characters to search.\nExample: /search shoes",
   "search_not_found": "🔍 Nothing found for «%s».",
   "search_results_title": "🔍 Search results for «%s»:\n\n",
-
   "error_load_catalog": "❌ Failed to load catalog. Please try again later.",
   "error_load_cart": "❌ Failed to load cart. Please try again later.",
   "error_load_orders": "❌ Failed to load orders. Please try again later.",
@@ -130,7 +119,6 @@
   "error_remove_cart": "❌ Failed to remove item. Please try again later.",
   "error_short": "❌ Error. Please try again later.",
   "error_promo_check": "❌ Error checking promo code. Please try again later.",
-
   "profile_title": "👤 <b>Profile</b>\n\n",
   "profile_not_init": "Profile not yet initialised. Send /start and try again.",
   "profile_default_name": "User",
@@ -140,7 +128,6 @@
   "profile_loyalty_line": "🏆 Level: <b>%s</b> · %d pts\n",
   "profile_orders_line": "📦 Orders: <b>%d</b>\n",
   "profile_referral_line": "👥 Referral code: <code>%s</code>\n",
-
   "btn_add_to_cart": "🛒 Add to cart",
   "btn_support": "🆘 Support",
   "btn_paysupport": "🆘 Pay support",
@@ -149,10 +136,16 @@
   "product_card_text": "🛍 <b>%s</b>\n——\n📝 %s\n💰 <b>$%.2f</b> / <b>%d ⭐</b>\n%s",
   "product_in_stock": "📦 In stock: %d pcs.",
   "product_out_of_stock": "📦 Out of stock",
-
   "onboarding_greeting_with_referral": "👋 Hi, <b>%s</b>!\n\nWelcome to our shop. You haven't placed an order yet — maybe it's time?\n\n🎁 <b>Loyalty Program:</b>\n• Bronze → Silver → Gold → VIP\n• Cashback from 1%% to 10%% in bonus points\n\n👥 <b>Referral Program:</b>\nInvite friends and earn bonuses for each one!\nYour referral link: <code>%s</code>\n\nCheck out the catalog — something is waiting for you 🛍",
   "onboarding_greeting": "👋 Hi, <b>%s</b>!\n\nWelcome to our shop. You haven't placed an order yet — maybe it's time?\n\n🎁 <b>Loyalty Program:</b>\n• Bronze → Silver → Gold → VIP\n• Cashback from 1%% to 10%% in bonus points\n\nCheck out the catalog — something is waiting for you 🛍",
   "onboarding_default_name": "friend",
   "wishlist_price_drop": "📉 Price dropped!\n\n<b>%s</b>\nWas: $%.2f → Now: $%.2f (−%.0f%%)\n\nThe item in your wishlist is waiting for you!",
-  "wishlist_back_in_stock": "✅ Back in stock!\n\n<b>%s</b>\nHurry — only %d left."
+  "wishlist_back_in_stock": "✅ Back in stock!\n\n<b>%s</b>\nHurry — only %d left.",
+  "stars_receipt": "<code>✅ PAID\n---\nID: #%d\nTOTAL: %d Stars\nDATE: %s\n---\nThank you for your purchase!</code>",
+  "admin_order_paid_stars": "⭐ Order #%d paid (Stars) — user %d",
+  "admin_order_paid_crypto": "💎 Order #%d paid (Crypto) — user %d — $%.2f",
+  "loyalty_level_up": "🎉 Congratulations! You've reached <b>%s</b> level!",
+  "loyalty_vip_gift": "🎁 A VIP gift has been sent to you!",
+  "stock": "In stock",
+  "btn_menu": "🏠 Main Menu"
 }

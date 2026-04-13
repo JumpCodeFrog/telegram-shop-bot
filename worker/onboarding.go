@@ -12,15 +12,20 @@ import (
 	"shop_bot/internal/storage"
 )
 
+// onboardingUserStore is the minimal storage interface required by OnboardingWorker.
+type onboardingUserStore interface {
+	GetNewUsersWithoutOrders(ctx context.Context, minAge, maxAge time.Duration) ([]storage.User, error)
+}
+
 type OnboardingWorker struct {
 	bot         *tgbotapi.BotAPI
-	userStore   *storage.SQLUserStore
+	userStore   onboardingUserStore
 	i18n        *service.I18nService
 	botUsername string
 	interval    time.Duration
 }
 
-func NewOnboardingWorker(bot *tgbotapi.BotAPI, userStore *storage.SQLUserStore, i18n *service.I18nService, botUsername string, interval time.Duration) *OnboardingWorker {
+func NewOnboardingWorker(bot *tgbotapi.BotAPI, userStore onboardingUserStore, i18n *service.I18nService, botUsername string, interval time.Duration) *OnboardingWorker {
 	return &OnboardingWorker{
 		bot:         bot,
 		userStore:   userStore,

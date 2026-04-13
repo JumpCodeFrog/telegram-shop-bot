@@ -192,7 +192,7 @@ func (s *SQLOrderStore) UpdateOrderStatus(ctx context.Context, id int64, fromSta
 	defer tx.Rollback()
 
 	res, err := tx.ExecContext(ctx,
-		`UPDATE orders SET status = ?, payment_method = ?, payment_id = ?
+		`UPDATE orders SET status = ?, payment_method = ?, payment_id = ?, updated_at = CURRENT_TIMESTAMP
 		 WHERE id = ? AND status = ?`,
 		status, paymentMethod, paymentID, id, fromStatus)
 	if err != nil {
@@ -317,7 +317,7 @@ func (s *SQLOrderStore) loadOrderItems(ctx context.Context, orderID int64) ([]Or
 // the order does not exist, belongs to a different user, or is not in pending status.
 func (s *SQLOrderStore) CancelOrder(ctx context.Context, orderID, userID int64) error {
 	res, err := s.db.ExecContext(ctx,
-		`UPDATE orders SET status = ? WHERE id = ? AND user_id = ? AND status = ?`,
+		`UPDATE orders SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ? AND status = ?`,
 		OrderStatusCancelled, orderID, userID, OrderStatusPending)
 	if err != nil {
 		return fmt.Errorf("order store: cancel order: %w", err)

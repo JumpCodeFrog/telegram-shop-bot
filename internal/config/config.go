@@ -24,6 +24,8 @@ type Config struct {
 	TelegramWebhookSecret string
 	USDToStarsRate        int
 	LocalesDir            string
+	OutboundWebhookURL    string
+	OutboundWebhookSecret string
 }
 
 // Load reads configuration from environment variables.
@@ -65,6 +67,8 @@ func Load() (*Config, error) {
 		TelegramWebhookSecret: webhookSecret,
 		USDToStarsRate:        usdToStars,
 		LocalesDir:            getEnv("LOCALES_DIR", "locales"),
+		OutboundWebhookURL:    os.Getenv("OUTBOUND_WEBHOOK_URL"),
+		OutboundWebhookSecret: os.Getenv("OUTBOUND_WEBHOOK_SECRET"),
 	}, nil
 }
 

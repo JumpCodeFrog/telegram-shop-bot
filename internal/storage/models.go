@@ -11,9 +11,8 @@ const (
 	OrderStatusDelivered = "delivered"
 	OrderStatusCancelled = "cancelled"
 
-	PaymentMethodStars   = "stars"
-	PaymentMethodCrypto  = "crypto"
-	PaymentMethodBalance = "balance"
+	PaymentMethodStars  = "stars"
+	PaymentMethodCrypto = "crypto"
 )
 
 // addProductStep enumerates the steps of the "add product" dialog.
@@ -126,15 +125,6 @@ type PromoCode struct {
 	CategoryID *int64     `db:"category_id"`
 	IsActive   bool       `db:"is_active"`
 	CreatedAt  time.Time  `db:"created_at"`
-}
-
-type Transaction struct {
-	ID        int64     `db:"id"`
-	UserID    int64     `db:"user_id"`
-	AmountUSD float64   `db:"amount_usd"`
-	Type      string    `db:"type"` // topup|payment|refund
-	RefID     string    `db:"ref_id"`
-	CreatedAt time.Time `db:"created_at"`
 }
 
 // Status mapping for display

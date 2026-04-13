@@ -59,3 +59,5 @@ type AnalyticsStore interface {
 	GetTopProducts(ctx context.Context, limit int) ([]ProductStats, error)
 	GetPaymentMethodStats(ctx context.Context) ([]PaymentMethodStat, error)
 }
+
+// UISettingsStore is declared in ui_settings.go to keep all its code in one file.

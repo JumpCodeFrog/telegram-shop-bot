@@ -1,0 +1,83 @@
+version: 2
+
+project_name: telegram-shop-bot
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: bot
+    main: ./cmd/bot
+    binary: telegram-shop-bot
+    env:
+      - CGO_ENABLED=1
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
+
+archives:
+  - id: default
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - .env.example
+      - locales/**
+      - README.md
+      - CHANGELOG.md
+      - LICENSE
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  use: github
+  filters:
+    exclude:
+      - "^docs:"
+      - "^chore:"
+      - "^ci:"
+      - "^test:"
+      - Merge pull request
+      - Merge branch
+
+dockers:
+  - image_templates:
+      - "ghcr.io/jumpcodefrog/telegram-shop-bot:{{ .Tag }}"
+      - "ghcr.io/jumpcodefrog/telegram-shop-bot:latest"
+    dockerfile: Dockerfile
+    build_flag_templates:
+      - "--label=org.opencontainers.image.title={{ .ProjectName }}"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
+      - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
+      - "--label=org.opencontainers.image.created={{ .Date }}"
+      - "--label=org.opencontainers.image.source=https://github.com/JumpCodeFrog/telegram-shop-bot"
+
+release:
+  github:
+    owner: JumpCodeFrog
+    name: telegram-shop-bot
+  name_template: "v{{ .Version }}"
+  footer: |
+    ## Docker
+
+    ```bash
+    docker pull ghcr.io/jumpcodefrog/telegram-shop-bot:{{ .Tag }}
+    ```
+
+    ## Quick Start
+
+    ```bash
+    cp .env.example .env
+    # fill in BOT_TOKEN and ADMIN_IDS
+    docker compose up -d
+    ```
+
+    See [Getting Started](https://github.com/JumpCodeFrog/telegram-shop-bot/blob/main/docs/getting-started.md) for the full guide.

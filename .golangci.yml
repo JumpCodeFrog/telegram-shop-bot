@@ -1,0 +1,27 @@
+linters:
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+    - gosimple
+    - unused
+    - ineffassign
+    - misspell
+
+linters-settings:
+  errcheck:
+    # Ignore errors from deferred Close calls and common fire-and-forget sends.
+    exclude-functions:
+      - (net/http.ResponseWriter).Write
+      - (*github.com/go-telegram-bot-api/telegram-bot-api/v5.BotAPI).Send
+
+issues:
+  exclude-rules:
+    # Test files: allow unused variables and unchecked errors.
+    - path: _test\.go
+      linters:
+        - errcheck
+        - unused
+
+run:
+  timeout: 5m

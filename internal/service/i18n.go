@@ -64,3 +64,9 @@ func (s *I18nService) T(lang, key string) string {
 
 	return key
 }
+
+// Tf is a convenience wrapper that looks up the translation for key and formats
+// it with fmt.Sprintf using the provided args. Useful for keys that contain %s/%d.
+func (s *I18nService) Tf(lang, key string, args ...any) string {
+	return fmt.Sprintf(s.T(lang, key), args...)
+}

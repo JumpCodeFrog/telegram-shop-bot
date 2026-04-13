@@ -43,7 +43,10 @@ func (w *CryptoBotPollingWorker) Start(ctx context.Context) {
 }
 
 func (w *CryptoBotPollingWorker) poll(ctx context.Context) {
-	invoices, err := w.crypto.GetInvoices(ctx, "paid")
+	// Query "active" (unpaid) invoices rather than all "paid" ones.
+	// This keeps the payload small: only invoices currently awaiting payment are returned.
+	// Paid invoices that arrive here means the webhook was missed — we confirm them now.
+	invoices, err := w.crypto.GetInvoices(ctx, "active")
 	if err != nil {
 		slog.Error("CryptoBot polling: failed to get invoices", "error", err)
 		return

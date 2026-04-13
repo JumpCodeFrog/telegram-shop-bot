@@ -48,6 +48,7 @@ A full-featured e-commerce bot for Telegram — catalog, cart, Telegram Stars & 
 - Order management & status updates
 - Promo code CRUD
 - Analytics with CSV export
+- **Button style customization** — `/btnstyle` interactive menu to set Primary/Success/Danger/Default per button
 - Admin panel: `/admin`
 
 **⚙️ Infrastructure**
@@ -157,6 +158,7 @@ go run ./cmd/bot            # start
 | `/help` | List of commands |
 | `/cancel` | Cancel current action |
 | `/admin` | Admin panel *(admins only)* |
+| `/btnstyle` | Customize button colors *(admins only)* |
 
 ---
 
@@ -325,6 +327,7 @@ MIT — do whatever you want. See [LICENSE](LICENSE).
 - Заказы и изменение статусов
 - Управление промокодами
 - Аналитика и выгрузка в CSV
+- **Настройка цветов кнопок** — `/btnstyle` интерактивное меню: Primary/Success/Danger/Default для каждой кнопки
 - Вход: `/admin`
 
 **⚙️ Инфраструктура**
@@ -434,6 +437,7 @@ go run ./cmd/bot            # запустить
 | `/help` | Список команд |
 | `/cancel` | Отмена действия |
 | `/admin` | Панель администратора *(только для админов)* |
+| `/btnstyle` | Настройка цветов кнопок *(только для админов)* |
 
 ---
 

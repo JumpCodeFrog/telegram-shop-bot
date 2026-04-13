@@ -11,6 +11,7 @@ import (
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 
+	"shop_bot/internal/service"
 	"shop_bot/internal/storage"
 )
 
@@ -46,6 +47,8 @@ func (b *Bot) handleAdmin(msg *tgbotapi.Message) {
 		"/addpromo <код> <скидка%> [макс_использований] [дней] [category_id] — Создать промокод\n" +
 		"/listpromos — Активные промокоды\n" +
 		"/deletepromo <id> — Деактивировать промокод\n\n" +
+		"Дизайн:\n" +
+		"/btnstyle — Настроить цвета кнопок\n\n" +
 		"Аналитика:\n" +
 		"/analytics — Статистика продаж"
 
@@ -402,6 +405,14 @@ func (b *Bot) handleSetDelivered(msg *tgbotapi.Message) {
 		return
 	}
 	b.send(tgbotapi.NewMessage(msg.Chat.ID, fmt.Sprintf("✅ Заказ #%d отмечен как доставленный.", order.ID)))
+
+	b.outWebhook.Send(service.OutboundWebhookEvent{
+		Event:      "order.delivered",
+		OrderID:    order.ID,
+		UserID:     order.UserID,
+		TotalUSD:   order.TotalUSD,
+		TotalStars: order.TotalStars,
+	})
 }
 
 func (b *Bot) handleAnalytics(msg *tgbotapi.Message) { b.sendAnalytics(msg.Chat.ID, 0, 7) }
@@ -636,5 +647,114 @@ func (b *Bot) routeEditProduct(msg *tgbotapi.Message) {
 		b.handleEditProduct(msg)
 	} else {
 		b.handleEditProductField(msg, id, args[1], strings.Join(args[2:], " "))
+	}
+}
+
+// handleBtnStyleAdmin handles the /btnstyle command.
+func (b *Bot) handleBtnStyleAdmin(msg *tgbotapi.Message) {
+	if !b.isAdmin(msg.From.ID) {
+		return
+	}
+	b.sendBtnStyleList(msg.Chat.ID, 0)
+}
+
+// sendBtnStyleList renders (or edits) the button style overview for the admin.
+// Each row shows the button label and its current style emoji, tapping opens the picker.
+func (b *Bot) sendBtnStyleList(chatID int64, msgID int) {
+	ctx := context.Background()
+	stored, _ := b.uiSettings.ListButtonStyles(ctx)
+
+	var sb strings.Builder
+	sb.WriteString("🎨 <b>Настройка стилей кнопок</b>\n\n")
+	sb.WriteString("Нажмите на кнопку, чтобы изменить её цвет.\n\n")
+	for _, key := range AllButtonKeys {
+		style := ButtonStyle(stored[key])
+		sb.WriteString(fmt.Sprintf("%s %s → %s\n", StyleEmoji(style), ButtonKeyLabel(key), styleLabel(style)))
+	}
+
+	// Build inline keyboard: 2 buttons per row (label + current style indicator).
+	var rows [][]StyledButton
+	for i := 0; i < len(AllButtonKeys); i += 2 {
+		var row []StyledButton
+		for j := i; j < i+2 && j < len(AllButtonKeys); j++ {
+			key := AllButtonKeys[j]
+			style := ButtonStyle(stored[key])
+			label := fmt.Sprintf("%s %s", StyleEmoji(style), ButtonKeyLabel(key))
+			row = append(row, Btn(label, "admin:btnpick:"+key))
+		}
+		rows = append(rows, row)
+	}
+
+	kb := StyledKeyboard(rows)
+	b.sendOrEditStyled(chatID, msgID, sb.String(), "HTML", kb)
+}
+
+// sendBtnStylePicker renders (or edits) the style picker for a single button key.
+func (b *Bot) sendBtnStylePicker(chatID int64, msgID int, key string) {
+	ctx := context.Background()
+	current, _ := b.uiSettings.GetButtonStyle(ctx, key)
+
+	text := fmt.Sprintf(
+		"🎨 <b>Стиль кнопки: %s</b>\n\nТекущий стиль: %s %s\n\nВыберите новый стиль:",
+		ButtonKeyLabel(key),
+		StyleEmoji(ButtonStyle(current)),
+		styleLabel(ButtonStyle(current)),
+	)
+
+	styleOptions := []struct {
+		label string
+		style ButtonStyle
+	}{
+		{"🔵 Primary", StylePrimary},
+		{"🟢 Success", StyleSuccess},
+		{"🔴 Danger", StyleDanger},
+		{"⬜ По умолчанию", StyleDefault},
+	}
+
+	var styleRow []StyledButton
+	for _, opt := range styleOptions {
+		styleRow = append(styleRow, Btn(opt.label, fmt.Sprintf("admin:setstyle:%s:%s", key, string(opt.style))))
+	}
+
+	kb := StyledKeyboard{
+		styleRow,
+		{Btn("◀️ Назад к списку", "admin:btnlist")},
+	}
+	b.sendOrEditStyled(chatID, msgID, text, "HTML", kb)
+}
+
+// onAdminSetStyle persists the style choice and returns to the overview.
+func (b *Bot) onAdminSetStyle(chatID int64, msgID int, data string) {
+	// data format: "admin:setstyle:<key>:<style>"
+	rest := strings.TrimPrefix(data, "admin:setstyle:")
+	sep := strings.LastIndex(rest, ":")
+	if sep < 0 {
+		return
+	}
+	key := rest[:sep]
+	style := rest[sep+1:]
+
+	ctx := context.Background()
+	if err := b.uiSettings.SetButtonStyle(ctx, key, style); err != nil {
+		b.logger.Error("set button style", "key", key, "style", style, "error", err)
+		b.send(tgbotapi.NewMessage(chatID, "❌ Не удалось сохранить стиль."))
+		return
+	}
+	// Invalidate cache entry and reload.
+	b.uiStyles.Store(key, style)
+
+	b.sendBtnStyleList(chatID, msgID)
+}
+
+func styleLabel(s ButtonStyle) string {
+	switch s {
+	case StylePrimary:
+		return "primary"
+	case StyleSuccess:
+		return "success"
+	case StyleDanger:
+		return "danger"
+	default:
+		return "default"
 	}
 }

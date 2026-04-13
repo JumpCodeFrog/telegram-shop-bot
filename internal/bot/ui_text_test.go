@@ -155,15 +155,15 @@ func TestProductKeyboard_UsesQuantityStepper(t *testing.T) {
 	t.Parallel()
 
 	b := newTextBot(t)
-	keyboard := b.productKeyboard(&storage.Product{ID: 7, CategoryID: 3}, true, 2, "ru")
+	kb := b.productKeyboard(&storage.Product{ID: 7, CategoryID: 3}, true, 2, "ru")
 
-	if len(keyboard.InlineKeyboard) != 3 {
-		t.Fatalf("expected 3 keyboard rows, got %d", len(keyboard.InlineKeyboard))
+	if len(kb) != 3 {
+		t.Fatalf("expected 3 keyboard rows, got %d", len(kb))
 	}
-	if keyboard.InlineKeyboard[0][1].Text != "🧺 2 шт" {
-		t.Fatalf("quantity label = %q", keyboard.InlineKeyboard[0][1].Text)
+	if kb[0][1].Text != "🧺 2 шт" {
+		t.Fatalf("quantity label = %q", kb[0][1].Text)
 	}
-	if keyboard.InlineKeyboard[2][0].Text != "💔 Убрать из желаемого" {
-		t.Fatalf("wishlist button label = %q", keyboard.InlineKeyboard[2][0].Text)
+	if kb[2][0].Text != "💔 Убрать из желаемого" {
+		t.Fatalf("wishlist button label = %q", kb[2][0].Text)
 	}
 }

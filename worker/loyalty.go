@@ -2,7 +2,6 @@ package worker
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"shop_bot/internal/service"
 	"shop_bot/internal/storage"
@@ -16,15 +15,17 @@ import (
 type LoyaltyWorker struct {
 	db      *storage.LoyaltyStoreImpl
 	service *service.LoyaltyService
+	i18n    *service.I18nService
 	redis   *redis.Client
 	bot     *tgbotapi.BotAPI
 	stream  string
 }
 
-func NewLoyaltyWorker(db *storage.LoyaltyStoreImpl, svc *service.LoyaltyService, rdb *redis.Client, bot *tgbotapi.BotAPI) *LoyaltyWorker {
+func NewLoyaltyWorker(db *storage.LoyaltyStoreImpl, svc *service.LoyaltyService, rdb *redis.Client, bot *tgbotapi.BotAPI, i18n *service.I18nService) *LoyaltyWorker {
 	return &LoyaltyWorker{
 		db:      db,
 		service: svc,
+		i18n:    i18n,
 		redis:   rdb,
 		bot:     bot,
 		stream:  "loyalty:tasks",
@@ -81,11 +82,14 @@ func (w *LoyaltyWorker) handleMessage(ctx context.Context, msg redis.XMessage) {
 		ptsTotal, level, err := w.db.GetPoints(ctx, userID)
 		if err == nil {
 			if newLevel, upgraded := w.service.CheckAndUpgradeLevel(ctx, userID, level, ptsTotal); upgraded {
-				msg := tgbotapi.NewMessage(userID, fmt.Sprintf("🎉 Поздравляем! Вы достигли уровня <b>%s</b>!", newLevel))
-				msg.ParseMode = "HTML"
-				w.bot.Send(msg)
+				// Default to Russian for loyalty notifications; language per-user
+				// could be added by injecting a UserStore into this worker.
+				lang := "ru"
+				levelUpMsg := tgbotapi.NewMessage(userID, w.i18n.Tf(lang, "loyalty_level_up", newLevel))
+				levelUpMsg.ParseMode = "HTML"
+				w.bot.Send(levelUpMsg)
 				if newLevel == "vip" {
-					w.bot.Send(tgbotapi.NewMessage(userID, "🎁 Вам отправлен VIP-подарок!"))
+					w.bot.Send(tgbotapi.NewMessage(userID, w.i18n.T(lang, "loyalty_vip_gift")))
 				}
 			}
 		}

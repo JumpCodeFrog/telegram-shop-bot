@@ -5,8 +5,6 @@ import (
 	"testing"
 
 	"shop_bot/internal/storage"
-
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
 func TestEnsureOrderPayableForUser_AllowsPendingOwnedOrder(t *testing.T) {
@@ -60,45 +58,41 @@ func TestHasPendingOrderWithPromo_IgnoresNonPendingOrOtherPromo(t *testing.T) {
 }
 
 func TestPaymentMethodKeyboard_HidesCryptoWhenDisabled(t *testing.T) {
-	keyboard := paymentMethodKeyboard(15, false, "", nil)
+	keyboard := paymentMethodKeyboard(15, false, 100, 1.50, "", nil)
 
-	// Stars row + terms/support row + cancel/orders row
-	if len(keyboard.InlineKeyboard) != 3 {
-		t.Fatalf("expected 3 rows, got %d", len(keyboard.InlineKeyboard))
+	// Stars row + terms/support row + cancel/orders row + menu row
+	if len(keyboard) != 4 {
+		t.Fatalf("expected 4 rows, got %d", len(keyboard))
 	}
 
-	assertPaymentButton(t, keyboard.InlineKeyboard[0][0], "⭐ Telegram Stars", "pay:stars:15")
-	assertPaymentButton(t, keyboard.InlineKeyboard[1][0], "📄 Terms", "terms")
-	assertPaymentButton(t, keyboard.InlineKeyboard[1][1], "🆘 Payment support", "paysupport")
-	assertPaymentButton(t, keyboard.InlineKeyboard[2][0], "❌ Cancel order", "order:cancel:15")
+	assertPaymentButton(t, keyboard[0][0], "⭐ Pay 100 Stars", "pay:stars:15")
+	assertPaymentButton(t, keyboard[1][0], "📄 Terms", "terms")
+	assertPaymentButton(t, keyboard[1][1], "🆘 Payment support", "paysupport")
+	assertPaymentButton(t, keyboard[2][0], "❌ Cancel order", "order:cancel:15")
 }
 
 func TestPaymentMethodKeyboard_ShowsCryptoWhenEnabled(t *testing.T) {
-	keyboard := paymentMethodKeyboard(15, true, "", nil)
+	keyboard := paymentMethodKeyboard(15, true, 100, 1.50, "", nil)
 
-	// Stars row + crypto row + terms/support row + cancel/orders row
-	if len(keyboard.InlineKeyboard) != 4 {
-		t.Fatalf("expected 4 rows, got %d", len(keyboard.InlineKeyboard))
+	// Stars row + crypto row + terms/support row + cancel/orders row + menu row
+	if len(keyboard) != 5 {
+		t.Fatalf("expected 5 rows, got %d", len(keyboard))
 	}
 
-	assertPaymentButton(t, keyboard.InlineKeyboard[0][0], "⭐ Telegram Stars", "pay:stars:15")
-	assertPaymentButton(t, keyboard.InlineKeyboard[1][0], "💎 Crypto (USDT)", "pay:crypto:15")
-	assertPaymentButton(t, keyboard.InlineKeyboard[2][0], "📄 Terms", "terms")
-	assertPaymentButton(t, keyboard.InlineKeyboard[2][1], "🆘 Payment support", "paysupport")
-	assertPaymentButton(t, keyboard.InlineKeyboard[3][0], "❌ Cancel order", "order:cancel:15")
+	assertPaymentButton(t, keyboard[0][0], "⭐ Pay 100 Stars", "pay:stars:15")
+	assertPaymentButton(t, keyboard[1][0], "💎 Pay $1.50 USDT", "pay:crypto:15")
+	assertPaymentButton(t, keyboard[2][0], "📄 Terms", "terms")
+	assertPaymentButton(t, keyboard[2][1], "🆘 Payment support", "paysupport")
+	assertPaymentButton(t, keyboard[3][0], "❌ Cancel order", "order:cancel:15")
 }
 
-func assertPaymentButton(t *testing.T, button tgbotapi.InlineKeyboardButton, wantText, wantData string) {
+func assertPaymentButton(t *testing.T, button StyledButton, wantText, wantData string) {
 	t.Helper()
 
 	if button.Text != wantText {
 		t.Fatalf("button text = %q, want %q", button.Text, wantText)
 	}
-	if button.CallbackData == nil || *button.CallbackData != wantData {
-		got := "<nil>"
-		if button.CallbackData != nil {
-			got = *button.CallbackData
-		}
-		t.Fatalf("button callback data = %q, want %q", got, wantData)
+	if button.CallbackData != wantData {
+		t.Fatalf("button callback data = %q, want %q", button.CallbackData, wantData)
 	}
 }

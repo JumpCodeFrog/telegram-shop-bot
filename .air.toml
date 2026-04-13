@@ -1,0 +1,21 @@
+# Air hot-reload configuration for development.
+# https://github.com/air-verse/air
+
+root = "."
+tmp_dir = "tmp"
+
+[build]
+  cmd = "go build -o ./tmp/bot ./cmd/bot"
+  bin = "./tmp/bot"
+  delay = 500
+  exclude_dir = ["tmp", "data", "backups", "testdata"]
+  include_ext = ["go"]
+  exclude_regex = ["_test\\.go$"]
+
+[log]
+  time = true
+
+[color]
+  build   = "yellow"
+  runner  = "green"
+  watcher = "cyan"

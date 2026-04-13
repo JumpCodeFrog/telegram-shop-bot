@@ -38,13 +38,24 @@ type Bot struct {
 	metrics         *service.MetricsService
 	fsm             storage.FSMStore
 	i18n            *service.I18nService
+	outWebhook      *service.OutboundWebhookService
 
-	wishlist *storage.WishlistStore
+	wishlist   *storage.WishlistStore
+	uiSettings storage.UISettingsStore
+	// uiStyles is an in-memory cache of button style overrides loaded from DB.
+	// Invalidated and reloaded whenever an admin changes a button style.
+	uiStyles sync.Map
 
 	// handler is the fully-chained update handler (used for both polling and webhook).
 	handler func(tgbotapi.Update)
 
 	handlerOnce sync.Once
+}
+
+// handlerCtx returns a context with a 30-second deadline for use in handler
+// DB/service calls. This prevents a single slow query from holding a goroutine indefinitely.
+func handlerCtx() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), 30*time.Second)
 }
 
 // New creates a new Bot with all dependencies injected.
@@ -103,7 +114,10 @@ func NewWithAPI(cfg *config.Config, api *tgbotapi.BotAPI, db *storage.DB, metric
 		fsm:             fsm,
 		i18n:            i18nSvc,
 		wishlist:        storage.NewWishlistStore(db.Conn()),
+		outWebhook:      service.NewOutboundWebhookService(cfg.OutboundWebhookURL, cfg.OutboundWebhookSecret, logger),
+		uiSettings:      storage.NewSQLUISettingsStore(db.Conn()),
 	}
+	b.reloadButtonStyles(context.Background())
 	// handler is built lazily in Run so we have a context.
 	return b, nil
 }
@@ -139,12 +153,45 @@ func (b *Bot) cryptoPaymentsEnabled() bool {
 	return b.crypto != nil && b.crypto.Configured()
 }
 
+// registerCommands registers the bot command list with Telegram so the "/" menu shows up.
+func (b *Bot) registerCommands() {
+	cmds := tgbotapi.NewSetMyCommands(
+		tgbotapi.BotCommand{Command: "start", Description: "Main menu"},
+		tgbotapi.BotCommand{Command: "catalog", Description: "Browse products"},
+		tgbotapi.BotCommand{Command: "cart", Description: "Your cart"},
+		tgbotapi.BotCommand{Command: "orders", Description: "My orders"},
+		tgbotapi.BotCommand{Command: "wishlist", Description: "Wishlist"},
+		tgbotapi.BotCommand{Command: "search", Description: "Search products"},
+		tgbotapi.BotCommand{Command: "profile", Description: "Profile & loyalty"},
+		tgbotapi.BotCommand{Command: "support", Description: "Customer support"},
+		tgbotapi.BotCommand{Command: "paysupport", Description: "Payment help"},
+		tgbotapi.BotCommand{Command: "terms", Description: "Terms and conditions"},
+		tgbotapi.BotCommand{Command: "help", Description: "All commands"},
+		tgbotapi.BotCommand{Command: "cancel", Description: "Cancel current action"},
+	)
+	if _, err := b.api.Request(cmds); err != nil {
+		b.logger.Warn("setMyCommands failed", "error", err)
+	}
+
+	// Set the chat menu button to show commands list (visible as "/" button in input field).
+	if _, err := b.api.MakeRequest("setMyDefaultAdministratorRights", tgbotapi.Params{}); err == nil {
+		// ignore — just warming up MakeRequest
+	}
+	if _, err := b.api.MakeRequest("setChatMenuButton", tgbotapi.Params{
+		"menu_button": `{"type":"commands"}`,
+	}); err != nil {
+		b.logger.Warn("setChatMenuButton failed", "error", err)
+	}
+}
+
 // Run starts the main update loop (polling). It blocks until ctx is cancelled.
 func (b *Bot) Run(ctx context.Context) error {
 	b.ensureHandler(ctx)
+	b.registerCommands()
 
 	u := tgbotapi.NewUpdate(0)
 	u.Timeout = 60
+	u.AllowedUpdates = []string{"message", "callback_query", "pre_checkout_query", "inline_query"}
 
 	updates := b.api.GetUpdatesChan(u)
 
@@ -174,6 +221,7 @@ func (b *Bot) HandleUpdate(update tgbotapi.Update) {
 
 // RegisterTelegramWebhook registers the bot's webhook URL with the Telegram API.
 func (b *Bot) RegisterTelegramWebhook(webhookURL string) error {
+	b.registerCommands()
 	if b.cfg.TelegramWebhookSecret != "" {
 		params := tgbotapi.Params{
 			"url":          webhookURL + "/telegram-webhook",

@@ -10,6 +10,7 @@ import (
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 
+	"shop_bot/internal/service"
 	"shop_bot/internal/storage"
 )
 
@@ -23,6 +24,7 @@ func (b *Bot) CryptoBotWebhookHandler() http.HandlerFunc {
 			return
 		}
 
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1 MB
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			b.logger.Error("cryptobot webhook: read body", "error", err)
@@ -78,11 +80,27 @@ func (b *Bot) CryptoBotWebhookHandler() http.HandlerFunc {
 			return
 		}
 
-		text := fmt.Sprintf("✅ Оплата заказа #%d прошла успешно!\n\nСпасибо за покупку!", payload.OrderID)
+		user, _ := b.users.GetByTelegramID(ctx, order.UserID)
+		lang := "ru"
+		if user != nil && user.LanguageCode != "" {
+			lang = user.LanguageCode
+		}
+
+		text := fmt.Sprintf(b.t(lang, "payment_success"), payload.OrderID)
 		b.send(tgbotapi.NewMessage(order.UserID, text))
 
-		b.notifyAdmins(fmt.Sprintf("💎 Оплачен заказ #%d (Crypto) — пользователь %d — $%.2f",
+		b.notifyAdmins(fmt.Sprintf(b.t("ru", "admin_order_paid_crypto"),
 			payload.OrderID, order.UserID, order.TotalUSD))
+
+		b.outWebhook.Send(service.OutboundWebhookEvent{
+			Event:      "order.paid",
+			OrderID:    payload.OrderID,
+			UserID:     order.UserID,
+			TotalUSD:   order.TotalUSD,
+			TotalStars: order.TotalStars,
+			Method:     "crypto",
+			PaymentID:  payload.InvoiceID,
+		})
 
 		w.WriteHeader(http.StatusOK)
 	}
@@ -106,6 +124,7 @@ func (b *Bot) TelegramWebhookHandler() http.HandlerFunc {
 			}
 		}
 
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1 MB
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			b.logger.Error("telegram webhook: read body", "error", err)

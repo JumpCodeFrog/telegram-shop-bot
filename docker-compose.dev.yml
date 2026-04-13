@@ -1,0 +1,43 @@
+# Development environment with hot-reload via Air.
+#
+# Usage:
+#   make dev
+#   # or manually:
+#   docker compose -f docker-compose.dev.yml up --build
+#
+# Hot-reload: any change to *.go files triggers automatic rebuild.
+# The bot source directory is mounted into the container.
+
+services:
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    env_file: .env
+    environment:
+      APP_ENV: development
+      DB_PATH: /app/data/shop.db
+      REDIS_ADDR: redis:6379
+    volumes:
+      - .:/app
+      - dev_data:/app/data
+    ports:
+      - "8080:8080"
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redis_dev_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  dev_data:
+  redis_dev_data:

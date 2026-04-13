@@ -119,7 +119,7 @@ func main() {
 	go cartW.Start(ctx)
 
 	if redisClient != nil {
-		loyaltyW := worker.NewLoyaltyWorker(loyaltyStore, loyaltySvc, redisClient, b.API())
+		loyaltyW := worker.NewLoyaltyWorker(loyaltyStore, loyaltySvc, redisClient, b.API(), i18n)
 		go loyaltyW.Start(ctx)
 	}
 
@@ -160,7 +160,13 @@ func main() {
 		}
 
 		slog.Info("Health & Metrics API starting", "port", 8080)
-		server := &http.Server{Addr: ":8080", Handler: mux}
+		server := &http.Server{
+			Addr:         ":8080",
+			Handler:      mux,
+			ReadTimeout:  10 * time.Second,
+			WriteTimeout: 10 * time.Second,
+			IdleTimeout:  60 * time.Second,
+		}
 		go func() {
 			if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 				slog.Error("API server error", "error", err)

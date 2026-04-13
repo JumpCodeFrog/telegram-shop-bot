@@ -55,8 +55,6 @@ func (b *Bot) paymentMethodText(lang, method string) string {
 		return b.t(lang, "payment_method_stars")
 	case storage.PaymentMethodCrypto:
 		return b.t(lang, "payment_method_crypto")
-	case storage.PaymentMethodBalance:
-		return b.t(lang, "payment_method_balance")
 	default:
 		return escapeHTML(method)
 	}
