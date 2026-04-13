@@ -169,8 +169,8 @@ func (b *Bot) onProductSelected(chatID, userID int64, msgID int, data, lang stri
 				"reply_markup": kbStr,
 			}); err != nil {
 				// Fallback: delete and send fresh photo.
-				b.api.Request(tgbotapi.NewDeleteMessage(chatID, msgID))
-				b.api.MakeRequest("sendPhoto", tgbotapi.Params{
+				_, _ = b.api.Request(tgbotapi.NewDeleteMessage(chatID, msgID))
+				_, _ = b.api.MakeRequest("sendPhoto", tgbotapi.Params{
 					"chat_id":      strconv.FormatInt(chatID, 10),
 					"photo":        p.PhotoURL,
 					"caption":      text,
@@ -179,7 +179,7 @@ func (b *Bot) onProductSelected(chatID, userID int64, msgID int, data, lang stri
 				})
 			}
 		} else {
-			b.api.MakeRequest("sendPhoto", tgbotapi.Params{
+			_, _ = b.api.MakeRequest("sendPhoto", tgbotapi.Params{
 				"chat_id":      strconv.FormatInt(chatID, 10),
 				"photo":        p.PhotoURL,
 				"caption":      text,

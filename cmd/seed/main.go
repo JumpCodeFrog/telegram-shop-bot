@@ -58,7 +58,9 @@ func main() {
 	if err != nil { slog.Error("query categories", "error", err); os.Exit(1) }
 	for rows.Next() {
 		var r catRow
-		rows.Scan(&r.id, &r.name)
+		if err := rows.Scan(&r.id, &r.name); err != nil {
+			slog.Error("scan category", "error", err)
+		}
 		catIDs[r.name] = r.id
 	}
 	rows.Close()

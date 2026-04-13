@@ -132,20 +132,20 @@ func (b *Bot) routeMessage(msg *tgbotapi.Message) {
 
 // ack answers a callback query silently (removes the loading spinner).
 func (b *Bot) ack(cbID string) {
-	b.api.Request(tgbotapi.NewCallback(cbID, ""))
+	_, _ = b.api.Request(tgbotapi.NewCallback(cbID, ""))
 }
 
 // toast answers a callback query with a short non-blocking notification at the top of the screen.
 // Use for quick confirmations (cart add, wishlist). Use alert() for blocking popups on errors.
 func (b *Bot) toast(cbID, text string) {
-	b.api.Request(tgbotapi.NewCallback(cbID, text))
+	_, _ = b.api.Request(tgbotapi.NewCallback(cbID, text))
 }
 
 // alert answers a callback query with a native Telegram popup (show_alert).
 func (b *Bot) alert(cbID, text string) {
 	cb := tgbotapi.NewCallback(cbID, text)
 	cb.ShowAlert = true
-	b.api.Request(cb)
+	_, _ = b.api.Request(cb)
 }
 
 // handleCallback routes callback queries based on their data prefix.

@@ -18,7 +18,7 @@ func (s *LoyaltyStoreImpl) AddPoints(ctx context.Context, userID int64, pts int,
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	_, err = tx.ExecContext(ctx, `INSERT INTO loyalty_txs (user_id, pts, reason, ref_id) VALUES (?, ?, ?, ?)`, userID, pts, reason, refID)
 	if err != nil {

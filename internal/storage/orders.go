@@ -23,7 +23,7 @@ func (s *SQLOrderStore) CreateOrder(ctx context.Context, order *Order, items []O
 	if err != nil {
 		return 0, fmt.Errorf("order store: begin tx: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	res, err := tx.ExecContext(ctx,
 		`INSERT INTO orders (user_id, total_usd, total_stars, payment_method, payment_id, status, discount_pct, promo_code)
@@ -189,7 +189,7 @@ func (s *SQLOrderStore) UpdateOrderStatus(ctx context.Context, id int64, fromSta
 	if err != nil {
 		return fmt.Errorf("order store: begin tx: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	res, err := tx.ExecContext(ctx,
 		`UPDATE orders SET status = ?, payment_method = ?, payment_id = ?, updated_at = CURRENT_TIMESTAMP
