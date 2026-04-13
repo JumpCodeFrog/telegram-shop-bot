@@ -54,7 +54,7 @@ func (s *SQLPromoStore) UsePromo(ctx context.Context, promoID, userID, orderID i
 	if err != nil {
 		return fmt.Errorf("promo store: begin tx: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO promo_usages (promo_id, user_id, order_id) VALUES (?, ?, ?)`,
