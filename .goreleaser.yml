@@ -52,7 +52,9 @@ dockers:
   - image_templates:
       - "ghcr.io/jumpcodefrog/telegram-shop-bot:{{ .Tag }}"
       - "ghcr.io/jumpcodefrog/telegram-shop-bot:latest"
-    dockerfile: Dockerfile
+    dockerfile: Dockerfile.release
+    extra_files:
+      - locales/
     build_flag_templates:
       - "--label=org.opencontainers.image.title={{ .ProjectName }}"
       - "--label=org.opencontainers.image.version={{ .Version }}"
