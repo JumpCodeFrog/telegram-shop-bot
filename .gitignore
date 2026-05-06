@@ -3,11 +3,6 @@
 .env.local
 .env.*.local
 
-# Local agent / IDE state
-.claude/
-.gemini/
-.serena/
-
 # Runtime data
 data/*.db
 data/*.db-*
@@ -18,9 +13,6 @@ backups/*
 
 # rapid property-based testing artifacts
 **/testdata/rapid/
-
-# AI/agent internal docs
-docs/superpowers/
 
 # Build outputs
 bin/
