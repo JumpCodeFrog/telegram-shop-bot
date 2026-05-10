@@ -8,11 +8,13 @@ import (
 type UserStore interface {
 	Upsert(ctx context.Context, user *User) error
 	GetByTelegramID(ctx context.Context, telegramID int64) (*User, error)
+	GetAll(ctx context.Context) ([]User, error)
 }
 
 type ProductStore interface {
 	GetCategories(ctx context.Context) ([]Category, error)
 	GetProductsByCategory(ctx context.Context, categoryID int64) ([]Product, error)
+	GetLowStockProducts(ctx context.Context, threshold int) ([]Product, error)
 	GetProductsByCategoryPaged(ctx context.Context, categoryID int64, limit, offset int) ([]Product, int, error)
 	GetProduct(ctx context.Context, id int64) (*Product, error)
 	CreateProduct(ctx context.Context, p *Product) (int64, error)
@@ -58,6 +60,13 @@ type AnalyticsStore interface {
 	GetRevenueByDays(ctx context.Context, days int) ([]DailyRevenue, error)
 	GetTopProducts(ctx context.Context, limit int) ([]ProductStats, error)
 	GetPaymentMethodStats(ctx context.Context) ([]PaymentMethodStat, error)
+}
+
+type ReviewStore interface {
+	CreateReview(ctx context.Context, r *Review) error
+	GetReviewsByProduct(ctx context.Context, productID int64) ([]Review, error)
+	GetAverageRating(ctx context.Context, productID int64) (float64, int, error)
+	HasUserOrderedProduct(ctx context.Context, userID, productID int64) (bool, error)
 }
 
 // UISettingsStore is declared in ui_settings.go to keep all its code in one file.

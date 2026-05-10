@@ -207,11 +207,115 @@ func (b *Bot) productKeyboard(p *storage.Product, inWishlist bool, quantity int,
 		},
 		{b.styledBtn(BtnKeyProductAdd, b.t(lang, "btn_add_to_cart"), fmt.Sprintf("cart:add:%d", p.ID), StyleSuccess)},
 		{
+			Btn("⭐ "+b.t(lang, "btn_reviews"), fmt.Sprintf("reviews:%d", p.ID)),
 			Btn(wishBtnLabel, fmt.Sprintf("wish:%d", p.ID)),
+		},
+		{
 			Btn(b.t(lang, "btn_back"), fmt.Sprintf("back:category:%d", p.CategoryID)),
 			Btn(b.t(lang, "btn_menu"), "back:menu"),
 		},
 	}
+}
+
+func (b *Bot) onReviewsView(chatID int64, msgID int, data, lang string) {
+	prodID, err := parseIDFromCallback(data, "reviews:")
+	if err != nil {
+		return
+	}
+
+	ctx := context.Background()
+	reviews, err := b.reviews.GetReviewsByProduct(ctx, prodID)
+	if err != nil {
+		b.logger.Error("get reviews", "error", err)
+		return
+	}
+
+	avg, count, _ := b.reviews.GetAverageRating(ctx, prodID)
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("⭐ <b>%s</b>\n", b.t(lang, "reviews_title")))
+	if count > 0 {
+		sb.WriteString(fmt.Sprintf("%s: %.1f/5 (%d)\n\n", b.t(lang, "rating_avg"), avg, count))
+		for i, r := range reviews {
+			if i >= 5 { // Show only last 5 reviews
+				break
+			}
+			stars := strings.Repeat("⭐", r.Rating)
+			sb.WriteString(fmt.Sprintf("<b>%s</b> %s\n%s\n\n", r.UserFirstName, stars, r.Text))
+		}
+	} else {
+		sb.WriteString(fmt.Sprintf("\n%s\n", b.t(lang, "reviews_empty")))
+	}
+
+	kb := StyledKeyboard{
+		{Btn(b.t(lang, "btn_add_review"), fmt.Sprintf("review:add:%d", prodID))},
+		{Btn(b.t(lang, "btn_back"), fmt.Sprintf("product:%d", prodID))},
+	}
+
+	b.sendOrEditStyled(chatID, msgID, sb.String(), "HTML", kb)
+}
+
+func (b *Bot) onReviewAdd(chatID, userID int64, data, lang string) {
+	prodID, err := parseIDFromCallback(data, "review:add:")
+	if err != nil {
+		return
+	}
+
+	ctx := context.Background()
+	ordered, err := b.reviews.HasUserOrderedProduct(ctx, userID, prodID)
+	if err != nil {
+		b.logger.Error("check user ordered product", "error", err)
+		return
+	}
+
+	if !ordered {
+		b.send(tgbotapi.NewMessage(chatID, b.t(lang, "review_must_order")))
+		return
+	}
+
+	// We'll use a simple approach: ask for rating first.
+	// In a real app we'd use FSM for a multi-step dialog.
+	// For now, let's just show buttons 1-5.
+	kb := StyledKeyboard{
+		{
+			Btn("1️⃣", fmt.Sprintf("review:save:%d:1", prodID)),
+			Btn("2️⃣", fmt.Sprintf("review:save:%d:2", prodID)),
+			Btn("3️⃣", fmt.Sprintf("review:save:%d:3", prodID)),
+			Btn("4️⃣", fmt.Sprintf("review:save:%d:4", prodID)),
+			Btn("5️⃣", fmt.Sprintf("review:save:%d:5", prodID)),
+		},
+		{Btn(b.t(lang, "btn_cancel"), fmt.Sprintf("product:%d", prodID))},
+	}
+
+	b.sendOrEditStyled(chatID, 0, b.t(lang, "review_choose_rating"), "", kb)
+}
+
+func (b *Bot) onReviewSave(chatID, userID int64, data, lang string) {
+	parts := strings.Split(data, ":")
+	if len(parts) < 4 {
+		return
+	}
+	prodID, _ := strconv.ParseInt(parts[2], 10, 64)
+	rating, _ := strconv.Atoi(parts[3])
+
+	ctx := context.Background()
+	// In a full implementation, we'd get text from FSM state.
+	// For now, let's just save the rating.
+	err := b.reviews.CreateReview(ctx, &storage.Review{
+		ProductID: prodID,
+		UserID:    userID,
+		Rating:    rating,
+		Text:      "", // Rating only for now
+	})
+
+	if err != nil {
+		b.logger.Error("save review", "error", err)
+		b.send(tgbotapi.NewMessage(chatID, b.t(lang, "error_short")))
+		return
+	}
+
+	b.send(tgbotapi.NewMessage(chatID, b.t(lang, "review_saved")))
+	b.onProductSelected(chatID, userID, 0, fmt.Sprintf("product:%d", prodID), lang)
 }
 
 func (b *Bot) cartQuantity(ctx context.Context, userID, prodID int64) (int, error) {

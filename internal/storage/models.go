@@ -115,6 +115,18 @@ type OrderItem struct {
 	PriceUSD    float64 `db:"price_usd"`
 }
 
+type Review struct {
+	ID        int64     `db:"id"`
+	ProductID int64     `db:"product_id"`
+	UserID    int64     `db:"user_id"`
+	Rating    int       `db:"rating"`
+	Text      string    `db:"text"`
+	CreatedAt time.Time `db:"created_at"`
+
+	// Joined fields
+	UserFirstName string `db:"user_first_name"`
+}
+
 type PromoCode struct {
 	ID         int64      `db:"id"`
 	Code       string     `db:"code"`
