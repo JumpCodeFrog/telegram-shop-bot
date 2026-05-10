@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 )
 
 // SQLProductStore implements ProductStore using a *sql.DB connection.
@@ -43,6 +44,28 @@ func (s *SQLProductStore) GetProductsByCategory(ctx context.Context, categoryID 
 		 FROM products WHERE category_id = ? AND is_active = 1`, categoryID)
 	if err != nil {
 		return nil, fmt.Errorf("product store: get products by category: %w", err)
+	}
+	defer rows.Close()
+
+	var products []Product
+	for rows.Next() {
+		var p Product
+		if err := rows.Scan(&p.ID, &p.CategoryID, &p.Name, &p.Description, &p.PhotoURL,
+			&p.PriceUSD, &p.PriceStars, &p.Stock, &p.IsDigital, &p.DigitalContent, &p.IsActive, &p.CreatedAt); err != nil {
+			return nil, fmt.Errorf("product store: scan product: %w", err)
+		}
+		products = append(products, p)
+	}
+	return products, rows.Err()
+}
+
+func (s *SQLProductStore) GetLowStockProducts(ctx context.Context, threshold int) ([]Product, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, category_id, name, COALESCE(description, ''), COALESCE(photo_url, ''),
+		        price_usd, COALESCE(price_stars, 0), stock, is_digital, COALESCE(digital_content, ''), is_active, created_at
+		 FROM products WHERE stock <= ? AND is_active = 1`, threshold)
+	if err != nil {
+		return nil, fmt.Errorf("product store: get low stock products: %w", err)
 	}
 	defer rows.Close()
 
@@ -193,14 +216,26 @@ func (s *SQLProductStore) DeleteCategory(ctx context.Context, id int64) error {
 
 // SearchProducts returns active and in-stock products matching the query in name or description.
 func (s *SQLProductStore) SearchProducts(ctx context.Context, query string) ([]Product, error) {
-	pattern := "%" + query + "%"
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, category_id, name, COALESCE(description, ''), COALESCE(photo_url, ''),
+	words := strings.Fields(query)
+	if len(words) == 0 {
+		return nil, nil
+	}
+
+	sqlQuery := `SELECT id, category_id, name, COALESCE(description, ''), COALESCE(photo_url, ''),
 		        price_usd, COALESCE(price_stars, 0), stock, is_digital, COALESCE(digital_content, ''), is_active, created_at
 		 FROM products
-		 WHERE is_active = 1 AND stock > 0 AND (name LIKE ? OR description LIKE ?)
-		 ORDER BY name`,
-		pattern, pattern)
+		 WHERE is_active = 1 AND stock > 0 AND (`
+
+	args := make([]interface{}, 0, len(words)*2)
+	conditions := make([]string, 0, len(words))
+	for _, word := range words {
+		conditions = append(conditions, "(name LIKE ? OR description LIKE ?)")
+		pattern := "%" + word + "%"
+		args = append(args, pattern, pattern)
+	}
+	sqlQuery += strings.Join(conditions, " AND ") + ") ORDER BY name"
+
+	rows, err := s.db.QueryContext(ctx, sqlQuery, args...)
 	if err != nil {
 		return nil, fmt.Errorf("product store: search products: %w", err)
 	}

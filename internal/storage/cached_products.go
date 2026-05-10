@@ -44,6 +44,10 @@ func (s *CachedProductStore) GetCategories(ctx context.Context) ([]Category, err
 	return cats, err
 }
 
+func (s *CachedProductStore) GetLowStockProducts(ctx context.Context, threshold int) ([]Product, error) {
+	return s.base.GetLowStockProducts(ctx, threshold)
+}
+
 func (s *CachedProductStore) GetProductsByCategory(ctx context.Context, categoryID int64) ([]Product, error) {
 	if s.redis == nil {
 		return s.base.GetProductsByCategory(ctx, categoryID)

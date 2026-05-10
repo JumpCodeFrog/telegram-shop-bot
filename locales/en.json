@@ -147,5 +147,14 @@
   "loyalty_level_up": "🎉 Congratulations! You've reached <b>%s</b> level!",
   "loyalty_vip_gift": "🎁 A VIP gift has been sent to you!",
   "stock": "In stock",
-  "btn_menu": "🏠 Main Menu"
+  "btn_menu": "🏠 Main Menu",
+  "btn_reviews": "Reviews",
+  "reviews_title": "Product Reviews",
+  "rating_avg": "Average Rating",
+  "reviews_empty": "This product has no reviews yet.",
+  "btn_add_review": "✍️ Leave a Review",
+  "review_must_order": "❌ You can only leave a review after purchasing this product.",
+  "review_choose_rating": "Please choose a rating:",
+  "review_saved": "✅ Review saved!",
+  "btn_cancel": "Cancel"
 }

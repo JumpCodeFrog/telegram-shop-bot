@@ -171,6 +171,9 @@ func (isActiveProductStore) DeleteCategory(context.Context, int64) error        
 func (isActiveProductStore) GetCategory(context.Context, int64) (*storage.Category, error) {
 	return nil, storage.ErrNotFound
 }
+func (isActiveProductStore) GetLowStockProducts(context.Context, int) ([]storage.Product, error) {
+	return nil, nil
+}
 
 func TestCreateFromCart_Success(t *testing.T) {
 	os := newMockOrderStore()

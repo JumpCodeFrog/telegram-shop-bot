@@ -157,13 +157,16 @@ func TestProductKeyboard_UsesQuantityStepper(t *testing.T) {
 	b := newTextBot(t)
 	kb := b.productKeyboard(&storage.Product{ID: 7, CategoryID: 3}, true, 2, "ru")
 
-	if len(kb) != 3 {
-		t.Fatalf("expected 3 keyboard rows, got %d", len(kb))
+	if len(kb) != 4 {
+		t.Fatalf("expected 4 keyboard rows, got %d", len(kb))
 	}
 	if kb[0][1].Text != "🧺 2 шт" {
 		t.Fatalf("quantity label = %q", kb[0][1].Text)
 	}
-	if kb[2][0].Text != "💔 Убрать из желаемого" {
-		t.Fatalf("wishlist button label = %q", kb[2][0].Text)
+	if kb[2][0].Text != "⭐ Отзывы" {
+		t.Fatalf("reviews button label = %q", kb[2][0].Text)
+	}
+	if kb[3][0].Text != "⬅️ Назад" {
+		t.Fatalf("back button label = %q", kb[3][0].Text)
 	}
 }

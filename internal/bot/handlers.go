@@ -120,6 +120,12 @@ func (b *Bot) routeMessage(msg *tgbotapi.Message) {
 	case "analytics":
 		b.handleAnalytics(msg)
 
+	case "broadcast":
+		b.handleBroadcast(msg)
+
+	case "lowstock":
+		b.handleLowStock(msg)
+
 	// Export.
 	case "export_orders":
 		b.handleExportOrders(msg)
@@ -164,6 +170,18 @@ func (b *Bot) handleCallback(cb *tgbotapi.CallbackQuery) {
 	case strings.HasPrefix(data, "product:"):
 		b.ack(cb.ID)
 		b.onProductSelected(chatID, userID, msgID, data, lang)
+
+	case strings.HasPrefix(data, "reviews:"):
+		b.ack(cb.ID)
+		b.onReviewsView(chatID, msgID, data, lang)
+
+	case strings.HasPrefix(data, "review:add:"):
+		b.ack(cb.ID)
+		b.onReviewAdd(chatID, userID, data, lang)
+
+	case strings.HasPrefix(data, "review:save:"):
+		b.ack(cb.ID)
+		b.onReviewSave(chatID, userID, data, lang)
 
 	case strings.HasPrefix(data, "productqty:plus:"):
 		b.onProductQuantityChange(cb.ID, chatID, userID, msgID, data, "productqty:plus:", 1, lang)

@@ -73,6 +73,9 @@ func (m *mockProductStore) SearchProducts(_ context.Context, _ string) ([]storag
 func (m *mockProductStore) GetCategory(_ context.Context, id int64) (*storage.Category, error) {
 	return nil, storage.ErrNotFound
 }
+func (m *mockProductStore) GetLowStockProducts(_ context.Context, _ int) ([]storage.Product, error) {
+	return nil, nil
+}
 
 func TestListCategories(t *testing.T) {
 	cats := []storage.Category{

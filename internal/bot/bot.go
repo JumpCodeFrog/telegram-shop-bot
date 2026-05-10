@@ -41,6 +41,7 @@ type Bot struct {
 	outWebhook      *service.OutboundWebhookService
 
 	wishlist   *storage.WishlistStore
+	reviews    storage.ReviewStore
 	uiSettings storage.UISettingsStore
 	// uiStyles is an in-memory cache of button style overrides loaded from DB.
 	// Invalidated and reloaded whenever an admin changes a button style.
@@ -114,6 +115,7 @@ func NewWithAPI(cfg *config.Config, api *tgbotapi.BotAPI, db *storage.DB, metric
 		fsm:             fsm,
 		i18n:            i18nSvc,
 		wishlist:        storage.NewWishlistStore(db.Conn()),
+		reviews:         storage.NewReviewStore(db.Conn()),
 		outWebhook:      service.NewOutboundWebhookService(cfg.OutboundWebhookURL, cfg.OutboundWebhookSecret, logger),
 		uiSettings:      storage.NewSQLUISettingsStore(db.Conn()),
 	}

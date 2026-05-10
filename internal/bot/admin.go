@@ -50,9 +50,75 @@ func (b *Bot) handleAdmin(msg *tgbotapi.Message) {
 		"Дизайн:\n" +
 		"/btnstyle — Настроить цвета кнопок\n\n" +
 		"Аналитика:\n" +
-		"/analytics — Статистика продаж"
+		"/analytics — Статистика продаж\n\n" +
+		"Рассылка:\n" +
+		"/broadcast <текст> — Отправить сообщение всем пользователям\n\n" +
+		"Склад:\n" +
+		"/lowstock — Товары с низким остатком"
 
 	b.send(tgbotapi.NewMessage(msg.Chat.ID, text))
+}
+
+func (b *Bot) handleBroadcast(msg *tgbotapi.Message) {
+	if !b.isAdmin(msg.From.ID) {
+		return
+	}
+
+	text := msg.CommandArguments()
+	if strings.TrimSpace(text) == "" {
+		b.send(tgbotapi.NewMessage(msg.Chat.ID, "Использование: /broadcast <текст>"))
+		return
+	}
+
+	ctx := context.Background()
+	users, err := b.users.GetAll(ctx)
+	if err != nil {
+		b.logger.Error("broadcast: get users", "error", err)
+		b.send(tgbotapi.NewMessage(msg.Chat.ID, "❌ Ошибка при получении списка пользователей"))
+		return
+	}
+
+	count := 0
+	for _, user := range users {
+		m := tgbotapi.NewMessage(user.TelegramID, text)
+		m.ParseMode = "HTML"
+		if _, err := b.api.Send(m); err == nil {
+			count++
+		}
+		// Small delay to avoid hitting Telegram limits
+		time.Sleep(33 * time.Millisecond) // ~30 messages per second
+	}
+
+	b.send(tgbotapi.NewMessage(msg.Chat.ID, fmt.Sprintf("✅ Рассылка завершена. Отправлено %d пользователям.", count)))
+}
+
+func (b *Bot) handleLowStock(msg *tgbotapi.Message) {
+	if !b.isAdmin(msg.From.ID) {
+		return
+	}
+
+	ctx := context.Background()
+	products, err := b.products.GetLowStockProducts(ctx, 5) // threshold = 5
+	if err != nil {
+		b.logger.Error("get low stock products", "error", err)
+		b.send(tgbotapi.NewMessage(msg.Chat.ID, "❌ Ошибка при получении списка товаров"))
+		return
+	}
+
+	if len(products) == 0 {
+		b.send(tgbotapi.NewMessage(msg.Chat.ID, "✅ Все товары в достаточном количестве (остаток > 5)."))
+		return
+	}
+
+	var sb strings.Builder
+	sb.WriteString("⚠️ <b>Товары с низким остатком:</b>\n\n")
+	for _, p := range products {
+		sb.WriteString(fmt.Sprintf("• %s (ID: %d) — <b>%d шт.</b>\n", p.Name, p.ID, p.Stock))
+	}
+
+	reply := tgbotapi.NewMessage(msg.Chat.ID, sb.String())
+	reply.ParseMode = "HTML"
+	b.send(reply)
 }
 
 func (b *Bot) handleAddProduct(msg *tgbotapi.Message) {
@@ -94,13 +160,21 @@ func (b *Bot) handleAddProductStep(msg *tgbotapi.Message) bool {
 		_ = b.fsm.SetAddProductState(ctx, msg.From.ID, state, 30*time.Minute)
 		b.send(tgbotapi.NewMessage(chatID, "Введите цену USD:"))
 	case storage.StepPriceUSD:
-		p, _ := strconv.ParseFloat(msg.Text, 64)
+		p, err := strconv.ParseFloat(strings.ReplaceAll(msg.Text, ",", "."), 64)
+		if err != nil || p < 0 {
+			b.send(tgbotapi.NewMessage(chatID, "❌ Некорректная цена. Введите число (например, 10.50):"))
+			return true
+		}
 		state.PriceUSD = p
 		state.Step = storage.StepStock
 		_ = b.fsm.SetAddProductState(ctx, msg.From.ID, state, 30*time.Minute)
-		b.send(tgbotapi.NewMessage(chatID, "Введите количество:"))
+		b.send(tgbotapi.NewMessage(chatID, "Введите количество на складе:"))
 	case storage.StepStock:
-		s, _ := strconv.Atoi(msg.Text)
+		s, err := strconv.Atoi(msg.Text)
+		if err != nil || s < 0 {
+			b.send(tgbotapi.NewMessage(chatID, "❌ Некорректное количество. Введите целое число:"))
+			return true
+		}
 		state.Stock = s
 		state.Step = storage.StepPhoto
 		_ = b.fsm.SetAddProductState(ctx, msg.From.ID, state, 30*time.Minute)
@@ -113,7 +187,11 @@ func (b *Bot) handleAddProductStep(msg *tgbotapi.Message) bool {
 		_ = b.fsm.SetAddProductState(ctx, msg.From.ID, state, 30*time.Minute)
 		b.send(tgbotapi.NewMessage(chatID, "Введите ID категории:"))
 	case storage.StepCategory:
-		id, _ := strconv.ParseInt(msg.Text, 10, 64)
+		id, err := strconv.ParseInt(msg.Text, 10, 64)
+		if err != nil {
+			b.send(tgbotapi.NewMessage(chatID, "❌ Некорректный ID категории. Введите число:"))
+			return true
+		}
 		b.finishAddProduct(chatID, msg.From.ID, id)
 	}
 	return true
@@ -121,13 +199,27 @@ func (b *Bot) handleAddProductStep(msg *tgbotapi.Message) bool {
 
 func (b *Bot) finishAddProduct(chatID, userID, categoryID int64) {
 	ctx := context.Background()
-	state, _ := b.fsm.GetAddProductState(ctx, userID)
-	_ = b.fsm.DelAddProductState(ctx, userID)
-	if state == nil {
+	state, err := b.fsm.GetAddProductState(ctx, userID)
+	if err != nil || state == nil {
+		b.logger.Error("finish add product: get state", "error", err)
 		return
 	}
-	p := &storage.Product{CategoryID: categoryID, Name: state.Name, Description: state.Description, PriceUSD: state.PriceUSD, Stock: state.Stock, PhotoURL: state.PhotoURL, IsActive: true}
-	_, _ = b.products.CreateProduct(ctx, p)
+	_ = b.fsm.DelAddProductState(ctx, userID)
+
+	p := &storage.Product{
+		CategoryID:  categoryID,
+		Name:        state.Name,
+		Description: state.Description,
+		PriceUSD:    state.PriceUSD,
+		Stock:       state.Stock,
+		PhotoURL:    state.PhotoURL,
+		IsActive:    true,
+	}
+	if _, err := b.products.CreateProduct(ctx, p); err != nil {
+		b.logger.Error("finish add product: create", "error", err)
+		b.send(tgbotapi.NewMessage(chatID, "❌ Не удалось создать товар."))
+		return
+	}
 	b.send(tgbotapi.NewMessage(chatID, "✅ Товар создан"))
 }
 
@@ -520,11 +612,24 @@ func (b *Bot) handleAddPromo(msg *tgbotapi.Message) {
 	}
 	args := strings.Fields(msg.CommandArguments())
 	if len(args) < 2 {
+		b.send(tgbotapi.NewMessage(msg.Chat.ID, "Использование: /addpromo <код> <скидка%>"))
 		return
 	}
-	discount, _ := strconv.Atoi(args[1])
-	p := &storage.PromoCode{Code: strings.ToUpper(args[0]), Discount: discount, IsActive: true}
-	_, _ = b.promos.CreatePromo(context.Background(), p)
+	discount, err := strconv.Atoi(args[1])
+	if err != nil || discount < 1 || discount > 100 {
+		b.send(tgbotapi.NewMessage(msg.Chat.ID, "❌ Некорректная скидка. Введите число от 1 до 100."))
+		return
+	}
+	p := &storage.PromoCode{
+		Code:     strings.ToUpper(args[0]),
+		Discount: discount,
+		IsActive: true,
+	}
+	if _, err := b.promos.CreatePromo(context.Background(), p); err != nil {
+		b.logger.Error("create promo", "error", err)
+		b.send(tgbotapi.NewMessage(msg.Chat.ID, "❌ Не удалось создать промокод. Возможно, такой уже существует."))
+		return
+	}
 	b.send(tgbotapi.NewMessage(msg.Chat.ID, "✅ Промокод создан"))
 }
 
@@ -532,8 +637,19 @@ func (b *Bot) handleListPromos(msg *tgbotapi.Message) {
 	if !b.isAdmin(msg.From.ID) {
 		return
 	}
-	promos, _ := b.promos.ListPromos(context.Background())
+	promos, err := b.promos.ListPromos(context.Background())
+	if err != nil {
+		b.logger.Error("list promos", "error", err)
+		b.send(tgbotapi.NewMessage(msg.Chat.ID, "❌ Ошибка при загрузке промокодов."))
+		return
+	}
+	if len(promos) == 0 {
+		b.send(tgbotapi.NewMessage(msg.Chat.ID, "Промокоды не найдены."))
+		return
+	}
+
 	var sb strings.Builder
+	sb.WriteString("🏷 Активные промокоды:\n\n")
 	for _, p := range promos {
 		sb.WriteString(fmt.Sprintf("%d: %s (-%d%%)\n", p.ID, p.Code, p.Discount))
 	}
@@ -544,8 +660,16 @@ func (b *Bot) handleDeletePromo(msg *tgbotapi.Message) {
 	if !b.isAdmin(msg.From.ID) {
 		return
 	}
-	id, _ := strconv.ParseInt(msg.CommandArguments(), 10, 64)
-	_ = b.promos.DeactivatePromo(context.Background(), id)
+	id, err := strconv.ParseInt(strings.TrimSpace(msg.CommandArguments()), 10, 64)
+	if err != nil {
+		b.send(tgbotapi.NewMessage(msg.Chat.ID, "Использование: /deletepromo <id>"))
+		return
+	}
+	if err := b.promos.DeactivatePromo(context.Background(), id); err != nil {
+		b.logger.Error("deactivate promo", "id", id, "error", err)
+		b.send(tgbotapi.NewMessage(msg.Chat.ID, "❌ Не удалось деактивировать промокод."))
+		return
+	}
 	b.send(tgbotapi.NewMessage(msg.Chat.ID, "✅ Промокод деактивирован"))
 }
 

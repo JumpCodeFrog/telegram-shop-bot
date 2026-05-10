@@ -86,3 +86,25 @@ func (s *SQLUserStore) GetNewUsersWithoutOrders(ctx context.Context, minAge, max
 	}
 	return users, rows.Err()
 }
+
+func (s *SQLUserStore) GetAll(ctx context.Context) ([]User, error) {
+	query := `SELECT id, telegram_id, username, first_name, language_code, is_premium, balance_usd, loyalty_pts, loyalty_level, referral_code, referred_by, created_at FROM users`
+	rows, err := s.db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("get all users: %w", err)
+	}
+	defer rows.Close()
+
+	var users []User
+	for rows.Next() {
+		var u User
+		if err := rows.Scan(
+			&u.ID, &u.TelegramID, &u.Username, &u.FirstName, &u.LanguageCode, &u.IsPremium,
+			&u.BalanceUSD, &u.LoyaltyPts, &u.LoyaltyLevel, &u.ReferralCode, &u.ReferredBy, &u.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		users = append(users, u)
+	}
+	return users, rows.Err()
+}

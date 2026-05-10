@@ -179,6 +179,69 @@ func TestDeleteProduct(t *testing.T) {
 	}
 }
 
+func TestSearchProducts_MultiWord(t *testing.T) {
+	store, db := newTestProductStore(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	catID := seedCategory(t, db, "Cat", "🐱")
+	store.CreateProduct(ctx, &Product{CategoryID: catID, Name: "Red Apple", Description: "Sweet red fruit", PriceUSD: 1, PriceStars: 10, IsActive: true, Stock: 10})
+	store.CreateProduct(ctx, &Product{CategoryID: catID, Name: "Green Apple", Description: "Sour green fruit", PriceUSD: 1, PriceStars: 10, IsActive: true, Stock: 10})
+	store.CreateProduct(ctx, &Product{CategoryID: catID, Name: "Red Car", Description: "Fast vehicle", PriceUSD: 1, PriceStars: 10, IsActive: true, Stock: 10})
+
+	// Search for "Red Apple" (should return only 1)
+	res, err := store.SearchProducts(ctx, "Red Apple")
+	if err != nil {
+		t.Fatalf("SearchProducts: %v", err)
+	}
+	if len(res) != 1 {
+		t.Fatalf("expected 1 result for 'Red Apple', got %d", len(res))
+	}
+	if res[0].Name != "Red Apple" {
+		t.Errorf("got %q, want 'Red Apple'", res[0].Name)
+	}
+
+	// Search for "Apple" (should return 2)
+	res, err = store.SearchProducts(ctx, "Apple")
+	if err != nil {
+		t.Fatalf("SearchProducts: %v", err)
+	}
+	if len(res) != 2 {
+		t.Fatalf("expected 2 results for 'Apple', got %d", len(res))
+	}
+
+	// Search for "Blue" (should return 0)
+	res, err = store.SearchProducts(ctx, "Blue")
+	if err != nil {
+		t.Fatalf("SearchProducts: %v", err)
+	}
+	if len(res) != 0 {
+		t.Fatalf("expected 0 results for 'Blue', got %d", len(res))
+	}
+}
+
+func TestGetLowStockProducts(t *testing.T) {
+	store, db := newTestProductStore(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	catID := seedCategory(t, db, "Cat", "🐱")
+	store.CreateProduct(ctx, &Product{CategoryID: catID, Name: "P1", Stock: 3, IsActive: true, PriceUSD: 1, PriceStars: 1})
+	store.CreateProduct(ctx, &Product{CategoryID: catID, Name: "P2", Stock: 10, IsActive: true, PriceUSD: 1, PriceStars: 1})
+	store.CreateProduct(ctx, &Product{CategoryID: catID, Name: "P3", Stock: 5, IsActive: true, PriceUSD: 1, PriceStars: 1})
+	store.CreateProduct(ctx, &Product{CategoryID: catID, Name: "P4", Stock: 1, IsActive: false, PriceUSD: 1, PriceStars: 1})
+
+	res, err := store.GetLowStockProducts(ctx, 5)
+	if err != nil {
+		t.Fatalf("GetLowStockProducts: %v", err)
+	}
+
+	// Should return P1 and P3 (P2 has 10 > 5, P4 is inactive)
+	if len(res) != 2 {
+		t.Fatalf("expected 2 low stock products, got %d", len(res))
+	}
+}
+
 // TestDeleteProduct_NonExistent verifies that deleting a product with a
 // non-existent ID does not return an error (no-op).
 // Validates: Requirements 9.7
