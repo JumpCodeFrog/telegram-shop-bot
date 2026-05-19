@@ -173,6 +173,8 @@
   "admin_error_load_orders_failed": "❌ Failed to load orders.",
   "admin_orders_not_found": "Orders not found.",
   "admin_orders_list_title": "📦 Orders:\n\n",
+  "admin_promos_not_found": "Promo codes not found.",
+  "admin_promos_list_title": "🏷 Active promo codes:\n\n",
   "admin_usage_set_delivered": "Usage: /setdelivered <id>",
   "admin_error_set_delivered_failed": "❌ Failed to mark order as delivered.",
   "admin_order_marked_delivered": "✅ Order #%d marked as delivered.",

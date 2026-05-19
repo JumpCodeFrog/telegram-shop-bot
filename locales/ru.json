@@ -173,6 +173,8 @@
   "admin_error_load_orders_failed": "❌ Не удалось загрузить заказы.",
   "admin_orders_not_found": "Заказы не найдены.",
   "admin_orders_list_title": "📦 Заказы:\n\n",
+  "admin_promos_not_found": "Промокоды не найдены.",
+  "admin_promos_list_title": "🏷 Активные промокоды:\n\n",
   "admin_usage_set_delivered": "Использование: /setdelivered <id>",
   "admin_error_set_delivered_failed": "❌ Не удалось отметить заказ доставленным.",
   "admin_order_marked_delivered": "✅ Заказ #%d отмечен как доставленный.",

@@ -517,8 +517,15 @@ func (b *Bot) handleListPromos(msg *tgbotapi.Message) {
 	if !b.isAdmin(msg.From.ID) {
 		return
 	}
+	lang := msg.From.LanguageCode
 	promos, _ := b.promos.ListPromos(context.Background())
+	if len(promos) == 0 {
+		b.send(tgbotapi.NewMessage(msg.Chat.ID, b.t(lang, "admin_promos_not_found")))
+		return
+	}
+
 	var sb strings.Builder
+	sb.WriteString(b.t(lang, "admin_promos_list_title"))
 	for _, p := range promos {
 		sb.WriteString(fmt.Sprintf("%d: %s (-%d%%)\n", p.ID, p.Code, p.Discount))
 	}

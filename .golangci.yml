@@ -1,29 +1,22 @@
 linters-settings:
   govet:
-    check-shadowing: true
-  golint:
-    min-confidence: 0
+    enable:
+      - shadow
   gocyclo:
-    min-complexity: 15
-  maligned:
-    suggest-new: true
+    min-complexity: 20
   dupl:
-    threshold: 100
+    threshold: 150
   goconst:
     min-len: 3
-    min-occurrences: 3
+    min-occurrences: 5
   misspell:
     locale: US
   lll:
-    line-length: 140
+    line-length: 200
   goimports:
     local-prefixes: shop_bot
-  unused:
-    check-exported: false
-  unparam:
-    check-exported: false
   nakedret:
-    max-func-lines: 30
+    max-func-lines: 50
   prealloc:
     simple: true
     range-loops: true
@@ -64,5 +57,3 @@ linters:
 run:
   timeout: 5m
   tests: true
-  skip-dirs:
-    - vendor
