@@ -42,6 +42,7 @@ type Bot struct {
 
 	wishlist   *storage.WishlistStore
 	uiSettings storage.UISettingsStore
+	adminMap   map[int64]struct{}
 	// uiStyles is an in-memory cache of button style overrides loaded from DB.
 	// Invalidated and reloaded whenever an admin changes a button style.
 	uiStyles sync.Map
@@ -95,6 +96,11 @@ func NewWithAPI(cfg *config.Config, api *tgbotapi.BotAPI, db *storage.DB, metric
 		return nil, fmt.Errorf("i18n: %w", err)
 	}
 
+	adminMap := make(map[int64]struct{})
+	for _, id := range cfg.AdminIDs {
+		adminMap[id] = struct{}{}
+	}
+
 	b := &Bot{
 		api:             api,
 		cfg:             cfg,
@@ -116,6 +122,7 @@ func NewWithAPI(cfg *config.Config, api *tgbotapi.BotAPI, db *storage.DB, metric
 		wishlist:        storage.NewWishlistStore(db.Conn()),
 		outWebhook:      service.NewOutboundWebhookService(cfg.OutboundWebhookURL, cfg.OutboundWebhookSecret, logger),
 		uiSettings:      storage.NewSQLUISettingsStore(db.Conn()),
+		adminMap:        adminMap,
 	}
 	b.reloadButtonStyles(context.Background())
 	// handler is built lazily in Run so we have a context.
