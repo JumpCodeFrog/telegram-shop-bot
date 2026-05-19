@@ -1,27 +1,59 @@
+linters-settings:
+  govet:
+    enable:
+      - shadow
+  gocyclo:
+    min-complexity: 20
+  dupl:
+    threshold: 150
+  goconst:
+    min-len: 3
+    min-occurrences: 5
+  misspell:
+    locale: US
+  lll:
+    line-length: 200
+  goimports:
+    local-prefixes: shop_bot
+  nakedret:
+    max-func-lines: 50
+  prealloc:
+    simple: true
+    range-loops: true
+    for-loops: false
+  gocritic:
+    enabled-tags:
+      - diagnostic
+      - experimental
+      - opinionated
+      - performance
+      - style
+    disabled-checks:
+      - wrapperFunc
+      - rangeValCopy
+      - hugeParam
+
 linters:
+  disable-all: true
   enable:
     - errcheck
     - govet
     - staticcheck
-    - gosimple
     - unused
+    - gosimple
     - ineffassign
+    - typecheck
+    - unconvert
+    - goconst
+    - gocyclo
+    - gocritic
     - misspell
-
-linters-settings:
-  errcheck:
-    # Ignore errors from deferred Close calls and common fire-and-forget sends.
-    exclude-functions:
-      - (net/http.ResponseWriter).Write
-      - (*github.com/go-telegram-bot-api/telegram-bot-api/v5.BotAPI).Send
-
-issues:
-  exclude-rules:
-    # Test files: allow unused variables and unchecked errors.
-    - path: _test\.go
-      linters:
-        - errcheck
-        - unused
+    - lll
+    - unparam
+    - nakedret
+    - prealloc
+    - whitespace
 
 run:
   timeout: 5m
+  tests: true
