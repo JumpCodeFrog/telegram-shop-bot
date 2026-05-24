@@ -13,12 +13,13 @@ type OrderService struct {
 	orders   storage.OrderStore
 	cart     storage.CartStore
 	products storage.ProductStore
+	promos   storage.PromoStore
 	logger   *slog.Logger
 }
 
 // NewOrderService creates a new OrderService backed by the given stores.
-func NewOrderService(os storage.OrderStore, cs storage.CartStore, ps storage.ProductStore, logger *slog.Logger) *OrderService {
-	return &OrderService{orders: os, cart: cs, products: ps, logger: logger}
+func NewOrderService(os storage.OrderStore, cs storage.CartStore, ps storage.ProductStore, promos storage.PromoStore, logger *slog.Logger) *OrderService {
+	return &OrderService{orders: os, cart: cs, products: ps, promos: promos, logger: logger}
 }
 
 // CreateFromCart creates a new order from the given CartView. If promo is
@@ -93,7 +94,38 @@ func (s *OrderService) CreateFromCart(ctx context.Context, userID int64, cartVie
 // ErrOrderStatusConflict if the order is already paid or in another terminal
 // state, making this call idempotent and safe under concurrent webhooks.
 func (s *OrderService) ConfirmPayment(ctx context.Context, orderID int64, method, paymentID string) error {
-	return s.orders.UpdateOrderStatus(ctx, orderID, storage.OrderStatusPending, storage.OrderStatusPaid, method, paymentID)
+	return s.orders.WithinTransaction(ctx, func(ctx context.Context) error {
+		if err := s.orders.UpdateOrderStatus(ctx, orderID, storage.OrderStatusPending, storage.OrderStatusPaid, method, paymentID); err != nil {
+			return err
+		}
+
+		// Logic moved from storage: decrement stock and record promo usage.
+		order, err := s.orders.GetOrder(ctx, orderID)
+		if err != nil {
+			return fmt.Errorf("order service: confirm payment: get order: %w", err)
+		}
+
+		// 1. Decrement stock for each item.
+		for _, item := range order.Items {
+			if err := s.products.DecrementStock(ctx, item.ProductID, item.Quantity); err != nil {
+				return fmt.Errorf("confirm payment: decrement stock for product %d: %w", item.ProductID, err)
+			}
+		}
+
+		// 2. Record promo usage.
+		if order.PromoCode != "" {
+			promo, err := s.promos.GetPromoByCode(ctx, order.PromoCode)
+			if err == nil {
+				if err := s.promos.UsePromo(ctx, promo.ID, order.UserID, order.ID); err != nil {
+					return fmt.Errorf("confirm payment: use promo %s: %w", order.PromoCode, err)
+				}
+			} else if err != storage.ErrNotFound {
+				return fmt.Errorf("confirm payment: get promo %s: %w", order.PromoCode, err)
+			}
+		}
+
+		return nil
+	})
 }
 
 // GetOrder returns a single order by ID.

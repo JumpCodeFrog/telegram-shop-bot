@@ -17,6 +17,7 @@ type ProductStore interface {
 	GetProduct(ctx context.Context, id int64) (*Product, error)
 	CreateProduct(ctx context.Context, p *Product) (int64, error)
 	UpdateProduct(ctx context.Context, p *Product) error
+	DecrementStock(ctx context.Context, id int64, quantity int) error
 	DeleteProduct(ctx context.Context, id int64) error
 	SearchProducts(ctx context.Context, query string) ([]Product, error)
 	CreateCategory(ctx context.Context, cat *Category) (int64, error)
@@ -36,6 +37,7 @@ type CartStore interface {
 }
 
 type OrderStore interface {
+	WithinTransaction(ctx context.Context, fn func(ctx context.Context) error) error
 	CreateOrder(ctx context.Context, order *Order, items []OrderItem) (int64, error)
 	GetOrder(ctx context.Context, id int64) (*Order, error)
 	GetUserOrders(ctx context.Context, userID int64) ([]Order, error)

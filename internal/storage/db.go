@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"database/sql"
 	"embed"
 	"errors"
@@ -24,6 +25,52 @@ var (
 // DB wraps *sql.DB and provides storage operations.
 type DB struct {
 	conn *sql.DB
+}
+
+type txKey struct{}
+
+// executor defines the set of methods shared by *sql.DB and *sql.Tx.
+type executor interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+// getExecutor returns the appropriate executor (either the DB connection or a transaction
+// from the context if one exists).
+func (db *DB) getExecutor(ctx context.Context) executor {
+	if tx, ok := ctx.Value(txKey{}).(*sql.Tx); ok {
+		return tx
+	}
+	return db.conn
+}
+
+// WithinTransaction executes the given function within a database transaction.
+// If the function returns an error, the transaction is rolled back.
+func (db *DB) WithinTransaction(ctx context.Context, fn func(ctx context.Context) error) error {
+	tx, err := db.conn.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+
+	defer func() {
+		if p := recover(); p != nil {
+			_ = tx.Rollback()
+			panic(p)
+		}
+	}()
+
+	txCtx := context.WithValue(ctx, txKey{}, tx)
+	if err := fn(txCtx); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit transaction: %w", err)
+	}
+
+	return nil
 }
 
 // New opens a SQLite database at dbPath, enables foreign keys, and runs

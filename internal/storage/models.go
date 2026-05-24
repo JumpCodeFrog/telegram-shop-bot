@@ -47,7 +47,6 @@ type User struct {
 	FirstName    string    `db:"first_name"`
 	LanguageCode string    `db:"language_code"`
 	IsPremium    bool      `db:"is_premium"`
-	BalanceUSD   float64   `db:"balance_usd"`
 	LoyaltyPts   int       `db:"loyalty_pts"`
 	LoyaltyLevel string    `db:"loyalty_level"`
 	ReferralCode sql.NullString `db:"referral_code"`
