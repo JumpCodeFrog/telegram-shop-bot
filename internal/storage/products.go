@@ -8,17 +8,17 @@ import (
 
 // SQLProductStore implements ProductStore using a *sql.DB connection.
 type SQLProductStore struct {
-	db *sql.DB
+	db *DB
 }
 
 // NewSQLProductStore creates a new SQLProductStore from the given DB.
 func NewSQLProductStore(d *DB) *SQLProductStore {
-	return &SQLProductStore{db: d.Conn()}
+	return &SQLProductStore{db: d}
 }
 
 // GetCategories returns all active categories.
 func (s *SQLProductStore) GetCategories(ctx context.Context) ([]Category, error) {
-	rows, err := s.db.QueryContext(ctx, "SELECT id, name, COALESCE(emoji, ''), COALESCE(custom_emoji_id, ''), sort_order, is_active FROM categories WHERE is_active = 1 ORDER BY sort_order ASC")
+	rows, err := s.db.getExecutor(ctx).QueryContext(ctx, "SELECT id, name, COALESCE(emoji, ''), COALESCE(custom_emoji_id, ''), sort_order, is_active FROM categories WHERE is_active = 1 ORDER BY sort_order ASC")
 	if err != nil {
 		return nil, fmt.Errorf("product store: get categories: %w", err)
 	}
@@ -37,7 +37,7 @@ func (s *SQLProductStore) GetCategories(ctx context.Context) ([]Category, error)
 
 // GetProductsByCategory returns all active products for the given category.
 func (s *SQLProductStore) GetProductsByCategory(ctx context.Context, categoryID int64) ([]Product, error) {
-	rows, err := s.db.QueryContext(ctx,
+	rows, err := s.db.getExecutor(ctx).QueryContext(ctx,
 		`SELECT id, category_id, name, COALESCE(description, ''), COALESCE(photo_url, ''),
 		        price_usd, COALESCE(price_stars, 0), stock, is_digital, COALESCE(digital_content, ''), is_active, created_at
 		 FROM products WHERE category_id = ? AND is_active = 1`, categoryID)
@@ -62,13 +62,13 @@ func (s *SQLProductStore) GetProductsByCategory(ctx context.Context, categoryID 
 // pagination. Returns the products, total count, and any error.
 func (s *SQLProductStore) GetProductsByCategoryPaged(ctx context.Context, categoryID int64, limit, offset int) ([]Product, int, error) {
 	var total int
-	if err := s.db.QueryRowContext(ctx,
+	if err := s.db.getExecutor(ctx).QueryRowContext(ctx,
 		"SELECT COUNT(*) FROM products WHERE category_id = ? AND is_active = 1 AND stock > 0", categoryID,
 	).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("product store: count paged products: %w", err)
 	}
 
-	rows, err := s.db.QueryContext(ctx,
+	rows, err := s.db.getExecutor(ctx).QueryContext(ctx,
 		`SELECT id, category_id, name, COALESCE(description, ''), COALESCE(photo_url, ''),
 		        price_usd, COALESCE(price_stars, 0), stock, is_digital, COALESCE(digital_content, ''), is_active, created_at
 		 FROM products WHERE category_id = ? AND is_active = 1 AND stock > 0
@@ -94,7 +94,7 @@ func (s *SQLProductStore) GetProductsByCategoryPaged(ctx context.Context, catego
 // does not exist.
 func (s *SQLProductStore) GetProduct(ctx context.Context, id int64) (*Product, error) {
 	var p Product
-	err := s.db.QueryRowContext(ctx,
+	err := s.db.getExecutor(ctx).QueryRowContext(ctx,
 		`SELECT id, category_id, name, COALESCE(description, ''), COALESCE(photo_url, ''),
 		        price_usd, COALESCE(price_stars, 0), stock, is_digital, COALESCE(digital_content, ''), is_active, created_at
 		 FROM products WHERE id = ?`, id).
@@ -111,7 +111,7 @@ func (s *SQLProductStore) GetProduct(ctx context.Context, id int64) (*Product, e
 
 // CreateProduct inserts a new product and returns its ID.
 func (s *SQLProductStore) CreateProduct(ctx context.Context, p *Product) (int64, error) {
-	res, err := s.db.ExecContext(ctx,
+	res, err := s.db.getExecutor(ctx).ExecContext(ctx,
 		`INSERT INTO products (category_id, name, description, photo_url, price_usd, price_stars, stock, is_digital, digital_content, is_active)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		p.CategoryID, p.Name, p.Description, p.PhotoURL, p.PriceUSD, p.PriceStars, p.Stock, p.IsDigital, p.DigitalContent, p.IsActive)
@@ -127,7 +127,7 @@ func (s *SQLProductStore) CreateProduct(ctx context.Context, p *Product) (int64,
 
 // UpdateProduct updates all fields of an existing product.
 func (s *SQLProductStore) UpdateProduct(ctx context.Context, p *Product) error {
-	_, err := s.db.ExecContext(ctx,
+	_, err := s.db.getExecutor(ctx).ExecContext(ctx,
 		`UPDATE products SET category_id = ?, name = ?, description = ?, photo_url = ?,
 		        price_usd = ?, price_stars = ?, stock = ?, is_digital = ?, digital_content = ?, is_active = ?
 		 WHERE id = ?`,
@@ -138,9 +138,28 @@ func (s *SQLProductStore) UpdateProduct(ctx context.Context, p *Product) error {
 	return nil
 }
 
+// DecrementStock atomically decrements the stock of a product by the given quantity.
+// Returns ErrProductOutOfStock if the current stock is insufficient.
+func (s *SQLProductStore) DecrementStock(ctx context.Context, id int64, quantity int) error {
+	res, err := s.db.getExecutor(ctx).ExecContext(ctx,
+		`UPDATE products SET stock = stock - ? WHERE id = ? AND stock >= ?`,
+		quantity, id, quantity)
+	if err != nil {
+		return fmt.Errorf("product store: decrement stock: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("product store: decrement stock rows affected: %w", err)
+	}
+	if n == 0 {
+		return ErrProductOutOfStock
+	}
+	return nil
+}
+
 // DeleteProduct removes a product by ID.
 func (s *SQLProductStore) DeleteProduct(ctx context.Context, id int64) error {
-	_, err := s.db.ExecContext(ctx, "DELETE FROM products WHERE id = ?", id)
+	_, err := s.db.getExecutor(ctx).ExecContext(ctx, "DELETE FROM products WHERE id = ?", id)
 	if err != nil {
 		return fmt.Errorf("product store: delete product: %w", err)
 	}
@@ -149,7 +168,7 @@ func (s *SQLProductStore) DeleteProduct(ctx context.Context, id int64) error {
 
 // CreateCategory inserts a new category and returns its ID.
 func (s *SQLProductStore) CreateCategory(ctx context.Context, cat *Category) (int64, error) {
-	res, err := s.db.ExecContext(ctx,
+	res, err := s.db.getExecutor(ctx).ExecContext(ctx,
 		"INSERT INTO categories (name, emoji, custom_emoji_id, sort_order, is_active) VALUES (?, ?, ?, ?, ?)",
 		cat.Name, cat.Emoji, cat.CustomEmojiID, cat.SortOrder, cat.IsActive)
 	if err != nil {
@@ -164,7 +183,7 @@ func (s *SQLProductStore) CreateCategory(ctx context.Context, cat *Category) (in
 
 // UpdateCategory updates an existing category.
 func (s *SQLProductStore) UpdateCategory(ctx context.Context, cat *Category) error {
-	_, err := s.db.ExecContext(ctx,
+	_, err := s.db.getExecutor(ctx).ExecContext(ctx,
 		"UPDATE categories SET name = ?, emoji = ?, custom_emoji_id = ?, sort_order = ?, is_active = ? WHERE id = ?",
 		cat.Name, cat.Emoji, cat.CustomEmojiID, cat.SortOrder, cat.IsActive, cat.ID)
 	if err != nil {
@@ -177,7 +196,7 @@ func (s *SQLProductStore) UpdateCategory(ctx context.Context, cat *Category) err
 // still has products assigned to it.
 func (s *SQLProductStore) DeleteCategory(ctx context.Context, id int64) error {
 	var count int
-	if err := s.db.QueryRowContext(ctx,
+	if err := s.db.getExecutor(ctx).QueryRowContext(ctx,
 		"SELECT COUNT(*) FROM products WHERE category_id = ?", id,
 	).Scan(&count); err != nil {
 		return fmt.Errorf("product store: check products in category: %w", err)
@@ -185,7 +204,7 @@ func (s *SQLProductStore) DeleteCategory(ctx context.Context, id int64) error {
 	if count > 0 {
 		return fmt.Errorf("product store: category has %d products, delete or reassign them first", count)
 	}
-	if _, err := s.db.ExecContext(ctx, "DELETE FROM categories WHERE id = ?", id); err != nil {
+	if _, err := s.db.getExecutor(ctx).ExecContext(ctx, "DELETE FROM categories WHERE id = ?", id); err != nil {
 		return fmt.Errorf("product store: delete category: %w", err)
 	}
 	return nil
@@ -194,7 +213,7 @@ func (s *SQLProductStore) DeleteCategory(ctx context.Context, id int64) error {
 // SearchProducts returns active and in-stock products matching the query in name or description.
 func (s *SQLProductStore) SearchProducts(ctx context.Context, query string) ([]Product, error) {
 	pattern := "%" + query + "%"
-	rows, err := s.db.QueryContext(ctx,
+	rows, err := s.db.getExecutor(ctx).QueryContext(ctx,
 		`SELECT id, category_id, name, COALESCE(description, ''), COALESCE(photo_url, ''),
 		        price_usd, COALESCE(price_stars, 0), stock, is_digital, COALESCE(digital_content, ''), is_active, created_at
 		 FROM products
@@ -222,7 +241,7 @@ func (s *SQLProductStore) SearchProducts(ctx context.Context, query string) ([]P
 // not exist.
 func (s *SQLProductStore) GetCategory(ctx context.Context, id int64) (*Category, error) {
 	var c Category
-	err := s.db.QueryRowContext(ctx,
+	err := s.db.getExecutor(ctx).QueryRowContext(ctx,
 		"SELECT id, name, COALESCE(emoji, ''), COALESCE(custom_emoji_id, ''), sort_order, is_active FROM categories WHERE id = ?", id,
 	).Scan(&c.ID, &c.Name, &c.Emoji, &c.CustomEmojiID, &c.SortOrder, &c.IsActive)
 	if err == sql.ErrNoRows {

@@ -8,12 +8,12 @@ import (
 
 // SQLPromoStore implements PromoStore using a *sql.DB connection.
 type SQLPromoStore struct {
-	db *sql.DB
+	db *DB
 }
 
 // NewSQLPromoStore creates a new SQLPromoStore from the given DB.
 func NewSQLPromoStore(d *DB) *SQLPromoStore {
-	return &SQLPromoStore{db: d.Conn()}
+	return &SQLPromoStore{db: d}
 }
 
 // GetPromoByCode returns an active, valid promo code. Returns ErrNotFound if
@@ -22,7 +22,7 @@ func (s *SQLPromoStore) GetPromoByCode(ctx context.Context, code string) (*Promo
 	var p PromoCode
 	var expiresAt sql.NullTime
 	var categoryID sql.NullInt64
-	err := s.db.QueryRowContext(ctx,
+	err := s.db.getExecutor(ctx).QueryRowContext(ctx,
 		`SELECT id, code, discount, max_uses, used_count, expires_at, is_active, created_at, category_id
 		 FROM promo_codes
 		 WHERE code = ? AND is_active = 1
@@ -50,32 +50,28 @@ func (s *SQLPromoStore) GetPromoByCode(ctx context.Context, code string) (*Promo
 // UsePromo records that a user has used the promo code for an order and
 // increments the usage counter.
 func (s *SQLPromoStore) UsePromo(ctx context.Context, promoID, userID, orderID int64) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("promo store: begin tx: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
+	executor := s.db.getExecutor(ctx)
 
-	if _, err := tx.ExecContext(ctx,
+	if _, err := executor.ExecContext(ctx,
 		`INSERT INTO promo_usages (promo_id, user_id, order_id) VALUES (?, ?, ?)`,
 		promoID, userID, orderID,
 	); err != nil {
 		return fmt.Errorf("promo store: insert promo usage: %w", err)
 	}
 
-	if _, err := tx.ExecContext(ctx,
+	if _, err := executor.ExecContext(ctx,
 		`UPDATE promo_codes SET used_count = used_count + 1 WHERE id = ?`, promoID,
 	); err != nil {
 		return fmt.Errorf("promo store: increment used_count: %w", err)
 	}
 
-	return tx.Commit()
+	return nil
 }
 
 // HasUserUsedPromo returns true if the user has already used the given promo.
 func (s *SQLPromoStore) HasUserUsedPromo(ctx context.Context, promoID, userID int64) (bool, error) {
 	var count int
-	err := s.db.QueryRowContext(ctx,
+	err := s.db.getExecutor(ctx).QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM promo_usages WHERE promo_id = ? AND user_id = ?`,
 		promoID, userID,
 	).Scan(&count)
@@ -87,7 +83,7 @@ func (s *SQLPromoStore) HasUserUsedPromo(ctx context.Context, promoID, userID in
 
 // CreatePromo inserts a new promo code and returns its ID.
 func (s *SQLPromoStore) CreatePromo(ctx context.Context, p *PromoCode) (int64, error) {
-	res, err := s.db.ExecContext(ctx,
+	res, err := s.db.getExecutor(ctx).ExecContext(ctx,
 		`INSERT INTO promo_codes (code, discount, max_uses, expires_at, category_id) VALUES (?, ?, ?, ?, ?)`,
 		p.Code, p.Discount, p.MaxUses, p.ExpiresAt, p.CategoryID,
 	)
@@ -103,7 +99,7 @@ func (s *SQLPromoStore) CreatePromo(ctx context.Context, p *PromoCode) (int64, e
 
 // ListPromos returns all active promo codes ordered by creation date.
 func (s *SQLPromoStore) ListPromos(ctx context.Context) ([]PromoCode, error) {
-	rows, err := s.db.QueryContext(ctx,
+	rows, err := s.db.getExecutor(ctx).QueryContext(ctx,
 		`SELECT id, code, discount, max_uses, used_count, expires_at, is_active, created_at, category_id
 		 FROM promo_codes WHERE is_active = 1 ORDER BY created_at DESC`)
 	if err != nil {
@@ -134,7 +130,7 @@ func (s *SQLPromoStore) ListPromos(ctx context.Context) ([]PromoCode, error) {
 
 // DeactivatePromo marks a promo code as inactive.
 func (s *SQLPromoStore) DeactivatePromo(ctx context.Context, id int64) error {
-	if _, err := s.db.ExecContext(ctx,
+	if _, err := s.db.getExecutor(ctx).ExecContext(ctx,
 		`UPDATE promo_codes SET is_active = 0 WHERE id = ?`, id,
 	); err != nil {
 		return fmt.Errorf("promo store: deactivate promo: %w", err)

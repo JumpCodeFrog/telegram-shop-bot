@@ -61,6 +61,7 @@ func (m *mockProductStore) CreateProduct(_ context.Context, _ *storage.Product) 
 	return 0, nil
 }
 func (m *mockProductStore) UpdateProduct(_ context.Context, _ *storage.Product) error { return nil }
+func (m *mockProductStore) DecrementStock(_ context.Context, _ int64, _ int) error    { return nil }
 func (m *mockProductStore) DeleteProduct(_ context.Context, _ int64) error            { return nil }
 func (m *mockProductStore) CreateCategory(_ context.Context, _ *storage.Category) (int64, error) {
 	return 0, nil
