@@ -54,33 +54,63 @@ var AllButtonKeys = []string{
 	BtnKeyPayCancel,
 }
 
-// ButtonKeyLabel returns a human-readable Russian label for a button key.
-func ButtonKeyLabel(key string) string {
+// ButtonKeyLabel returns a human-readable localized label for a button key.
+func ButtonKeyLabel(key, lang string, b *Bot) string {
+	if b != nil {
+		switch key {
+		case BtnKeyMenuCatalog:
+			return b.t(lang, "btn_label_menu_catalog")
+		case BtnKeyMenuCart:
+			return b.t(lang, "btn_label_menu_cart")
+		case BtnKeyMenuOrders:
+			return b.t(lang, "btn_label_menu_orders")
+		case BtnKeyMenuProfile:
+			return b.t(lang, "btn_label_menu_profile")
+		case BtnKeyMenuSupport:
+			return b.t(lang, "btn_label_menu_support")
+		case BtnKeyProductAdd:
+			return b.t(lang, "btn_label_product_add")
+		case BtnKeyProductWish:
+			return b.t(lang, "btn_label_product_wish")
+		case BtnKeyCartCheckout:
+			return b.t(lang, "btn_label_cart_checkout")
+		case BtnKeyCartRemove:
+			return b.t(lang, "btn_label_cart_remove")
+		case BtnKeyPayStars:
+			return b.t(lang, "btn_label_pay_stars")
+		case BtnKeyPayCrypto:
+			return b.t(lang, "btn_label_pay_crypto")
+		case BtnKeyPayCancel:
+			return b.t(lang, "btn_label_pay_cancel")
+		}
+	}
+
+	// Fallback for tests or unknown keys.
 	switch key {
 	case BtnKeyMenuCatalog:
-		return "🛍 Каталог"
+		return "🛍 Catalog"
 	case BtnKeyMenuCart:
-		return "🛒 Корзина"
+		return "🛒 Cart"
 	case BtnKeyMenuOrders:
-		return "📦 Заказы"
+		return "📦 Orders"
 	case BtnKeyMenuProfile:
-		return "👤 Профиль"
+		return "👤 Profile"
 	case BtnKeyMenuSupport:
-		return "🆘 Поддержка"
+		return "🆘 Support"
 	case BtnKeyProductAdd:
-		return "🛒 Добавить в корзину"
+		return "🛒 Add to cart"
 	case BtnKeyProductWish:
-		return "❤️ Вишлист"
+		return "❤️ Wishlist"
 	case BtnKeyCartCheckout:
-		return "✅ Оформить заказ"
+		return "✅ Checkout"
 	case BtnKeyCartRemove:
-		return "🗑 Удалить"
+		return "🗑 Remove"
 	case BtnKeyPayStars:
 		return "⭐ Telegram Stars"
 	case BtnKeyPayCrypto:
 		return "💎 Crypto"
 	case BtnKeyPayCancel:
-		return "❌ Отмена"
+		return "❌ Cancel"
 	default:
 		return key
 	}
