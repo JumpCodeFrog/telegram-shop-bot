@@ -210,32 +210,32 @@ func (b *Bot) handleCallback(cb *tgbotapi.CallbackQuery) {
 	case strings.HasPrefix(data, "admin:togglestock:"):
 		b.ack(cb.ID)
 		if b.isAdmin(userID) {
-			b.onAdminToggleStock(chatID, data)
+			b.onAdminToggleStock(chatID, data, lang)
 		}
 
 	case strings.HasPrefix(data, "analytics:"):
 		b.ack(cb.ID)
 		if b.isAdmin(userID) {
-			b.handleAnalyticsCallback(chatID, msgID, data)
+			b.handleAnalyticsCallback(chatID, msgID, data, lang)
 		}
 
 	case data == "admin:btnlist":
 		b.ack(cb.ID)
 		if b.isAdmin(userID) {
-			b.sendBtnStyleList(chatID, msgID)
+			b.sendBtnStyleList(chatID, msgID, lang)
 		}
 
 	case strings.HasPrefix(data, "admin:btnpick:"):
 		b.ack(cb.ID)
 		if b.isAdmin(userID) {
 			key := strings.TrimPrefix(data, "admin:btnpick:")
-			b.sendBtnStylePicker(chatID, msgID, key)
+			b.sendBtnStylePicker(chatID, msgID, key, lang)
 		}
 
 	case strings.HasPrefix(data, "admin:setstyle:"):
 		b.ack(cb.ID)
 		if b.isAdmin(userID) {
-			b.onAdminSetStyle(chatID, msgID, data)
+			b.onAdminSetStyle(chatID, msgID, data, lang)
 		}
 
 	case strings.HasPrefix(data, "wish:"):
