@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"database/sql"
 	"time"
 )
 
@@ -42,6 +43,8 @@ type OrderStore interface {
 	GetAllOrders(ctx context.Context, statusFilter string) ([]Order, error)
 	UpdateOrderStatus(ctx context.Context, id int64, fromStatus, status, paymentMethod, paymentID string) error
 	CancelOrder(ctx context.Context, orderID, userID int64) error
+	// Conn returns the underlying database connection for transaction management.
+	Conn() *sql.DB
 }
 
 type PromoStore interface {

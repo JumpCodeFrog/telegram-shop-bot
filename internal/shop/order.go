@@ -13,12 +13,13 @@ type OrderService struct {
 	orders   storage.OrderStore
 	cart     storage.CartStore
 	products storage.ProductStore
+	promos   storage.PromoStore
 	logger   *slog.Logger
 }
 
 // NewOrderService creates a new OrderService backed by the given stores.
-func NewOrderService(os storage.OrderStore, cs storage.CartStore, ps storage.ProductStore, logger *slog.Logger) *OrderService {
-	return &OrderService{orders: os, cart: cs, products: ps, logger: logger}
+func NewOrderService(os storage.OrderStore, cs storage.CartStore, ps storage.ProductStore, promos storage.PromoStore, logger *slog.Logger) *OrderService {
+	return &OrderService{orders: os, cart: cs, products: ps, promos: promos, logger: logger}
 }
 
 // CreateFromCart creates a new order from the given CartView. If promo is
@@ -89,11 +90,59 @@ func (s *OrderService) CreateFromCart(ctx context.Context, userID int64, cartVie
 	return orderID, nil
 }
 
-// ConfirmPayment transitions the order from "pending" to "paid". Returns
+// ConfirmPayment transitions the order from "pending" to "paid", decrements
+// product stock, and records promo code usage. These operations are performed
+// within a single database transaction for atomicity. Returns
 // ErrOrderStatusConflict if the order is already paid or in another terminal
 // state, making this call idempotent and safe under concurrent webhooks.
 func (s *OrderService) ConfirmPayment(ctx context.Context, orderID int64, method, paymentID string) error {
-	return s.orders.UpdateOrderStatus(ctx, orderID, storage.OrderStatusPending, storage.OrderStatusPaid, method, paymentID)
+	logic := func(ctx context.Context) error {
+		// 1. Update status
+		err := s.orders.UpdateOrderStatus(ctx, orderID, storage.OrderStatusPending, storage.OrderStatusPaid, method, paymentID)
+		if err != nil {
+			return err
+		}
+
+		// 2. Load order to get items and promo
+		order, err := s.orders.GetOrder(ctx, orderID)
+		if err != nil {
+			return err
+		}
+
+		// 3. Decrement stock
+		for _, item := range order.Items {
+			p, err := s.products.GetProduct(ctx, item.ProductID)
+			if err != nil {
+				return err
+			}
+			p.Stock -= item.Quantity
+			if p.Stock < 0 {
+				return fmt.Errorf("товар «%s»: %w", p.Name, storage.ErrProductOutOfStock)
+			}
+			if err := s.products.UpdateProduct(ctx, p); err != nil {
+				return err
+			}
+		}
+
+		// 4. Record promo usage
+		if order.PromoCode != "" && s.promos != nil {
+			promo, err := s.promos.GetPromoByCode(ctx, order.PromoCode)
+			if err == nil && promo != nil {
+				if err := s.promos.UsePromo(ctx, promo.ID, order.UserID, order.ID); err != nil {
+					s.logger.Warn("failed to record promo usage", "order_id", orderID, "promo", order.PromoCode, "error", err)
+				}
+			}
+		}
+
+		return nil
+	}
+
+	conn := s.orders.Conn()
+	if conn == nil {
+		// Fallback for tests/mocks that do not provide a real database connection.
+		return logic(ctx)
+	}
+	return storage.WithinTransaction(ctx, conn, logic)
 }
 
 // GetOrder returns a single order by ID.

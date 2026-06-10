@@ -2,6 +2,7 @@ package shop
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -94,6 +95,8 @@ func (m *mockOrderStore) CancelOrder(_ context.Context, orderID, userID int64) e
 	return nil
 }
 
+func (m *mockOrderStore) Conn() *sql.DB { return nil }
+
 func (m *mockOrderStore) UpdateOrderStatus(_ context.Context, id int64, fromStatus, status, paymentMethod, paymentID string) error {
 	if m.err != nil {
 		return m.err
@@ -175,7 +178,7 @@ func (isActiveProductStore) GetCategory(context.Context, int64) (*storage.Catego
 func TestCreateFromCart_Success(t *testing.T) {
 	os := newMockOrderStore()
 	cs := &mockClearCartStore{}
-	svc := NewOrderService(os, cs, isActiveProductStore{}, slog.Default())
+	svc := NewOrderService(os, cs, isActiveProductStore{}, nil, slog.Default())
 
 	view := &CartView{
 		Items: []CartItemView{
@@ -229,7 +232,7 @@ func TestCreateFromCart_Success(t *testing.T) {
 func TestCreateFromCart_EmptyCart(t *testing.T) {
 	os := newMockOrderStore()
 	cs := &mockClearCartStore{}
-	svc := NewOrderService(os, cs, isActiveProductStore{}, slog.Default())
+	svc := NewOrderService(os, cs, isActiveProductStore{}, nil, slog.Default())
 
 	view := &CartView{Items: []CartItemView{}}
 
@@ -243,7 +246,7 @@ func TestConfirmPayment(t *testing.T) {
 	os := newMockOrderStore()
 	os.orders[1] = &storage.Order{ID: 1, UserID: 42, Status: storage.OrderStatusPending}
 	cs := &mockClearCartStore{}
-	svc := NewOrderService(os, cs, isActiveProductStore{}, slog.Default())
+	svc := NewOrderService(os, cs, isActiveProductStore{}, nil, slog.Default())
 
 	err := svc.ConfirmPayment(context.Background(), 1, storage.PaymentMethodStars, "pay_123")
 	if err != nil {
@@ -266,7 +269,7 @@ func TestSetDelivered(t *testing.T) {
 	os := newMockOrderStore()
 	os.orders[1] = &storage.Order{ID: 1, UserID: 42, Status: storage.OrderStatusPaid}
 	cs := &mockClearCartStore{}
-	svc := NewOrderService(os, cs, isActiveProductStore{}, slog.Default())
+	svc := NewOrderService(os, cs, isActiveProductStore{}, nil, slog.Default())
 
 	order, err := svc.SetDelivered(context.Background(), 1)
 	if err != nil {
@@ -280,7 +283,7 @@ func TestSetDelivered(t *testing.T) {
 func TestSetDelivered_NotFound(t *testing.T) {
 	os := newMockOrderStore()
 	cs := &mockClearCartStore{}
-	svc := NewOrderService(os, cs, isActiveProductStore{}, slog.Default())
+	svc := NewOrderService(os, cs, isActiveProductStore{}, nil, slog.Default())
 
 	_, err := svc.SetDelivered(context.Background(), 999)
 	if err == nil {
@@ -294,7 +297,7 @@ func TestGetUserOrders(t *testing.T) {
 	os.orders[2] = &storage.Order{ID: 2, UserID: 42, Status: storage.OrderStatusPending}
 	os.orders[3] = &storage.Order{ID: 3, UserID: 99, Status: storage.OrderStatusPaid}
 	cs := &mockClearCartStore{}
-	svc := NewOrderService(os, cs, isActiveProductStore{}, slog.Default())
+	svc := NewOrderService(os, cs, isActiveProductStore{}, nil, slog.Default())
 
 	orders, err := svc.GetUserOrders(context.Background(), 42)
 	if err != nil {
@@ -315,7 +318,7 @@ func TestGetAllOrders_NoFilter(t *testing.T) {
 	os.orders[1] = &storage.Order{ID: 1, UserID: 42, Status: storage.OrderStatusPaid}
 	os.orders[2] = &storage.Order{ID: 2, UserID: 42, Status: storage.OrderStatusPending}
 	cs := &mockClearCartStore{}
-	svc := NewOrderService(os, cs, isActiveProductStore{}, slog.Default())
+	svc := NewOrderService(os, cs, isActiveProductStore{}, nil, slog.Default())
 
 	orders, err := svc.GetAllOrders(context.Background(), "")
 	if err != nil {
@@ -331,7 +334,7 @@ func TestGetAllOrders_WithFilter(t *testing.T) {
 	os.orders[1] = &storage.Order{ID: 1, UserID: 42, Status: storage.OrderStatusPaid}
 	os.orders[2] = &storage.Order{ID: 2, UserID: 42, Status: storage.OrderStatusPending}
 	cs := &mockClearCartStore{}
-	svc := NewOrderService(os, cs, isActiveProductStore{}, slog.Default())
+	svc := NewOrderService(os, cs, isActiveProductStore{}, nil, slog.Default())
 
 	orders, err := svc.GetAllOrders(context.Background(), storage.OrderStatusPaid)
 	if err != nil {
@@ -381,7 +384,7 @@ func TestProperty_CreateFromCart(t *testing.T) {
 
 		os := newMockOrderStore()
 		cs := &mockClearCartStore{}
-		svc := NewOrderService(os, cs, isActiveProductStore{}, slog.Default())
+		svc := NewOrderService(os, cs, isActiveProductStore{}, nil, slog.Default())
 
 		orderID, err := svc.CreateFromCart(context.Background(), userID, cartView, nil)
 		if err != nil {
@@ -441,7 +444,7 @@ func TestProperty_ClearCartAfterOrder(t *testing.T) {
 
 		os := newMockOrderStore()
 		cs := &mockClearCartStore{}
-		svc := NewOrderService(os, cs, isActiveProductStore{}, slog.Default())
+		svc := NewOrderService(os, cs, isActiveProductStore{}, nil, slog.Default())
 
 		_, err := svc.CreateFromCart(context.Background(), userID, cartView, nil)
 		if err != nil {
@@ -471,7 +474,7 @@ func TestProperty_ConfirmPayment(t *testing.T) {
 			Status: storage.OrderStatusPending,
 		}
 		cs := &mockClearCartStore{}
-		svc := NewOrderService(os, cs, isActiveProductStore{}, slog.Default())
+		svc := NewOrderService(os, cs, isActiveProductStore{}, nil, slog.Default())
 
 		err := svc.ConfirmPayment(context.Background(), orderID, method, paymentID)
 		if err != nil {
@@ -496,7 +499,7 @@ func TestProperty_ConfirmPayment(t *testing.T) {
 func TestConfirmPayment_AlreadyPaid(t *testing.T) {
 	os := newMockOrderStore()
 	os.orders[1] = &storage.Order{ID: 1, UserID: 42, Status: storage.OrderStatusPaid}
-	svc := NewOrderService(os, &mockClearCartStore{}, isActiveProductStore{}, slog.Default())
+	svc := NewOrderService(os, &mockClearCartStore{}, isActiveProductStore{}, nil, slog.Default())
 
 	err := svc.ConfirmPayment(context.Background(), 1, "stars", "charge_123")
 	if !errors.Is(err, storage.ErrOrderStatusConflict) {
@@ -509,7 +512,7 @@ func TestConfirmPayment_AlreadyPaid(t *testing.T) {
 func TestSetDelivered_WrongStatus(t *testing.T) {
 	os := newMockOrderStore()
 	os.orders[1] = &storage.Order{ID: 1, UserID: 42, Status: storage.OrderStatusPending}
-	svc := NewOrderService(os, &mockClearCartStore{}, isActiveProductStore{}, slog.Default())
+	svc := NewOrderService(os, &mockClearCartStore{}, isActiveProductStore{}, nil, slog.Default())
 
 	_, err := svc.SetDelivered(context.Background(), 1)
 	if !errors.Is(err, storage.ErrOrderStatusConflict) {
@@ -523,7 +526,7 @@ func TestSetDelivered_WrongStatus(t *testing.T) {
 func TestCreateFromCart_ClearCartFails_OrderStillReturned(t *testing.T) {
 	os := newMockOrderStore()
 	cs := &mockClearCartStore{err: fmt.Errorf("db timeout")}
-	svc := NewOrderService(os, cs, isActiveProductStore{}, slog.Default())
+	svc := NewOrderService(os, cs, isActiveProductStore{}, nil, slog.Default())
 
 	view := &CartView{
 		Items:      []CartItemView{{Product: storage.Product{ID: 1, PriceUSD: 5.0, PriceStars: 50}, Quantity: 1}},

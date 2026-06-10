@@ -16,12 +16,8 @@ import (
 )
 
 func (b *Bot) isAdmin(userID int64) bool {
-	for _, id := range b.cfg.AdminIDs {
-		if id == userID {
-			return true
-		}
-	}
-	return false
+	_, ok := b.adminMap[userID]
+	return ok
 }
 
 func (b *Bot) handleAdmin(msg *tgbotapi.Message) {
