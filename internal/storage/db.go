@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"database/sql"
 	"embed"
 	"errors"
@@ -61,6 +62,48 @@ func New(dbPath string) (*DB, error) {
 // Conn returns the underlying *sql.DB for use by store implementations.
 func (db *DB) Conn() *sql.DB {
 	return db.conn
+}
+
+type contextKey string
+
+const txKey contextKey = "tx"
+
+// WithinTransaction executes fn inside a database transaction. If fn returns an
+// error, the transaction is rolled back; otherwise it is committed. The
+// transaction is propagated to store methods via the context.
+func WithinTransaction(ctx context.Context, db *sql.DB, fn func(ctx context.Context) error) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("storage: begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if err := fn(context.WithValue(ctx, txKey, tx)); err != nil {
+		return err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("storage: commit tx: %w", err)
+	}
+	return nil
+}
+
+// WithinTransaction executes fn inside a database transaction.
+func (db *DB) WithinTransaction(ctx context.Context, fn func(ctx context.Context) error) error {
+	return WithinTransaction(ctx, db.conn, fn)
+}
+
+type executor interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+func getExecutor(ctx context.Context, db *sql.DB) executor {
+	if tx, ok := ctx.Value(txKey).(*sql.Tx); ok {
+		return tx
+	}
+	return db
 }
 
 // Close closes the database connection.

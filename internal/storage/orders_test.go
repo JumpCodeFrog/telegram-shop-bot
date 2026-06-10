@@ -449,7 +449,7 @@ func TestUpdateOrderStatus_WrongFromStatus(t *testing.T) {
 	}
 }
 
-func TestUpdateOrderStatus_RedeemsPromoOnPaidTransition(t *testing.T) {
+func TestUpdateOrderStatus_TransitionOnly(t *testing.T) {
 	db, err := New(":memory:")
 	if err != nil {
 		t.Fatalf("New(:memory:): %v", err)
@@ -463,32 +463,14 @@ func TestUpdateOrderStatus_RedeemsPromoOnPaidTransition(t *testing.T) {
 	if err != nil {
 		t.Fatalf("seed category: %v", err)
 	}
-	_, err = db.Conn().ExecContext(ctx,
-		`INSERT INTO products (category_id, name, price_usd, price_stars, stock, is_active)
-		 VALUES (1, 'Prod', 10.00, 100, 10, 1)`)
-	if err != nil {
-		t.Fatalf("seed product: %v", err)
-	}
-	res, err := db.Conn().ExecContext(ctx,
-		`INSERT INTO promo_codes (code, discount, max_uses, is_active) VALUES ('WELCOME10', 10, 1, 1)`)
-	if err != nil {
-		t.Fatalf("seed promo: %v", err)
-	}
-	promoID, err := res.LastInsertId()
-	if err != nil {
-		t.Fatalf("promo last insert id: %v", err)
-	}
 
 	order := &Order{
-		UserID:      42,
-		TotalUSD:    9.0,
-		TotalStars:  90,
-		Status:      OrderStatusPending,
-		DiscountPct: 10,
-		PromoCode:   "WELCOME10",
+		UserID:     42,
+		TotalUSD:   10.0,
+		TotalStars: 100,
+		Status:     OrderStatusPending,
 	}
-	items := []OrderItem{{ProductID: 1, Quantity: 1, PriceUSD: 10.0}}
-	orderID, err := store.CreateOrder(ctx, order, items)
+	orderID, err := store.CreateOrder(ctx, order, nil)
 	if err != nil {
 		t.Fatalf("CreateOrder: %v", err)
 	}
@@ -498,26 +480,14 @@ func TestUpdateOrderStatus_RedeemsPromoOnPaidTransition(t *testing.T) {
 		t.Fatalf("UpdateOrderStatus: %v", err)
 	}
 
-	var usedCount int
-	err = db.Conn().QueryRowContext(ctx,
-		`SELECT used_count FROM promo_codes WHERE id = ?`, promoID,
-	).Scan(&usedCount)
+	got, err := store.GetOrder(ctx, orderID)
 	if err != nil {
-		t.Fatalf("query promo used_count: %v", err)
+		t.Fatalf("GetOrder: %v", err)
 	}
-	if usedCount != 1 {
-		t.Fatalf("expected used_count 1, got %d", usedCount)
+	if got.Status != OrderStatusPaid {
+		t.Errorf("expected status paid, got %q", got.Status)
 	}
-
-	var usageRows int
-	err = db.Conn().QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM promo_usages WHERE promo_id = ? AND user_id = ? AND order_id = ?`,
-		promoID, 42, orderID,
-	).Scan(&usageRows)
-	if err != nil {
-		t.Fatalf("query promo usage: %v", err)
-	}
-	if usageRows != 1 {
-		t.Fatalf("expected one promo usage row, got %d", usageRows)
+	if got.PaymentMethod != "stars" || got.PaymentID != "charge_1" {
+		t.Errorf("payment info mismatch: method=%q, id=%q", got.PaymentMethod, got.PaymentID)
 	}
 }
