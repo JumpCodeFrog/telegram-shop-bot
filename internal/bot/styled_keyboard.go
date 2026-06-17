@@ -230,4 +230,3 @@ func buildStyledParams(chatID int64, msgID int, text, parseMode string, kb Style
 	}
 	return params, nil
 }
-
