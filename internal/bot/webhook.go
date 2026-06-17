@@ -1,7 +1,6 @@
 package bot
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -54,7 +53,8 @@ func (b *Bot) CryptoBotWebhookHandler() http.HandlerFunc {
 			return
 		}
 
-		ctx := context.Background()
+		ctx, cancel := handlerCtx()
+		defer cancel()
 		if err := b.order.ConfirmPayment(ctx, payload.OrderID, "crypto", payload.InvoiceID); err != nil {
 			if errors.Is(err, storage.ErrOrderStatusConflict) {
 				// Duplicate webhook — payment already confirmed. Ack to prevent CryptoBot retries.

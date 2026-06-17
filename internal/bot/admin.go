@@ -2,7 +2,6 @@ package bot
 
 import (
 	"bytes"
-	"context"
 	"encoding/csv"
 	"fmt"
 	"strconv"
@@ -16,12 +15,8 @@ import (
 )
 
 func (b *Bot) isAdmin(userID int64) bool {
-	for _, id := range b.cfg.AdminIDs {
-		if id == userID {
-			return true
-		}
-	}
-	return false
+	_, ok := b.adminMap[userID]
+	return ok
 }
 
 func (b *Bot) handleAdmin(msg *tgbotapi.Message) {
@@ -59,13 +54,15 @@ func (b *Bot) handleAddProduct(msg *tgbotapi.Message) {
 	if !b.isAdmin(msg.From.ID) {
 		return
 	}
-	ctx := context.Background()
+	ctx, cancel := handlerCtx()
+	defer cancel()
 	_ = b.fsm.SetAddProductState(ctx, msg.From.ID, &storage.AddProductState{Step: storage.StepName, CreatedAt: time.Now()}, 30*time.Minute)
 	b.send(tgbotapi.NewMessage(msg.Chat.ID, "📝 Введите название товара:"))
 }
 
 func (b *Bot) handleAddProductStep(msg *tgbotapi.Message) bool {
-	ctx := context.Background()
+	ctx, cancel := handlerCtx()
+	defer cancel()
 	if msg.Text == "/cancel" {
 		state, _ := b.fsm.GetAddProductState(ctx, msg.From.ID)
 		_ = b.fsm.DelAddProductState(ctx, msg.From.ID)
@@ -120,7 +117,8 @@ func (b *Bot) handleAddProductStep(msg *tgbotapi.Message) bool {
 }
 
 func (b *Bot) finishAddProduct(chatID, userID, categoryID int64) {
-	ctx := context.Background()
+	ctx, cancel := handlerCtx()
+	defer cancel()
 	state, _ := b.fsm.GetAddProductState(ctx, userID)
 	_ = b.fsm.DelAddProductState(ctx, userID)
 	if state == nil {
@@ -165,7 +163,9 @@ func (b *Bot) handleEditProduct(msg *tgbotapi.Message) {
 		return
 	}
 
-	product, err := b.products.GetProduct(context.Background(), id)
+	ctx, cancel := handlerCtx()
+	defer cancel()
+	product, err := b.products.GetProduct(ctx, id)
 	if err != nil {
 		b.send(tgbotapi.NewMessage(msg.Chat.ID, "❌ Товар не найден."))
 		return
@@ -183,7 +183,8 @@ func (b *Bot) handleEditProductField(msg *tgbotapi.Message, prodID int64, field,
 		return
 	}
 
-	ctx := context.Background()
+	ctx, cancel := handlerCtx()
+	defer cancel()
 	product, err := b.products.GetProduct(ctx, prodID)
 	if err != nil {
 		b.send(tgbotapi.NewMessage(msg.Chat.ID, "❌ Товар не найден."))
@@ -246,7 +247,9 @@ func (b *Bot) handleDeleteProduct(msg *tgbotapi.Message) {
 		b.send(tgbotapi.NewMessage(msg.Chat.ID, "Использование: /deleteproduct <id>"))
 		return
 	}
-	if err := b.products.DeleteProduct(context.Background(), id); err != nil {
+	ctx, cancel := handlerCtx()
+	defer cancel()
+	if err := b.products.DeleteProduct(ctx, id); err != nil {
 		b.logger.Error("delete product", "product_id", id, "error", err)
 		b.send(tgbotapi.NewMessage(msg.Chat.ID, "❌ Не удалось удалить товар."))
 		return
@@ -268,7 +271,9 @@ func (b *Bot) handleAddCategory(msg *tgbotapi.Message) {
 		Name:     strings.Join(args[1:], " "),
 		IsActive: true,
 	}
-	id, err := b.catalog.CreateCategory(context.Background(), cat)
+	ctx, cancel := handlerCtx()
+	defer cancel()
+	id, err := b.catalog.CreateCategory(ctx, cat)
 	if err != nil {
 		b.logger.Error("create category", "error", err)
 		b.send(tgbotapi.NewMessage(msg.Chat.ID, "❌ Не удалось создать категорию."))
@@ -293,7 +298,8 @@ func (b *Bot) handleEditCategory(msg *tgbotapi.Message) {
 		return
 	}
 
-	ctx := context.Background()
+	ctx, cancel := handlerCtx()
+	defer cancel()
 	category, err := b.catalog.GetCategory(ctx, categoryID)
 	if err != nil {
 		b.send(tgbotapi.NewMessage(msg.Chat.ID, "❌ Категория не найдена."))
@@ -329,7 +335,9 @@ func (b *Bot) handleDeleteCategory(msg *tgbotapi.Message) {
 		b.send(tgbotapi.NewMessage(msg.Chat.ID, "Использование: /deletecategory <id>"))
 		return
 	}
-	if err := b.catalog.DeleteCategory(context.Background(), id); err != nil {
+	ctx, cancel := handlerCtx()
+	defer cancel()
+	if err := b.catalog.DeleteCategory(ctx, id); err != nil {
 		b.logger.Error("delete category", "category_id", id, "error", err)
 		b.send(tgbotapi.NewMessage(msg.Chat.ID, "❌ Не удалось удалить категорию. Возможно, в ней ещё есть товары."))
 		return
@@ -341,7 +349,9 @@ func (b *Bot) handleListCategories(msg *tgbotapi.Message) {
 	if !b.isAdmin(msg.From.ID) {
 		return
 	}
-	categories, err := b.catalog.ListCategories(context.Background())
+	ctx, cancel := handlerCtx()
+	defer cancel()
+	categories, err := b.catalog.ListCategories(ctx)
 	if err != nil {
 		b.logger.Error("list categories", "error", err)
 		b.send(tgbotapi.NewMessage(msg.Chat.ID, "❌ Не удалось загрузить категории."))
@@ -365,7 +375,9 @@ func (b *Bot) handleOrdersAll(msg *tgbotapi.Message) {
 		return
 	}
 	statusFilter := strings.TrimSpace(msg.CommandArguments())
-	orders, err := b.order.GetAllOrders(context.Background(), statusFilter)
+	ctx, cancel := handlerCtx()
+	defer cancel()
+	orders, err := b.order.GetAllOrders(ctx, statusFilter)
 	if err != nil {
 		b.logger.Error("get all orders", "status", statusFilter, "error", err)
 		b.send(tgbotapi.NewMessage(msg.Chat.ID, "❌ Не удалось загрузить заказы."))
@@ -398,7 +410,9 @@ func (b *Bot) handleSetDelivered(msg *tgbotapi.Message) {
 		b.send(tgbotapi.NewMessage(msg.Chat.ID, "Использование: /setdelivered <id>"))
 		return
 	}
-	order, err := b.order.SetDelivered(context.Background(), id)
+	ctx, cancel := handlerCtx()
+	defer cancel()
+	order, err := b.order.SetDelivered(ctx, id)
 	if err != nil {
 		b.logger.Error("set delivered", "order_id", id, "error", err)
 		b.send(tgbotapi.NewMessage(msg.Chat.ID, "❌ Не удалось отметить заказ доставленным."))
@@ -428,7 +442,8 @@ func (b *Bot) handleAnalyticsCallback(chatID int64, msgID int, data string) {
 }
 
 func (b *Bot) sendAnalytics(chatID int64, msgID int, days int) {
-	ctx := context.Background()
+	ctx, cancel := handlerCtx()
+	defer cancel()
 
 	summary, err := b.analytics.GetRevenueSummary(ctx)
 	if err != nil {
@@ -524,7 +539,9 @@ func (b *Bot) handleAddPromo(msg *tgbotapi.Message) {
 	}
 	discount, _ := strconv.Atoi(args[1])
 	p := &storage.PromoCode{Code: strings.ToUpper(args[0]), Discount: discount, IsActive: true}
-	_, _ = b.promos.CreatePromo(context.Background(), p)
+	ctx, cancel := handlerCtx()
+	defer cancel()
+	_, _ = b.promos.CreatePromo(ctx, p)
 	b.send(tgbotapi.NewMessage(msg.Chat.ID, "✅ Промокод создан"))
 }
 
@@ -532,7 +549,9 @@ func (b *Bot) handleListPromos(msg *tgbotapi.Message) {
 	if !b.isAdmin(msg.From.ID) {
 		return
 	}
-	promos, _ := b.promos.ListPromos(context.Background())
+	ctx, cancel := handlerCtx()
+	defer cancel()
+	promos, _ := b.promos.ListPromos(ctx)
 	var sb strings.Builder
 	for _, p := range promos {
 		sb.WriteString(fmt.Sprintf("%d: %s (-%d%%)\n", p.ID, p.Code, p.Discount))
@@ -545,7 +564,9 @@ func (b *Bot) handleDeletePromo(msg *tgbotapi.Message) {
 		return
 	}
 	id, _ := strconv.ParseInt(msg.CommandArguments(), 10, 64)
-	_ = b.promos.DeactivatePromo(context.Background(), id)
+	ctx, cancel := handlerCtx()
+	defer cancel()
+	_ = b.promos.DeactivatePromo(ctx, id)
 	b.send(tgbotapi.NewMessage(msg.Chat.ID, "✅ Промокод деактивирован"))
 }
 
@@ -554,7 +575,9 @@ func (b *Bot) handleExportOrders(msg *tgbotapi.Message) {
 		return
 	}
 
-	orders, err := b.order.GetAllOrders(context.Background(), "")
+	ctx, cancel := handlerCtx()
+	defer cancel()
+	orders, err := b.order.GetAllOrders(ctx, "")
 	if err != nil {
 		b.logger.Error("export orders", "error", err)
 		b.send(tgbotapi.NewMessage(msg.Chat.ID, "❌ Не удалось выгрузить заказы."))
@@ -613,7 +636,8 @@ func (b *Bot) onAdminToggleStock(chatID int64, data string) {
 		return
 	}
 
-	ctx := context.Background()
+	ctx, cancel := handlerCtx()
+	defer cancel()
 	product, err := b.products.GetProduct(ctx, productID)
 	if err != nil {
 		b.logger.Error("get product for stock toggle", "product_id", productID, "error", err)
@@ -661,7 +685,8 @@ func (b *Bot) handleBtnStyleAdmin(msg *tgbotapi.Message) {
 // sendBtnStyleList renders (or edits) the button style overview for the admin.
 // Each row shows the button label and its current style emoji, tapping opens the picker.
 func (b *Bot) sendBtnStyleList(chatID int64, msgID int) {
-	ctx := context.Background()
+	ctx, cancel := handlerCtx()
+	defer cancel()
 	stored, _ := b.uiSettings.ListButtonStyles(ctx)
 
 	var sb strings.Builder
@@ -691,7 +716,8 @@ func (b *Bot) sendBtnStyleList(chatID int64, msgID int) {
 
 // sendBtnStylePicker renders (or edits) the style picker for a single button key.
 func (b *Bot) sendBtnStylePicker(chatID int64, msgID int, key string) {
-	ctx := context.Background()
+	ctx, cancel := handlerCtx()
+	defer cancel()
 	current, _ := b.uiSettings.GetButtonStyle(ctx, key)
 
 	text := fmt.Sprintf(
@@ -734,7 +760,8 @@ func (b *Bot) onAdminSetStyle(chatID int64, msgID int, data string) {
 	key := rest[:sep]
 	style := rest[sep+1:]
 
-	ctx := context.Background()
+	ctx, cancel := handlerCtx()
+	defer cancel()
 	if err := b.uiSettings.SetButtonStyle(ctx, key, style); err != nil {
 		b.logger.Error("set button style", "key", key, "style", style, "error", err)
 		b.send(tgbotapi.NewMessage(chatID, "❌ Не удалось сохранить стиль."))

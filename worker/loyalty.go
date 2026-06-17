@@ -4,7 +4,6 @@ import (
 	"context"
 	"log/slog"
 	"shop_bot/internal/service"
-	"shop_bot/internal/storage"
 	"strconv"
 	"time"
 
@@ -12,8 +11,13 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+type loyaltyStore interface {
+	AddPoints(ctx context.Context, userID int64, pts int, reason, refID string) error
+	GetPoints(ctx context.Context, userID int64) (pts int, level string, err error)
+}
+
 type LoyaltyWorker struct {
-	db      *storage.LoyaltyStoreImpl
+	db      loyaltyStore
 	service *service.LoyaltyService
 	i18n    *service.I18nService
 	redis   *redis.Client
@@ -21,7 +25,7 @@ type LoyaltyWorker struct {
 	stream  string
 }
 
-func NewLoyaltyWorker(db *storage.LoyaltyStoreImpl, svc *service.LoyaltyService, rdb *redis.Client, bot *tgbotapi.BotAPI, i18n *service.I18nService) *LoyaltyWorker {
+func NewLoyaltyWorker(db loyaltyStore, svc *service.LoyaltyService, rdb *redis.Client, bot *tgbotapi.BotAPI, i18n *service.I18nService) *LoyaltyWorker {
 	return &LoyaltyWorker{
 		db:      db,
 		service: svc,
@@ -34,7 +38,7 @@ func NewLoyaltyWorker(db *storage.LoyaltyStoreImpl, svc *service.LoyaltyService,
 
 func (w *LoyaltyWorker) Start(ctx context.Context) {
 	slog.Info("Loyalty Worker started", "stream", w.stream)
-	
+
 	// Ensure group exists
 	_ = w.redis.XGroupCreateMkStream(ctx, w.stream, "loyalty_group", "0").Err()
 
