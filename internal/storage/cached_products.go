@@ -169,3 +169,11 @@ func (s *CachedProductStore) DeleteCategory(ctx context.Context, id int64) error
 func (s *CachedProductStore) GetCategory(ctx context.Context, id int64) (*Category, error) {
 	return s.base.GetCategory(ctx, id)
 }
+
+func (s *CachedProductStore) DecrementStock(ctx context.Context, productID int64, quantity int) error {
+	err := s.base.DecrementStock(ctx, productID, quantity)
+	if err == nil {
+		s.invalidateProductCache(ctx, productID, 0) // Invalidate product cache, category might need it too but we don't know it here easily without fetching
+	}
+	return err
+}

@@ -43,6 +43,10 @@ func (m *mockProductStore) GetProduct(_ context.Context, id int64) (*storage.Pro
 	return p, nil
 }
 
+func (m *mockProductStore) DecrementStock(_ context.Context, _ int64, _ int) error {
+	return m.err
+}
+
 func (m *mockProductStore) GetProductsByCategoryPaged(_ context.Context, categoryID int64, limit, offset int) ([]storage.Product, int, error) {
 	if m.err != nil {
 		return nil, 0, m.err

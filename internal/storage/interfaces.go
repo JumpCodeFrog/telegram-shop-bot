@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"database/sql"
 	"time"
 )
 
@@ -11,6 +12,7 @@ type UserStore interface {
 }
 
 type ProductStore interface {
+	DecrementStock(ctx context.Context, productID int64, quantity int) error
 	GetCategories(ctx context.Context) ([]Category, error)
 	GetProductsByCategory(ctx context.Context, categoryID int64) ([]Product, error)
 	GetProductsByCategoryPaged(ctx context.Context, categoryID int64, limit, offset int) ([]Product, int, error)
@@ -42,6 +44,7 @@ type OrderStore interface {
 	GetAllOrders(ctx context.Context, statusFilter string) ([]Order, error)
 	UpdateOrderStatus(ctx context.Context, id int64, fromStatus, status, paymentMethod, paymentID string) error
 	CancelOrder(ctx context.Context, orderID, userID int64) error
+	Conn() *sql.DB
 }
 
 type PromoStore interface {
