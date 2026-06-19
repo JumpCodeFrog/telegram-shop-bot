@@ -16,6 +16,10 @@ func NewSQLOrderStore(d *DB) *SQLOrderStore {
 	return &SQLOrderStore{db: d.Conn()}
 }
 
+func (s *SQLOrderStore) Conn() *sql.DB {
+	return s.db
+}
+
 // CreateOrder inserts an order and its items within a transaction. Returns the
 // new order ID.
 func (s *SQLOrderStore) CreateOrder(ctx context.Context, order *Order, items []OrderItem) (int64, error) {
@@ -181,17 +185,12 @@ func (s *SQLOrderStore) GetAllOrders(ctx context.Context, statusFilter string) (
 }
 
 // UpdateOrderStatus atomically transitions an order from fromStatus to status.
-// If transitioning to "paid", it also decrements the stock of all products in the order.
 // Returns ErrOrderStatusConflict if the order is not in fromStatus (already
 // transitioned or wrong ID), making the operation idempotent and race-safe.
 func (s *SQLOrderStore) UpdateOrderStatus(ctx context.Context, id int64, fromStatus, status, paymentMethod, paymentID string) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("order store: begin tx: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
+	ex := getExecutor(ctx, s.db)
 
-	res, err := tx.ExecContext(ctx,
+	res, err := ex.ExecContext(ctx,
 		`UPDATE orders SET status = ?, payment_method = ?, payment_id = ?, updated_at = CURRENT_TIMESTAMP
 		 WHERE id = ? AND status = ?`,
 		status, paymentMethod, paymentID, id, fromStatus)
@@ -204,89 +203,6 @@ func (s *SQLOrderStore) UpdateOrderStatus(ctx context.Context, id int64, fromSta
 	}
 	if n == 0 {
 		return ErrOrderStatusConflict
-	}
-
-	// If transitioning to paid, decrement stock
-	if status == OrderStatusPaid {
-		var userID int64
-		var promoCode string
-		if err := tx.QueryRowContext(ctx,
-			`SELECT user_id, COALESCE(promo_code, '') FROM orders WHERE id = ?`, id,
-		).Scan(&userID, &promoCode); err != nil {
-			return fmt.Errorf("order store: load order payment metadata: %w", err)
-		}
-
-		// 1. Get items (use internal method but with tx)
-		rows, err := tx.QueryContext(ctx,
-			`SELECT product_id, quantity FROM order_items WHERE order_id = ?`, id)
-		if err != nil {
-			return fmt.Errorf("order store: get items for stock update: %w", err)
-		}
-		defer rows.Close()
-
-		type item struct {
-			productID int64
-			quantity  int
-		}
-		var items []item
-		for rows.Next() {
-			var i item
-			if err := rows.Scan(&i.productID, &i.quantity); err != nil {
-				return fmt.Errorf("order store: scan item for stock update: %w", err)
-			}
-			items = append(items, i)
-		}
-
-		// 2. Decrement stock for each item atomically; fail if stock would go negative.
-		for _, i := range items {
-			res, err := tx.ExecContext(ctx,
-				`UPDATE products SET stock = stock - ? WHERE id = ? AND stock >= ?`,
-				i.quantity, i.productID, i.quantity)
-			if err != nil {
-				return fmt.Errorf("order store: decrement stock for product %d: %w", i.productID, err)
-			}
-			n, err := res.RowsAffected()
-			if err != nil {
-				return fmt.Errorf("order store: stock rows affected for product %d: %w", i.productID, err)
-			}
-			if n == 0 {
-				return fmt.Errorf("order store: product %d: %w", i.productID, ErrProductOutOfStock)
-			}
-		}
-
-		if promoCode != "" {
-			var promoID int64
-			err := tx.QueryRowContext(ctx,
-				`SELECT id FROM promo_codes WHERE code = ?`, promoCode,
-			).Scan(&promoID)
-			if err != nil && err != sql.ErrNoRows {
-				return fmt.Errorf("order store: load promo for paid order: %w", err)
-			}
-			if err == nil {
-				res, err := tx.ExecContext(ctx,
-					`INSERT OR IGNORE INTO promo_usages (promo_id, user_id, order_id) VALUES (?, ?, ?)`,
-					promoID, userID, id,
-				)
-				if err != nil {
-					return fmt.Errorf("order store: record promo usage for paid order: %w", err)
-				}
-				affected, err := res.RowsAffected()
-				if err != nil {
-					return fmt.Errorf("order store: promo usage rows affected: %w", err)
-				}
-				if affected > 0 {
-					if _, err := tx.ExecContext(ctx,
-						`UPDATE promo_codes SET used_count = used_count + 1 WHERE id = ?`, promoID,
-					); err != nil {
-						return fmt.Errorf("order store: increment promo used_count for paid order: %w", err)
-					}
-				}
-			}
-		}
-	}
-
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("order store: commit stock update: %w", err)
 	}
 
 	return nil
