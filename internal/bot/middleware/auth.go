@@ -33,7 +33,7 @@ func Auth(userStore UserStore) func(next func(update tgbotapi.Update)) func(upda
 				// Synchronize user in background or foreground?
 				// For Auth middleware, usually foreground to have ID available
 				_ = userStore.Upsert(context.Background(), user)
-				
+
 				// We can attach the user object to a custom context if needed
 				// For now, just ensure they exist in DB
 			}

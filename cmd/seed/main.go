@@ -52,10 +52,16 @@ func main() {
 
 	// --- Products ---
 	// Fetch category IDs
-	type catRow struct{ id int64; name string }
+	type catRow struct {
+		id   int64
+		name string
+	}
 	var catIDs = map[string]int64{}
 	rows, err := conn.Query(`SELECT id, name FROM categories WHERE is_active = 1`)
-	if err != nil { slog.Error("query categories", "error", err); os.Exit(1) }
+	if err != nil {
+		slog.Error("query categories", "error", err)
+		os.Exit(1)
+	}
 	for rows.Next() {
 		var r catRow
 		if err := rows.Scan(&r.id, &r.name); err != nil {

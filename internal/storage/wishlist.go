@@ -41,8 +41,8 @@ type WishlistEntry struct {
 	LanguageCode string
 	Product      Product
 
-	PriceDropNotifiedAt    sql.NullTime
-	BackInStockNotifiedAt  sql.NullTime
+	PriceDropNotifiedAt   sql.NullTime
+	BackInStockNotifiedAt sql.NullTime
 }
 
 // GetAllWithProducts returns all wishlist entries joined with current product data.

@@ -1,7 +1,6 @@
 package bot
 
 import (
-	"context"
 	"fmt"
 	"strings"
 
@@ -17,7 +16,8 @@ func (b *Bot) handleSearch(msg *tgbotapi.Message) {
 		return
 	}
 
-	ctx := context.Background()
+	ctx, cancel := handlerCtx()
+	defer cancel()
 	products, err := b.products.SearchProducts(ctx, query)
 	if err != nil {
 		b.logger.Error("search products", "error", err)

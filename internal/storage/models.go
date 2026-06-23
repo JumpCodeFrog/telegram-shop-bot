@@ -41,18 +41,17 @@ type AddProductState struct {
 }
 
 type User struct {
-	ID           int64     `db:"id"`
-	TelegramID   int64     `db:"telegram_id"`
-	Username     string    `db:"username"`
-	FirstName    string    `db:"first_name"`
-	LanguageCode string    `db:"language_code"`
-	IsPremium    bool      `db:"is_premium"`
-	BalanceUSD   float64   `db:"balance_usd"`
-	LoyaltyPts   int       `db:"loyalty_pts"`
-	LoyaltyLevel string    `db:"loyalty_level"`
+	ID           int64          `db:"id"`
+	TelegramID   int64          `db:"telegram_id"`
+	Username     string         `db:"username"`
+	FirstName    string         `db:"first_name"`
+	LanguageCode string         `db:"language_code"`
+	IsPremium    bool           `db:"is_premium"`
+	LoyaltyPts   int            `db:"loyalty_pts"`
+	LoyaltyLevel string         `db:"loyalty_level"`
 	ReferralCode sql.NullString `db:"referral_code"`
-	ReferredBy   *int64    `db:"referred_by"`
-	CreatedAt    time.Time `db:"created_at"`
+	ReferredBy   *int64         `db:"referred_by"`
+	CreatedAt    time.Time      `db:"created_at"`
 }
 
 type Category struct {
