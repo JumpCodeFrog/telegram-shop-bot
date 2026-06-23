@@ -34,7 +34,7 @@ func NewLoyaltyWorker(db *storage.LoyaltyStoreImpl, svc *service.LoyaltyService,
 
 func (w *LoyaltyWorker) Start(ctx context.Context) {
 	slog.Info("Loyalty Worker started", "stream", w.stream)
-	
+
 	// Ensure group exists
 	_ = w.redis.XGroupCreateMkStream(ctx, w.stream, "loyalty_group", "0").Err()
 

@@ -1,8 +1,6 @@
 package bot
 
 import (
-	"context"
-
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
@@ -15,7 +13,8 @@ func (b *Bot) onWishlistToggle(cbID string, chatID, userID int64, msgID int, dat
 		return
 	}
 
-	ctx := context.Background()
+	ctx, cancel := handlerCtx()
+	defer cancel()
 	inWishlist, err := b.wishlist.IsInWishlist(ctx, userID, prodID)
 	if err != nil {
 		b.logger.Error("check wishlist", "error", err)
@@ -51,7 +50,8 @@ func (b *Bot) onWishlistToggle(cbID string, chatID, userID int64, msgID int, dat
 
 // handleWishlist shows the user's wishlist.
 func (b *Bot) handleWishlist(msg *tgbotapi.Message) {
-	ctx := context.Background()
+	ctx, cancel := handlerCtx()
+	defer cancel()
 	lang := msg.From.LanguageCode
 	userID := msg.From.ID
 	chatID := msg.Chat.ID

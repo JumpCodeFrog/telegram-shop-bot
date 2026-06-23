@@ -1,7 +1,6 @@
 package bot
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"strconv"
@@ -21,7 +20,8 @@ func (b *Bot) onPayStars(cbID string, chatID, userID int64, msgID int, data, lan
 		return
 	}
 
-	ctx := context.Background()
+	ctx, cancel := handlerCtx()
+	defer cancel()
 	target, err := b.loadPayableOrder(ctx, userID, orderID)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
@@ -53,7 +53,8 @@ func (b *Bot) onOrderCancel(cbID string, chatID, userID int64, msgID int, data, 
 		return
 	}
 
-	ctx := context.Background()
+	ctx, cancel := handlerCtx()
+	defer cancel()
 	if _, err := b.loadPayableOrder(ctx, userID, orderID); err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
 			b.alert(cbID, b.t(lang, "order_not_found"))
@@ -110,7 +111,8 @@ func (b *Bot) onPayCrypto(cbID string, chatID, userID int64, msgID int, data, la
 		return
 	}
 
-	ctx := context.Background()
+	ctx, cancel := handlerCtx()
+	defer cancel()
 	target, err := b.loadPayableOrder(ctx, userID, orderID)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
@@ -179,7 +181,8 @@ func (b *Bot) handleSuccessfulPayment(msg *tgbotapi.Message) {
 		return
 	}
 
-	ctx := context.Background()
+	ctx, cancel := handlerCtx()
+	defer cancel()
 	if err := b.order.ConfirmPayment(ctx, orderID, "stars", sp.TelegramPaymentChargeID); err != nil {
 		if errors.Is(err, storage.ErrOrderStatusConflict) {
 			// Duplicate Stars payment event — already confirmed, safe to ignore.

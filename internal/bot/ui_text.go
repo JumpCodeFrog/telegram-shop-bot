@@ -205,7 +205,6 @@ func (b *Bot) formatProfileText(lang string, user *storage.User, orderCount int)
 	if user.Username != "" {
 		sb.WriteString(fmt.Sprintf(b.t(lang, "profile_username_line"), escapeHTML(user.Username)))
 	}
-	sb.WriteString(fmt.Sprintf(b.t(lang, "profile_balance_line"), user.BalanceUSD))
 	sb.WriteString(fmt.Sprintf(b.t(lang, "profile_loyalty_line"), escapeHTML(user.LoyaltyLevel), user.LoyaltyPts))
 	sb.WriteString(fmt.Sprintf(b.t(lang, "profile_orders_line"), orderCount))
 	if user.ReferralCode.Valid && user.ReferralCode.String != "" {

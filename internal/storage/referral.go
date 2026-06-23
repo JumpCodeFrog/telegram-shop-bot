@@ -56,13 +56,13 @@ func (s *ReferralStore) SetReferrer(ctx context.Context, userID, referrerID int6
 	if err != nil {
 		return err
 	}
-	
+
 	// Initialize or update stats for referrer
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO referral_stats (user_id, total_referrals) VALUES (?, 1)
 		ON CONFLICT(user_id) DO UPDATE SET total_referrals = total_referrals + 1
 	`, referrerID)
-	
+
 	return err
 }
 
