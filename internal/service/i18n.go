@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 )
 
@@ -45,11 +46,24 @@ func NewI18nService(localesDir string) (*I18nService, error) {
 	return s, nil
 }
 
+// normalizeLang reduces an IETF/Telegram language tag to its lowercase primary
+// subtag: "ru-RU" → "ru", "zh-hans-CN" → "zh". An empty tag falls back to "en".
+func normalizeLang(lang string) string {
+	if i := strings.IndexAny(lang, "-_"); i >= 0 {
+		lang = lang[:i]
+	}
+	lang = strings.ToLower(lang)
+	if lang == "" {
+		return "en"
+	}
+	return lang
+}
+
 func (s *I18nService) T(lang, key string) string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	if translations, ok := s.locales[lang]; ok {
+	if translations, ok := s.locales[normalizeLang(lang)]; ok {
 		if text, ok := translations[key]; ok {
 			return text
 		}

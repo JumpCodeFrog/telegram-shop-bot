@@ -76,6 +76,7 @@ type Product struct {
 	IsDigital      bool      `db:"is_digital"`
 	DigitalContent string    `db:"digital_content"`
 	IsActive       bool      `db:"is_active"`
+	SubPeriodDays  int       `db:"sub_period_days"`
 	CreatedAt      time.Time `db:"created_at"`
 }
 

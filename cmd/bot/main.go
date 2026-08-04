@@ -13,6 +13,7 @@ import (
 	"shop_bot/internal/service"
 	"shop_bot/internal/storage"
 	"shop_bot/worker"
+	"sync"
 	"syscall"
 	"time"
 
@@ -41,6 +42,55 @@ func redisAvailable(addr string) bool {
 	}
 	_ = conn.Close()
 	return true
+}
+
+// workerGroup owns every background goroutine of the process. Start registers
+// the goroutine in the WaitGroup BEFORE it launches (so Wait cannot slip past
+// it) and remembers its name for the shutdown-timeout diagnostic.
+type workerGroup struct {
+	wg      sync.WaitGroup
+	mu      sync.Mutex
+	running map[string]struct{}
+}
+
+func newWorkerGroup() *workerGroup {
+	return &workerGroup{running: make(map[string]struct{})}
+}
+
+func (g *workerGroup) Start(ctx context.Context, name string, fn func(context.Context)) {
+	g.wg.Add(1)
+	g.mu.Lock()
+	g.running[name] = struct{}{}
+	g.mu.Unlock()
+	go func() {
+		defer g.wg.Done()
+		defer func() {
+			g.mu.Lock()
+			delete(g.running, name)
+			g.mu.Unlock()
+		}()
+		fn(ctx)
+	}()
+}
+
+// Drain waits for every worker up to timeout. A stuck worker must not keep the
+// container from restarting, so on timeout we log WHO is stuck and move on —
+// db.Close() then runs over whatever is left, which is the lesser evil.
+func (g *workerGroup) Drain(timeout time.Duration) {
+	done := make(chan struct{})
+	go func() { g.wg.Wait(); close(done) }()
+	select {
+	case <-done:
+		slog.Info("All background workers stopped")
+	case <-time.After(timeout):
+		g.mu.Lock()
+		stuck := make([]string, 0, len(g.running))
+		for name := range g.running {
+			stuck = append(stuck, name)
+		}
+		g.mu.Unlock()
+		slog.Warn("Shutdown timeout: workers did not stop", "timeout", timeout, "stuck", stuck)
+	}
 }
 
 func main() {
@@ -108,40 +158,43 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// 7. Start Workers
-	backupW := worker.NewBackupWorker(cfg.DBPath, 24*time.Hour)
-	go backupW.Start(ctx)
+	// 7. Start Workers — every background goroutine goes through the group so
+	// shutdown can wait for them BEFORE the deferred db.Close() runs.
+	workers := newWorkerGroup()
+
+	backupW := worker.NewBackupWorker(db.Conn(), 24*time.Hour)
+	workers.Start(ctx, "backup", backupW.Start)
 
 	// We need the stores for the worker
 	cartStore := storage.NewCartStore(db.Conn())
 	promoStore := storage.NewSQLPromoStore(db)
+	userStore := storage.NewUserStore(db.Conn())
 	cartW := worker.NewCartRecoveryWorker(b.API(), cartStore, promoStore, time.Hour)
-	go cartW.Start(ctx)
+	workers.Start(ctx, "cart_recovery", cartW.Start)
 
 	if redisClient != nil {
-		loyaltyW := worker.NewLoyaltyWorker(loyaltyStore, loyaltySvc, redisClient, b.API(), i18n)
-		go loyaltyW.Start(ctx)
+		loyaltyW := worker.NewLoyaltyWorker(loyaltyStore, loyaltySvc, redisClient, b.API(), i18n, userStore)
+		workers.Start(ctx, "loyalty", loyaltyW.Start)
 	}
 
 	wishlistStore := storage.NewWishlistStore(db.Conn())
 	wishlistW := worker.NewWishlistWatcherWorker(b.API(), wishlistStore, i18n, 30*time.Minute)
-	go wishlistW.Start(ctx)
+	workers.Start(ctx, "wishlist_watcher", wishlistW.Start)
 
-	userStore := storage.NewUserStore(db.Conn())
 	onboardingW := worker.NewOnboardingWorker(b.API(), userStore, i18n, cfg.BotUsername, 24*time.Hour)
-	go onboardingW.Start(ctx)
+	workers.Start(ctx, "onboarding", onboardingW.Start)
 
 	orderStore := storage.NewSQLOrderStore(db)
 	cryptoPayments := payment.NewCryptoBotPayment(cfg.CryptoBotToken)
 	if cryptoPayments.Configured() {
 		pollingW := worker.NewCryptoBotPollingWorker(cryptoPayments, orderStore, 30*time.Second)
-		go pollingW.Start(ctx)
+		workers.Start(ctx, "cryptobot_polling", pollingW.Start)
 	} else {
 		slog.Warn("CryptoBot disabled, skipping polling worker")
 	}
 
 	// 8. Health Check & Metrics API
-	go func() {
+	workers.Start(ctx, "http_api", func(ctx context.Context) {
 		mux := http.NewServeMux()
 		mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 			if err := db.Conn().PingContext(r.Context()); err != nil {
@@ -178,7 +231,7 @@ func main() {
 		if err := server.Shutdown(shutdownCtx); err != nil {
 			slog.Error("metrics server shutdown", "error", err)
 		}
-	}()
+	})
 
 	// 9. Run Bot (webhook or polling)
 	if cfg.WebhookURL != "" {
@@ -196,6 +249,11 @@ func main() {
 			os.Exit(1)
 		}
 	}
+
+	// Drain background workers before the deferred db.Close() fires: a closed
+	// DB under a live worker turns clean shutdown into "sql: database is closed".
+	slog.Info("Shutdown: draining background workers")
+	workers.Drain(10 * time.Second)
 
 	slog.Info("Bot exited gracefully")
 }

@@ -26,10 +26,11 @@ type DB struct {
 	conn *sql.DB
 }
 
-// New opens a SQLite database at dbPath, enables foreign keys, and runs
-// migrations. Returns an initialised *DB or an error.
+// New opens a SQLite database at dbPath, enables WAL/busy_timeout/foreign_keys
+// on every pooled connection via DSN pragmas, and runs migrations. Returns an
+// initialised *DB or an error.
 func New(dbPath string) (*DB, error) {
-	conn, err := sql.Open("sqlite", dbPath)
+	conn, err := sql.Open("sqlite", dsn(dbPath))
 	if err != nil {
 		return nil, fmt.Errorf("storage: open db: %w", err)
 	}
@@ -43,11 +44,6 @@ func New(dbPath string) (*DB, error) {
 	conn.SetMaxIdleConns(10)
 	conn.SetConnMaxLifetime(5 * time.Minute)
 
-	if _, err := conn.Exec("PRAGMA foreign_keys = ON"); err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("storage: enable foreign keys: %w", err)
-	}
-
 	db := &DB{conn: conn}
 
 	if err := db.migrate(); err != nil {
@@ -56,6 +52,17 @@ func New(dbPath string) (*DB, error) {
 	}
 
 	return db, nil
+}
+
+// dsn appends connection pragmas to dbPath. Pragmas set through the DSN are
+// applied by the driver to every connection in the pool, unlike a one-off
+// Exec which only configures the single connection it happens to run on.
+func dsn(dbPath string) string {
+	sep := "?"
+	if strings.Contains(dbPath, "?") {
+		sep = "&"
+	}
+	return dbPath + sep + "_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)"
 }
 
 // Conn returns the underlying *sql.DB for use by store implementations.

@@ -6,6 +6,8 @@
 # Runtime data
 data/*.db
 data/*.db-*
+data/*.db-wal
+data/*.db-shm
 data/*.sqlite
 backups/*
 !data/.gitkeep

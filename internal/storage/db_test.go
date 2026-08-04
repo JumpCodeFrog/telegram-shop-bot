@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"path/filepath"
 	"testing"
 )
 
@@ -36,6 +37,23 @@ func TestNew_ForeignKeysEnabled(t *testing.T) {
 	}
 	if fk != 1 {
 		t.Errorf("foreign_keys = %d, want 1", fk)
+	}
+}
+
+func TestWALEnabled(t *testing.T) {
+	// WAL requires a real file: in-memory databases always report "memory".
+	db, err := New(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("New(temp file) error: %v", err)
+	}
+	defer db.Close()
+
+	var mode string
+	if err := db.Conn().QueryRow("PRAGMA journal_mode").Scan(&mode); err != nil {
+		t.Fatalf("PRAGMA journal_mode query error: %v", err)
+	}
+	if mode != "wal" {
+		t.Errorf("journal_mode = %q, want %q", mode, "wal")
 	}
 }
 

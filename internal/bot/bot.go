@@ -236,10 +236,10 @@ func (b *Bot) RegisterTelegramWebhook(webhookURL string) error {
 }
 
 // t translates a locale key for the given language code.
-// Falls back to "ru" when lang is empty, then to the key itself.
+// Falls back to "en" when lang is empty, then to the key itself.
 func (b *Bot) t(lang, key string) string {
 	if lang == "" {
-		lang = "ru"
+		lang = "en"
 	}
 	return b.i18n.T(lang, key)
 }

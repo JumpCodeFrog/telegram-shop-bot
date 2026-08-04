@@ -60,4 +60,27 @@ type AnalyticsStore interface {
 	GetPaymentMethodStats(ctx context.Context) ([]PaymentMethodStat, error)
 }
 
+type ReviewStore interface {
+	Upsert(ctx context.Context, r Review) error // ON CONFLICT(product_id,user_id) DO UPDATE rating,text
+	ProductRating(ctx context.Context, productID int64) (avg float64, count int64, err error)
+	ListByProduct(ctx context.Context, productID int64, limit int) ([]Review, error)
+	ListRecent(ctx context.Context, limit int) ([]Review, error)
+	Delete(ctx context.Context, id int64) error
+}
+
+type ProductPhotoStore interface {
+	Add(ctx context.Context, productID int64, fileID string) error // max 10 → ErrTooManyPhotos
+	List(ctx context.Context, productID int64) ([]ProductPhoto, error)
+	Delete(ctx context.Context, id int64) error
+}
+
+type SubscriptionStore interface {
+	Upsert(ctx context.Context, s Subscription) error // UNIQUE(user_id, product_id): продление двигает expires_at, сбрасывает reminded
+	ListActiveByUser(ctx context.Context, userID int64) ([]Subscription, error)
+	SetStatusByCharge(ctx context.Context, chargeID, status string) error
+	DueForReminder(ctx context.Context, within time.Duration) ([]Subscription, error)
+	MarkReminded(ctx context.Context, id int64) error
+	ExpireOverdue(ctx context.Context) (int64, error)
+}
+
 // UISettingsStore is declared in ui_settings.go to keep all its code in one file.
