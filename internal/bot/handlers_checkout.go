@@ -9,6 +9,7 @@ import (
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 
+	"shop_bot/internal/shop"
 	"shop_bot/internal/storage"
 )
 
@@ -50,6 +51,12 @@ func (b *Bot) handlePromoInput(msg *tgbotapi.Message) {
 		}
 		b.logger.Error("get promo", "error", err)
 		b.sendOrEditStyled(chatID, 0, b.t(lang, "error_promo_check"), "", nil)
+		return
+	}
+
+	// Personal promos are invisible to anyone but their owner.
+	if promo.BoundUserID != nil && *promo.BoundUserID != userID {
+		b.sendOrEditStyled(chatID, 0, b.t(lang, "promo_not_found"), "", nil)
 		return
 	}
 
@@ -144,6 +151,12 @@ func (b *Bot) onOrderConfirm(chatID, userID int64, msgID int, data, lang string)
 			return
 		}
 
+		// Personal promos are invisible to anyone but their owner.
+		if promo.BoundUserID != nil && *promo.BoundUserID != userID {
+			b.sendOrEditStyled(chatID, 0, b.t(lang, "promo_not_found"), "", nil)
+			return
+		}
+
 		used, err := b.promos.HasUserUsedPromo(ctx, promo.ID, userID)
 		if err != nil {
 			b.logger.Error("check promo usage for order confirm", "error", err)
@@ -183,6 +196,12 @@ func (b *Bot) onOrderConfirm(chatID, userID int64, msgID int, data, lang string)
 
 	orderID, err := b.order.CreateFromCart(ctx, userID, view, promo)
 	if err != nil {
+		var stockErr *shop.ErrInsufficientStock
+		if errors.As(err, &stockErr) {
+			b.sendOrEditStyled(chatID, msgID,
+				fmt.Sprintf(b.t(lang, "error_insufficient_stock"), stockErr.ProductName, stockErr.Have), "", nil)
+			return
+		}
 		b.logger.Error("create order", "error", err)
 		b.sendOrEditStyled(chatID, msgID, b.t(lang, "order_create_error"), "", nil)
 		return

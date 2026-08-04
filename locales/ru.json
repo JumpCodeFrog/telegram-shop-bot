@@ -129,6 +129,15 @@
   "admin_order_paid_crypto": "💎 Оплачен заказ #%d (Crypto) — пользователь %d — $%.2f",
   "loyalty_level_up": "🎉 Поздравляем! Вы достигли уровня <b>%s</b>!",
   "loyalty_vip_gift": "🎁 Вам отправлен VIP-подарок!",
+  "error_insufficient_stock": "❗ Недостаточно на складе: %s (в наличии %d)",
+  "loyalty_points_awarded": "💎 Вам начислено %d баллов за покупку!",
+  "referral_bonus_referrer": "🎉 Ваш друг совершил первую покупку — вам начислено %d баллов!",
+  "referral_welcome_promo": "🎁 Спасибо за первую покупку! Ваш персональный промокод на скидку 10%%: <b>%s</b> (действует 30 дней)",
+  "precheckout_order_not_found": "Заказ не найден",
+  "precheckout_wrong_user": "Этот счёт выставлен другому пользователю",
+  "precheckout_order_not_pending": "Заказ уже оплачен или отменён",
+  "precheckout_amount_mismatch": "Сумма счёта не совпадает с суммой заказа",
+  "precheckout_validation_error": "Не удалось проверить заказ, попробуйте позже",
   "stock": "Остаток",
   "btn_menu": "🏠 Главное меню"
 }

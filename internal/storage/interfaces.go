@@ -49,6 +49,9 @@ type PromoStore interface {
 	UsePromo(ctx context.Context, promoID, userID, orderID int64) error
 	HasUserUsedPromo(ctx context.Context, promoID, userID int64) (bool, error)
 	CreatePromo(ctx context.Context, p *PromoCode) (int64, error)
+	// CreatePersonal issues a single-use promo bound to one Telegram user,
+	// valid for validDays days from now.
+	CreatePersonal(ctx context.Context, code string, discountPct int, boundUserID int64, validDays int) error
 	ListPromos(ctx context.Context) ([]PromoCode, error)
 	DeactivatePromo(ctx context.Context, id int64) error
 }

@@ -89,10 +89,27 @@ func NewWithAPI(cfg *config.Config, api *tgbotapi.BotAPI, db *storage.DB, metric
 	referralStore := storage.NewReferralStore(db.Conn())
 	referralSvc := service.NewReferralService(2.0, 1.0, 100, redisClient)
 	exchangeSvc := service.NewExchangeService(cfg.USDToStarsRate)
+	loyaltyStore := storage.NewLoyaltyStore(db.Conn())
+	loyaltySvc := service.NewLoyaltyService(loyaltyStore, 1)
 
 	i18nSvc, err := service.NewI18nService(cfg.LocalesDir)
 	if err != nil {
 		return nil, fmt.Errorf("i18n: %w", err)
+	}
+	translate := func(lang, key string) string {
+		if lang == "" {
+			lang = "en"
+		}
+		return i18nSvc.T(lang, key)
+	}
+
+	paymentDeps := shop.PaymentDeps{
+		Users:     us,
+		Loyalty:   loyaltySvc,
+		Points:    loyaltyStore,
+		Referrals: referralStore,
+		Promos:    promoStore,
+		Cache:     cachedPS,
 	}
 
 	b := &Bot{
@@ -100,14 +117,14 @@ func NewWithAPI(cfg *config.Config, api *tgbotapi.BotAPI, db *storage.DB, metric
 		cfg:             cfg,
 		catalog:         shop.NewCatalogService(cachedPS, exchangeSvc),
 		cart:            shop.NewCartService(cs, cachedPS, exchangeSvc),
-		order:           shop.NewOrderService(os, cs, cachedPS, logger),
+		order:           shop.NewOrderService(os, cs, cachedPS, paymentDeps, logger),
 		users:           us,
 		products:        cachedPS,
 		promos:          promoStore,
 		analytics:       analyticsStore,
 		referrals:       referralStore,
 		referralService: referralSvc,
-		stars:           payment.NewStarsPayment(api),
+		stars:           payment.NewStarsPayment(api, os, translate),
 		crypto:          payment.NewCryptoBotPayment(cfg.CryptoBotToken),
 		logger:          logger,
 		metrics:         metrics,
@@ -120,6 +137,12 @@ func NewWithAPI(cfg *config.Config, api *tgbotapi.BotAPI, db *storage.DB, metric
 	b.reloadButtonStyles(context.Background())
 	// handler is built lazily in Run so we have a context.
 	return b, nil
+}
+
+// OrderService exposes the bot's order service so background workers (e.g.
+// the CryptoBot polling worker) confirm payments through the same pipeline.
+func (b *Bot) OrderService() *shop.OrderService {
+	return b.order
 }
 
 // prepareHandler builds the fully-chained update handler and stores it in b.handler.

@@ -1,6 +1,8 @@
 package payment
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -10,14 +12,38 @@ import (
 	"shop_bot/internal/storage"
 )
 
-// StarsPayment handles Telegram Stars payments via the Bot Payments API.
-type StarsPayment struct {
-	bot *tgbotapi.BotAPI
+// OrderGetter is the narrow order-lookup dependency HandlePreCheckout needs.
+type OrderGetter interface {
+	GetOrder(ctx context.Context, id int64) (*storage.Order, error)
 }
 
-// NewStarsPayment creates a new StarsPayment backed by the given Bot API.
-func NewStarsPayment(bot *tgbotapi.BotAPI) *StarsPayment {
-	return &StarsPayment{bot: bot}
+// Translator resolves an i18n key for the given language. The bot layer
+// injects its locale service; payment code stays free of i18n plumbing.
+type Translator func(lang, key string) string
+
+// Pre-checkout rejection i18n keys, one per validation rule.
+const (
+	PreCheckoutKeyOrderNotFound   = "precheckout_order_not_found"
+	PreCheckoutKeyWrongUser       = "precheckout_wrong_user"
+	PreCheckoutKeyNotPending      = "precheckout_order_not_pending"
+	PreCheckoutKeyAmountMismatch  = "precheckout_amount_mismatch"
+	PreCheckoutKeyValidationError = "precheckout_validation_error"
+)
+
+// StarsPayment handles Telegram Stars payments via the Bot Payments API.
+type StarsPayment struct {
+	bot       *tgbotapi.BotAPI
+	orders    OrderGetter
+	translate Translator
+}
+
+// NewStarsPayment creates a new StarsPayment backed by the given Bot API,
+// order lookup and translator.
+func NewStarsPayment(bot *tgbotapi.BotAPI, orders OrderGetter, translate Translator) *StarsPayment {
+	if translate == nil {
+		translate = func(_, key string) string { return key }
+	}
+	return &StarsPayment{bot: bot, orders: orders, translate: translate}
 }
 
 // SendInvoice creates and sends a Telegram Stars invoice to the given chat.
@@ -46,32 +72,52 @@ func (s *StarsPayment) SendInvoice(chatID int64, orderID int64, totalStars int, 
 	return nil
 }
 
-// HandlePreCheckout validates an incoming PreCheckoutQuery. It checks that the
-// payload contains a valid (numeric) order ID and answers the query accordingly.
-func (s *StarsPayment) HandlePreCheckout(query *tgbotapi.PreCheckoutQuery) error {
-	_, err := strconv.ParseInt(query.InvoicePayload, 10, 64)
-	if err != nil {
-		resp := tgbotapi.PreCheckoutConfig{
-			PreCheckoutQueryID: query.ID,
-			OK:                 false,
-			ErrorMessage:       "Некорректные данные заказа",
-		}
-		_, sendErr := s.bot.Request(resp)
-		if sendErr != nil {
-			return fmt.Errorf("stars: reject pre-checkout: %w", sendErr)
-		}
-		return nil
-	}
+// HandlePreCheckout validates an incoming PreCheckoutQuery against the stored
+// order and answers the query. The payment is approved only when the order
+// exists, belongs to the paying user, is still pending, and its Stars total
+// matches the invoice amount; otherwise the query is rejected with a
+// user-facing localized reason.
+func (s *StarsPayment) HandlePreCheckout(ctx context.Context, query *tgbotapi.PreCheckoutQuery) error {
+	rejectKey := s.validatePreCheckout(ctx, query)
 
 	resp := tgbotapi.PreCheckoutConfig{
 		PreCheckoutQueryID: query.ID,
-		OK:                 true,
+		OK:                 rejectKey == "",
 	}
-	_, sendErr := s.bot.Request(resp)
-	if sendErr != nil {
-		return fmt.Errorf("stars: approve pre-checkout: %w", sendErr)
+	if rejectKey != "" {
+		lang := ""
+		if query.From != nil {
+			lang = query.From.LanguageCode
+		}
+		resp.ErrorMessage = s.translate(lang, rejectKey)
+	}
+	if _, err := s.bot.Request(resp); err != nil {
+		return fmt.Errorf("stars: answer pre-checkout: %w", err)
 	}
 	return nil
+}
+
+// validatePreCheckout returns "" when the query is payable, or the i18n key
+// of the rejection reason.
+func (s *StarsPayment) validatePreCheckout(ctx context.Context, query *tgbotapi.PreCheckoutQuery) string {
+	orderID, err := strconv.ParseInt(query.InvoicePayload, 10, 64)
+	if err != nil {
+		return PreCheckoutKeyOrderNotFound
+	}
+	order, err := s.orders.GetOrder(ctx, orderID)
+	switch {
+	case errors.Is(err, storage.ErrNotFound) || (err == nil && order == nil):
+		return PreCheckoutKeyOrderNotFound
+	case err != nil:
+		return PreCheckoutKeyValidationError
+	case query.From == nil || order.UserID != query.From.ID:
+		return PreCheckoutKeyWrongUser
+	case order.Status != storage.OrderStatusPending:
+		return PreCheckoutKeyNotPending
+	case order.TotalStars != query.TotalAmount:
+		return PreCheckoutKeyAmountMismatch
+	}
+	return ""
 }
 
 // buildDescription builds a short invoice description from order line items.

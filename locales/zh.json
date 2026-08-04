@@ -129,6 +129,15 @@
   "admin_order_paid_crypto": "💎 订单 #%d 已付款（Crypto）— 用户 %d — $%.2f",
   "loyalty_level_up": "🎉 恭喜您！您已达到 <b>%s</b> 等级！",
   "loyalty_vip_gift": "🎁 已向您发送 VIP 礼物！",
+  "error_insufficient_stock": "❗ 库存不足：%s（现有 %d 件）",
+  "loyalty_points_awarded": "💎 您的本次购物获得了 %d 积分！",
+  "referral_bonus_referrer": "🎉 您的朋友完成了首次购买——您获得了 %d 积分！",
+  "referral_welcome_promo": "🎁 感谢您的首次购买！您的专属 10%% 折扣优惠码：<b>%s</b>（有效期 30 天）",
+  "precheckout_order_not_found": "订单未找到",
+  "precheckout_wrong_user": "此账单属于其他用户",
+  "precheckout_order_not_pending": "该订单已支付或已取消",
+  "precheckout_amount_mismatch": "账单金额与订单总额不符",
+  "precheckout_validation_error": "无法校验订单，请稍后重试",
   "stock": "库存",
   "btn_menu": "🏠 主菜单"
 }

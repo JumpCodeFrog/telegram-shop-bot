@@ -113,6 +113,24 @@ func (s *CachedProductStore) invalidateProductCache(ctx context.Context, pID int
 	}
 }
 
+// Invalidate drops the cached entries for the given products (and their
+// category listings) after an out-of-band stock change, e.g. the paid-order
+// stock decrement inside UpdateOrderStatus. No-op without Redis.
+func (s *CachedProductStore) Invalidate(ctx context.Context, productIDs ...int64) {
+	if s.redis == nil {
+		return
+	}
+	for _, id := range productIDs {
+		catID := int64(0)
+		// Resolve the category from the base store so the stale category
+		// listing is dropped too; on error fall back to the product key only.
+		if p, err := s.base.GetProduct(ctx, id); err == nil {
+			catID = p.CategoryID
+		}
+		s.invalidateProductCache(ctx, id, catID)
+	}
+}
+
 func (s *CachedProductStore) CreateProduct(ctx context.Context, p *Product) (int64, error) {
 	id, err := s.base.CreateProduct(ctx, p)
 	if err == nil {

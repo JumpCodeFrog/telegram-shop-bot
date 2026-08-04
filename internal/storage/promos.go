@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"time"
 )
 
 // SQLPromoStore implements PromoStore using a *sql.DB connection.
@@ -22,15 +23,16 @@ func (s *SQLPromoStore) GetPromoByCode(ctx context.Context, code string) (*Promo
 	var p PromoCode
 	var expiresAt sql.NullTime
 	var categoryID sql.NullInt64
+	var boundUserID sql.NullInt64
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, code, discount, max_uses, used_count, expires_at, is_active, created_at, category_id
+		`SELECT id, code, discount, max_uses, used_count, expires_at, is_active, created_at, category_id, bound_user_id
 		 FROM promo_codes
 		 WHERE code = ? AND is_active = 1
 		   AND (expires_at IS NULL OR expires_at > datetime('now'))
 		   AND (max_uses = 0 OR used_count < max_uses)`,
 		code,
 	).Scan(&p.ID, &p.Code, &p.Discount, &p.MaxUses, &p.UsedCount,
-		&expiresAt, &p.IsActive, &p.CreatedAt, &categoryID)
+		&expiresAt, &p.IsActive, &p.CreatedAt, &categoryID, &boundUserID)
 	if err == sql.ErrNoRows {
 		return nil, ErrNotFound
 	}
@@ -43,6 +45,9 @@ func (s *SQLPromoStore) GetPromoByCode(ctx context.Context, code string) (*Promo
 	}
 	if categoryID.Valid {
 		p.CategoryID = &categoryID.Int64
+	}
+	if boundUserID.Valid {
+		p.BoundUserID = &boundUserID.Int64
 	}
 	return &p, nil
 }
@@ -101,10 +106,24 @@ func (s *SQLPromoStore) CreatePromo(ctx context.Context, p *PromoCode) (int64, e
 	return id, nil
 }
 
+// CreatePersonal issues a single-use promo code bound to one Telegram user,
+// valid for validDays days from now. Bound promos are invisible to other users
+// at validation time (see PromoCode.BoundUserID).
+func (s *SQLPromoStore) CreatePersonal(ctx context.Context, code string, discountPct int, boundUserID int64, validDays int) error {
+	expiresAt := time.Now().AddDate(0, 0, validDays)
+	if _, err := s.db.ExecContext(ctx,
+		`INSERT INTO promo_codes (code, discount, max_uses, expires_at, bound_user_id) VALUES (?, ?, 1, ?, ?)`,
+		code, discountPct, expiresAt, boundUserID,
+	); err != nil {
+		return fmt.Errorf("promo store: create personal promo: %w", err)
+	}
+	return nil
+}
+
 // ListPromos returns all active promo codes ordered by creation date.
 func (s *SQLPromoStore) ListPromos(ctx context.Context) ([]PromoCode, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, code, discount, max_uses, used_count, expires_at, is_active, created_at, category_id
+		`SELECT id, code, discount, max_uses, used_count, expires_at, is_active, created_at, category_id, bound_user_id
 		 FROM promo_codes WHERE is_active = 1 ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("promo store: list promos: %w", err)
@@ -116,8 +135,9 @@ func (s *SQLPromoStore) ListPromos(ctx context.Context) ([]PromoCode, error) {
 		var p PromoCode
 		var expiresAt sql.NullTime
 		var categoryID sql.NullInt64
+		var boundUserID sql.NullInt64
 		if err := rows.Scan(&p.ID, &p.Code, &p.Discount, &p.MaxUses, &p.UsedCount,
-			&expiresAt, &p.IsActive, &p.CreatedAt, &categoryID); err != nil {
+			&expiresAt, &p.IsActive, &p.CreatedAt, &categoryID, &boundUserID); err != nil {
 			return nil, fmt.Errorf("promo store: scan promo: %w", err)
 		}
 		if expiresAt.Valid {
@@ -126,6 +146,9 @@ func (s *SQLPromoStore) ListPromos(ctx context.Context) ([]PromoCode, error) {
 		}
 		if categoryID.Valid {
 			p.CategoryID = &categoryID.Int64
+		}
+		if boundUserID.Valid {
+			p.BoundUserID = &boundUserID.Int64
 		}
 		promos = append(promos, p)
 	}

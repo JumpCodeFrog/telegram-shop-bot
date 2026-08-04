@@ -429,3 +429,41 @@ func TestProductUpdateAndDelete_Property(t *testing.T) {
 		}
 	})
 }
+
+// TestProductSubPeriodDays_RoundTrip verifies that sub_period_days survives
+// create → get and update → get (subscription products, Task F3).
+func TestProductSubPeriodDays_RoundTrip(t *testing.T) {
+	store, db := newTestProductStore(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	catID := seedCategory(t, db, "Subs", "")
+	p := &Product{
+		CategoryID: catID, Name: "Monthly Plan", PriceStars: 100,
+		IsActive: true, Stock: 10, SubPeriodDays: 30,
+	}
+	id, err := store.CreateProduct(ctx, p)
+	if err != nil {
+		t.Fatalf("CreateProduct: %v", err)
+	}
+
+	got, err := store.GetProduct(ctx, id)
+	if err != nil {
+		t.Fatalf("GetProduct: %v", err)
+	}
+	if got.SubPeriodDays != 30 {
+		t.Errorf("SubPeriodDays = %d, want 30", got.SubPeriodDays)
+	}
+
+	got.SubPeriodDays = 0
+	if err := store.UpdateProduct(ctx, got); err != nil {
+		t.Fatalf("UpdateProduct: %v", err)
+	}
+	got, err = store.GetProduct(ctx, id)
+	if err != nil {
+		t.Fatalf("GetProduct after update: %v", err)
+	}
+	if got.SubPeriodDays != 0 {
+		t.Errorf("SubPeriodDays after update = %d, want 0", got.SubPeriodDays)
+	}
+}

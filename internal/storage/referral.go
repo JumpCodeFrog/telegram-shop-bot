@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"time"
 )
 
@@ -82,6 +83,53 @@ func (s *ReferralStore) GetUserByReferralCode(ctx context.Context, code string) 
 		return nil, nil
 	}
 	return &u, err
+}
+
+// AwardFirstPurchase records the one-time referral award for a referred user's
+// first paid order. The PRIMARY KEY on referral_awards.referred_user_id plus
+// INSERT OR IGNORE make the call idempotent: only the first caller ever gets
+// awarded=true, concurrent or repeated confirmations get awarded=false.
+// referredUserID and referrerID are internal users.id values; on award the
+// referrer's Telegram ID is returned so the bot layer can notify them.
+func (s *ReferralStore) AwardFirstPurchase(ctx context.Context, referredUserID, referrerID, points int64, promoCode string) (awarded bool, referrerTelegramID int64, err error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, 0, fmt.Errorf("referral store: begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	res, err := tx.ExecContext(ctx,
+		`INSERT OR IGNORE INTO referral_awards (referred_user_id, referrer_id, points, promo_code) VALUES (?, ?, ?, ?)`,
+		referredUserID, referrerID, points, promoCode,
+	)
+	if err != nil {
+		return false, 0, fmt.Errorf("referral store: insert referral award: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, 0, fmt.Errorf("referral store: referral award rows affected: %w", err)
+	}
+	if n == 0 {
+		return false, 0, nil // already awarded earlier — idempotent no-op
+	}
+
+	if err := tx.QueryRowContext(ctx,
+		`SELECT telegram_id FROM users WHERE id = ?`, referrerID,
+	).Scan(&referrerTelegramID); err != nil {
+		return false, 0, fmt.Errorf("referral store: resolve referrer telegram id: %w", err)
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO referral_stats (user_id, total_earned) VALUES (?, ?)
+		ON CONFLICT(user_id) DO UPDATE SET total_earned = total_earned + excluded.total_earned
+	`, referrerID, points); err != nil {
+		return false, 0, fmt.Errorf("referral store: update referral stats: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return false, 0, fmt.Errorf("referral store: commit referral award: %w", err)
+	}
+	return true, referrerTelegramID, nil
 }
 
 type ReferralStats struct {

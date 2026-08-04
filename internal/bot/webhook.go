@@ -2,6 +2,7 @@ package bot
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -55,10 +56,12 @@ func (b *Bot) CryptoBotWebhookHandler() http.HandlerFunc {
 		}
 
 		ctx := context.Background()
-		if err := b.order.ConfirmPayment(ctx, payload.OrderID, "crypto", payload.InvoiceID); err != nil {
-			if errors.Is(err, storage.ErrOrderStatusConflict) {
-				// Duplicate webhook — payment already confirmed. Ack to prevent CryptoBot retries.
-				b.logger.Info("cryptobot webhook already confirmed (idempotent)", "order_id", payload.OrderID)
+		outcome, err := b.order.ConfirmPayment(ctx, payload.OrderID, "crypto", payload.InvoiceID)
+		if err != nil {
+			if errors.Is(err, storage.ErrOrderStatusConflict) || errors.Is(err, storage.ErrNotFound) {
+				// Duplicate webhook or unknown order — nothing to retry.
+				// Ack with 200 so CryptoBot stops redelivering.
+				b.logger.Info("cryptobot webhook ignored (idempotent)", "order_id", payload.OrderID, "reason", err)
 				w.WriteHeader(http.StatusOK)
 				return
 			}
@@ -71,23 +74,13 @@ func (b *Bot) CryptoBotWebhookHandler() http.HandlerFunc {
 			b.metrics.SuccessfulPayments.WithLabelValues("crypto").Inc()
 		}
 
-		// Look up the order to find the buyer's user ID for notification.
-		order, err := b.order.GetOrder(ctx, payload.OrderID)
-		if err != nil {
-			b.logger.Error("cryptobot webhook: get order", "order_id", payload.OrderID, "error", err)
-			// Payment is already confirmed; respond OK even if notification fails.
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-
-		user, _ := b.users.GetByTelegramID(ctx, order.UserID)
-		lang := "ru"
-		if user != nil && user.LanguageCode != "" {
-			lang = user.LanguageCode
-		}
+		order := outcome.Order
+		lang := b.userLang(ctx, order.UserID)
 
 		text := fmt.Sprintf(b.t(lang, "payment_success"), payload.OrderID)
 		b.send(tgbotapi.NewMessage(order.UserID, text))
+
+		b.NotifyPaymentOutcome(ctx, outcome)
 
 		b.notifyAdmins(fmt.Sprintf(b.t("ru", "admin_order_paid_crypto"),
 			payload.OrderID, order.UserID, order.TotalUSD))
@@ -115,10 +108,11 @@ func (b *Bot) TelegramWebhookHandler() http.HandlerFunc {
 			return
 		}
 
-		// Verify secret token if configured.
+		// Verify secret token if configured. Constant-time comparison keeps
+		// the secret safe from timing side channels.
 		if b.cfg.TelegramWebhookSecret != "" {
 			secret := r.Header.Get("X-Telegram-Bot-Api-Secret-Token")
-			if secret != b.cfg.TelegramWebhookSecret {
+			if subtle.ConstantTimeCompare([]byte(secret), []byte(b.cfg.TelegramWebhookSecret)) != 1 {
 				http.Error(w, "forbidden", http.StatusForbidden)
 				return
 			}

@@ -2,8 +2,8 @@ package service
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
-	"math/rand"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -35,10 +35,28 @@ type ReferralCode struct {
 	ExpiresAt time.Time
 }
 
+// GenerateCode returns a cryptographically random referral code. Bytes >= 248
+// are rejected so that the modulo over the 62-character charset stays unbiased
+// (248 = 4 * 62).
 func (s *ReferralService) GenerateCode() ReferralCode {
 	b := make([]byte, 8)
-	for i := range b {
-		b[i] = charset[rand.Intn(len(charset))]
+	for i := 0; i < len(b); {
+		var buf [16]byte
+		if _, err := rand.Read(buf[:]); err != nil {
+			// crypto/rand never fails on supported platforms; if it somehow
+			// does, a panic beats silently issuing predictable codes.
+			panic(fmt.Sprintf("referral: crypto/rand failed: %v", err))
+		}
+		for _, v := range buf {
+			if v >= 248 {
+				continue
+			}
+			b[i] = charset[int(v)%len(charset)]
+			i++
+			if i == len(b) {
+				break
+			}
+		}
 	}
 	return ReferralCode{
 		Code:      string(b),

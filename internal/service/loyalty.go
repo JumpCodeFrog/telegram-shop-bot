@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"math"
 )
 
 type LoyaltyStore interface {
@@ -38,7 +39,10 @@ func (s *LoyaltyService) CalculateCashback(amountUSD float64, level string, isPr
 	if isPremium {
 		basePct += float64(s.premiumBonus)
 	}
-	return int(amountUSD * (basePct / 100.0) * 100) // 1 USD = 100 base pts, then pct
+	// pts = USD * pct: the "/100 pct" and "*100 pts per USD" cancel out.
+	// Round instead of truncating: 29*0.01*100 in float64 is 28.999...,
+	// and int() would silently short-change the buyer by a point.
+	return int(math.Round(amountUSD * basePct))
 }
 
 // CheckAndUpgradeLevel checks if the user has earned a new level.

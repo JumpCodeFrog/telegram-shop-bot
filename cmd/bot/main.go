@@ -184,10 +184,12 @@ func main() {
 	onboardingW := worker.NewOnboardingWorker(b.API(), userStore, i18n, cfg.BotUsername, 24*time.Hour)
 	workers.Start(ctx, "onboarding", onboardingW.Start)
 
-	orderStore := storage.NewSQLOrderStore(db)
 	cryptoPayments := payment.NewCryptoBotPayment(cfg.CryptoBotToken)
 	if cryptoPayments.Configured() {
-		pollingW := worker.NewCryptoBotPollingWorker(cryptoPayments, orderStore, 30*time.Second)
+		// Confirm through the bot's OrderService so polled payments get the
+		// same loyalty/referral/cache side effects as webhook payments, and
+		// let the bot send the outcome messages.
+		pollingW := worker.NewCryptoBotPollingWorker(cryptoPayments, b.OrderService(), b.NotifyPaymentOutcome, 30*time.Second)
 		workers.Start(ctx, "cryptobot_polling", pollingW.Start)
 	} else {
 		slog.Warn("CryptoBot disabled, skipping polling worker")

@@ -129,6 +129,15 @@
   "admin_order_paid_crypto": "💎 Order #%d paid (Crypto) — user %d — $%.2f",
   "loyalty_level_up": "🎉 Congratulations! You've reached <b>%s</b> level!",
   "loyalty_vip_gift": "🎁 A VIP gift has been sent to you!",
+  "error_insufficient_stock": "❗ Not enough stock: %s (%d available)",
+  "loyalty_points_awarded": "💎 You've earned %d points for your purchase!",
+  "referral_bonus_referrer": "🎉 Your friend made their first purchase — you've earned %d points!",
+  "referral_welcome_promo": "🎁 Thanks for your first purchase! Your personal 10%% discount promo code: <b>%s</b> (valid for 30 days)",
+  "precheckout_order_not_found": "Order not found",
+  "precheckout_wrong_user": "This invoice belongs to another user",
+  "precheckout_order_not_pending": "This order has already been paid or cancelled",
+  "precheckout_amount_mismatch": "Invoice amount does not match the order total",
+  "precheckout_validation_error": "Could not verify the order, please try again later",
   "stock": "In stock",
   "btn_menu": "🏠 Main Menu"
 }

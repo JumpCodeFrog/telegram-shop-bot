@@ -10,6 +10,7 @@ import (
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 
 	"shop_bot/internal/service"
+	"shop_bot/internal/shop"
 	"shop_bot/internal/storage"
 )
 
@@ -161,7 +162,9 @@ func (b *Bot) onPayCrypto(cbID string, chatID, userID int64, msgID int, data, la
 
 // handlePreCheckout handles Telegram PreCheckoutQuery for Stars payments.
 func (b *Bot) handlePreCheckout(query *tgbotapi.PreCheckoutQuery) {
-	if err := b.stars.HandlePreCheckout(query); err != nil {
+	ctx, cancel := handlerCtx()
+	defer cancel()
+	if err := b.stars.HandlePreCheckout(ctx, query); err != nil {
 		b.logger.Error("handle pre-checkout", "error", err)
 	}
 }
@@ -180,7 +183,8 @@ func (b *Bot) handleSuccessfulPayment(msg *tgbotapi.Message) {
 	}
 
 	ctx := context.Background()
-	if err := b.order.ConfirmPayment(ctx, orderID, "stars", sp.TelegramPaymentChargeID); err != nil {
+	outcome, err := b.order.ConfirmPayment(ctx, orderID, "stars", sp.TelegramPaymentChargeID)
+	if err != nil {
 		if errors.Is(err, storage.ErrOrderStatusConflict) {
 			// Duplicate Stars payment event — already confirmed, safe to ignore.
 			b.logger.Info("stars payment already confirmed (idempotent)", "order_id", orderID)
@@ -194,18 +198,15 @@ func (b *Bot) handleSuccessfulPayment(msg *tgbotapi.Message) {
 		b.metrics.SuccessfulPayments.WithLabelValues("stars").Inc()
 	}
 
-	// Fetch order for outbound webhook payload
-	if order, err := b.order.GetOrder(ctx, orderID); err == nil {
-		b.outWebhook.Send(service.OutboundWebhookEvent{
-			Event:      "order.paid",
-			OrderID:    orderID,
-			UserID:     msg.From.ID,
-			TotalUSD:   order.TotalUSD,
-			TotalStars: order.TotalStars,
-			Method:     "stars",
-			PaymentID:  sp.TelegramPaymentChargeID,
-		})
-	}
+	b.outWebhook.Send(service.OutboundWebhookEvent{
+		Event:      "order.paid",
+		OrderID:    orderID,
+		UserID:     msg.From.ID,
+		TotalUSD:   outcome.Order.TotalUSD,
+		TotalStars: outcome.Order.TotalStars,
+		Method:     "stars",
+		PaymentID:  sp.TelegramPaymentChargeID,
+	})
 
 	lang := msg.From.LanguageCode
 
@@ -219,4 +220,53 @@ func (b *Bot) handleSuccessfulPayment(msg *tgbotapi.Message) {
 	reply := tgbotapi.NewMessage(msg.Chat.ID, receipt)
 	reply.ParseMode = "HTML"
 	b.send(reply)
+
+	b.NotifyPaymentOutcome(ctx, outcome)
+}
+
+// NotifyPaymentOutcome sends the user-facing messages for the side effects of
+// a confirmed payment: cashback points, level upgrades, the referral bonus for
+// the referrer, and the welcome promo for the referred buyer. All sends are
+// best-effort; the payment itself is already final.
+func (b *Bot) NotifyPaymentOutcome(ctx context.Context, outcome *shop.PaymentOutcome) {
+	if outcome == nil || outcome.Order == nil {
+		return
+	}
+
+	buyerLang := b.userLang(ctx, outcome.Order.UserID)
+
+	if outcome.PointsAwarded > 0 {
+		msg := tgbotapi.NewMessage(outcome.Order.UserID,
+			fmt.Sprintf(b.t(buyerLang, "loyalty_points_awarded"), outcome.PointsAwarded))
+		msg.ParseMode = "HTML"
+		b.send(msg)
+	}
+	if outcome.NewLevel != "" {
+		msg := tgbotapi.NewMessage(outcome.Order.UserID,
+			fmt.Sprintf(b.t(buyerLang, "loyalty_level_up"), outcome.NewLevel))
+		msg.ParseMode = "HTML"
+		b.send(msg)
+	}
+	if outcome.NewUserPromo != "" {
+		msg := tgbotapi.NewMessage(outcome.Order.UserID,
+			fmt.Sprintf(b.t(buyerLang, "referral_welcome_promo"), outcome.NewUserPromo))
+		msg.ParseMode = "HTML"
+		b.send(msg)
+	}
+	if outcome.ReferralReferrer != 0 {
+		refLang := b.userLang(ctx, outcome.ReferralReferrer)
+		msg := tgbotapi.NewMessage(outcome.ReferralReferrer,
+			fmt.Sprintf(b.t(refLang, "referral_bonus_referrer"), outcome.ReferrerPoints))
+		msg.ParseMode = "HTML"
+		b.send(msg)
+	}
+}
+
+// userLang resolves a user's stored language by Telegram ID, falling back to "" (→ en).
+func (b *Bot) userLang(ctx context.Context, telegramID int64) string {
+	user, err := b.users.GetByTelegramID(ctx, telegramID)
+	if err != nil || user == nil {
+		return ""
+	}
+	return user.LanguageCode
 }

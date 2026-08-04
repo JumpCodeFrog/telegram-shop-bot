@@ -129,6 +129,15 @@
   "admin_order_paid_crypto": "💎 Pedido #%d pagado (Crypto) — usuario %d — $%.2f",
   "loyalty_level_up": "🎉 ¡Felicidades! ¡Has alcanzado el nivel <b>%s</b>!",
   "loyalty_vip_gift": "🎁 ¡Te ha sido enviado un regalo VIP!",
+  "error_insufficient_stock": "❗ Stock insuficiente: %s (%d disponibles)",
+  "loyalty_points_awarded": "💎 ¡Has ganado %d puntos por tu compra!",
+  "referral_bonus_referrer": "🎉 Tu amigo hizo su primera compra — ¡has recibido %d puntos!",
+  "referral_welcome_promo": "🎁 ¡Gracias por tu primera compra! Tu código promocional personal del 10%% de descuento: <b>%s</b> (válido 30 días)",
+  "precheckout_order_not_found": "Pedido no encontrado",
+  "precheckout_wrong_user": "Esta factura pertenece a otro usuario",
+  "precheckout_order_not_pending": "El pedido ya fue pagado o cancelado",
+  "precheckout_amount_mismatch": "El importe de la factura no coincide con el total del pedido",
+  "precheckout_validation_error": "No se pudo verificar el pedido, inténtalo más tarde",
   "stock": "En stock",
   "btn_menu": "🏠 Menú principal"
 }

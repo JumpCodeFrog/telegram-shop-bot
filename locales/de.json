@@ -129,6 +129,15 @@
   "admin_order_paid_crypto": "💎 Bestellung #%d bezahlt (Crypto) — Nutzer %d — $%.2f",
   "loyalty_level_up": "🎉 Glückwunsch! Du hast Stufe <b>%s</b> erreicht!",
   "loyalty_vip_gift": "🎁 Ein VIP-Geschenk wurde dir gesendet!",
+  "error_insufficient_stock": "❗ Nicht genug auf Lager: %s (%d verfügbar)",
+  "loyalty_points_awarded": "💎 Du hast %d Punkte für deinen Einkauf erhalten!",
+  "referral_bonus_referrer": "🎉 Dein Freund hat seinen ersten Einkauf getätigt — dir wurden %d Punkte gutgeschrieben!",
+  "referral_welcome_promo": "🎁 Danke für deinen ersten Einkauf! Dein persönlicher 10%%-Rabatt-Promocode: <b>%s</b> (30 Tage gültig)",
+  "precheckout_order_not_found": "Bestellung nicht gefunden",
+  "precheckout_wrong_user": "Diese Rechnung gehört einem anderen Nutzer",
+  "precheckout_order_not_pending": "Die Bestellung wurde bereits bezahlt oder storniert",
+  "precheckout_amount_mismatch": "Der Rechnungsbetrag stimmt nicht mit der Bestellsumme überein",
+  "precheckout_validation_error": "Bestellung konnte nicht geprüft werden, bitte versuche es später erneut",
   "stock": "Auf Lager",
   "btn_menu": "🏠 Hauptmenü"
 }

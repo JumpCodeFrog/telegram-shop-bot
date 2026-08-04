@@ -56,7 +56,7 @@ func (s *SQLSubscriptionStore) Upsert(ctx context.Context, sub Subscription) err
 		     expires_at         = excluded.expires_at,
 		     reminded_at        = NULL,
 		     updated_at         = CURRENT_TIMESTAMP`,
-		sub.UserID, sub.ProductID, sub.OrderID, sub.ChargeID, status, sub.ExpiresAt.UTC())
+		sub.UserID, sub.ProductID, nullableID(sub.OrderID), sub.ChargeID, status, sub.ExpiresAt.UTC())
 	if err != nil {
 		return fmt.Errorf("subscription store: upsert: %w", err)
 	}
