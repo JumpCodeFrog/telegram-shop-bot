@@ -37,6 +37,25 @@ type PaymentMethodStat struct {
 	TotalUSD   float64
 }
 
+// TopBuyer contains aggregate paid-order figures for a single user.
+type TopBuyer struct {
+	UserID   int64
+	Orders   int
+	TotalUSD float64
+}
+
+// PromoUsageStat contains usage figures for a single promo code. The total
+// discount is reconstructed from paid orders (order totals are stored after
+// the discount was applied), so it is only computable when every paid order
+// carries a discount percentage strictly between 0 and 100; otherwise
+// DiscountKnown is false and DiscountUSD is a partial lower bound.
+type PromoUsageStat struct {
+	Code          string
+	Uses          int
+	DiscountUSD   float64
+	DiscountKnown bool
+}
+
 // SQLAnalyticsStore implements AnalyticsStore using a *sql.DB connection.
 type SQLAnalyticsStore struct {
 	db *sql.DB
@@ -140,6 +159,69 @@ func (s *SQLAnalyticsStore) GetPaymentMethodStats(ctx context.Context) ([]Paymen
 			return nil, fmt.Errorf("analytics: scan payment method stat: %w", err)
 		}
 		result = append(result, ps)
+	}
+	return result, rows.Err()
+}
+
+// TopBuyers returns users ranked by total paid revenue, limited to the given
+// count. Paid and delivered orders both count as revenue.
+func (s *SQLAnalyticsStore) TopBuyers(ctx context.Context, limit int) ([]TopBuyer, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT user_id, COUNT(*), COALESCE(SUM(total_usd), 0)
+		 FROM orders
+		 WHERE status = 'paid'
+		 GROUP BY user_id
+		 ORDER BY SUM(total_usd) DESC, user_id
+		 LIMIT ?`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("analytics: top buyers: %w", err)
+	}
+	defer rows.Close()
+
+	var result []TopBuyer
+	for rows.Next() {
+		var b TopBuyer
+		if err := rows.Scan(&b.UserID, &b.Orders, &b.TotalUSD); err != nil {
+			return nil, fmt.Errorf("analytics: scan top buyer: %w", err)
+		}
+		result = append(result, b)
+	}
+	return result, rows.Err()
+}
+
+// PromoUsage returns per-promo usage figures. Uses comes from the promo's own
+// usage counter; the total discount is reconstructed from paid orders that
+// reference the code: an order stores total_usd AFTER the discount, so the
+// discount amount is total_usd * pct / (100 - pct). When any paid order
+// carries a percentage outside (0, 100), the sum cannot be reconstructed and
+// DiscountKnown is false.
+func (s *SQLAnalyticsStore) PromoUsage(ctx context.Context) ([]PromoUsageStat, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT p.code,
+		        p.used_count,
+		        COALESCE(SUM(CASE WHEN o.discount_pct > 0 AND o.discount_pct < 100
+		                          THEN o.total_usd * o.discount_pct / (100.0 - o.discount_pct)
+		                          ELSE 0 END), 0),
+		        COALESCE(SUM(CASE WHEN o.id IS NOT NULL AND (o.discount_pct <= 0 OR o.discount_pct >= 100)
+		                          THEN 1 ELSE 0 END), 0)
+		 FROM promo_codes p
+		 LEFT JOIN orders o ON o.promo_code = p.code AND o.status = 'paid'
+		 GROUP BY p.id
+		 ORDER BY p.used_count DESC, p.code`)
+	if err != nil {
+		return nil, fmt.Errorf("analytics: promo usage: %w", err)
+	}
+	defer rows.Close()
+
+	var result []PromoUsageStat
+	for rows.Next() {
+		var st PromoUsageStat
+		var unknowable int
+		if err := rows.Scan(&st.Code, &st.Uses, &st.DiscountUSD, &unknowable); err != nil {
+			return nil, fmt.Errorf("analytics: scan promo usage: %w", err)
+		}
+		st.DiscountKnown = unknowable == 0
+		result = append(result, st)
 	}
 	return result, rows.Err()
 }

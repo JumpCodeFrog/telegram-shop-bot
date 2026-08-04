@@ -42,6 +42,8 @@ func (b *Bot) handleStart(msg *tgbotapi.Message) {
 	lang := msg.From.LanguageCode
 	// Handle referral deep links
 	refCode := strings.TrimSpace(msg.CommandArguments())
+	// Deep links are issued as start=ref_<code>; stored codes have no prefix.
+	refCode = strings.TrimPrefix(refCode, "ref_")
 	if refCode != "" {
 		ctx := context.Background()
 		referrer, err := b.referrals.GetUserByReferralCode(ctx, refCode)
@@ -90,12 +92,34 @@ func (b *Bot) sendMainMenu(chatID, userID int64, msgID int, lang string, ctx con
 	}
 
 	// Bot API 9.4: admin-configurable styles, fallback to semantic defaults.
-	kb := StyledKeyboard{
-		{b.styledBtn(BtnKeyMenuCatalog, b.t(lang, "btn_catalog"), "back:catalog", StylePrimary)},
-		{b.styledBtn(BtnKeyMenuCart, cartLabel, "back:cart", StylePrimary), b.styledBtn(BtnKeyMenuOrders, b.t(lang, "btn_orders"), "back:orders", StyleDefault)},
-		{b.styledBtn(BtnKeyMenuProfile, b.t(lang, "btn_profile"), "back:profile", StyleDefault), b.styledBtn(BtnKeyMenuSupport, b.t(lang, "btn_support"), "support", StyleDefault)},
-	}
+	kb := b.mainMenuKeyboard(lang, cartLabel)
 	b.sendOrEditStyled(chatID, msgID, welcomeText, "HTML", kb)
+}
+
+// mainMenuKeyboard builds the two-column main menu (reference layout):
+// [Каталог|Поиск] [Корзина|Избранное] [Заказы|Профиль] [Бонус за друга|Поддержка] [Условия].
+func (b *Bot) mainMenuKeyboard(lang, cartLabel string) StyledKeyboard {
+	return StyledKeyboard{
+		{
+			b.styledBtn(BtnKeyMenuCatalog, b.t(lang, "btn_catalog"), "back:catalog", StylePrimary),
+			b.styledBtn(BtnKeyMenuSearch, b.t(lang, "btn_search"), "search:hint", StyleDefault),
+		},
+		{
+			b.styledBtn(BtnKeyMenuCart, cartLabel, "back:cart", StylePrimary),
+			b.styledBtn(BtnKeyMenuWishlist, b.t(lang, "btn_wishlist"), "back:wishlist", StyleDefault),
+		},
+		{
+			b.styledBtn(BtnKeyMenuOrders, b.t(lang, "btn_orders"), "back:orders", StyleDefault),
+			b.styledBtn(BtnKeyMenuProfile, b.t(lang, "btn_profile"), "back:profile", StyleDefault),
+		},
+		{
+			b.styledBtn(BtnKeyMenuReferral, b.t(lang, "btn_referral"), "ref:open", StyleSuccess),
+			b.styledBtn(BtnKeyMenuSupport, b.t(lang, "btn_support"), "support", StyleDefault),
+		},
+		{
+			b.styledBtn(BtnKeyMenuTerms, b.t(lang, "btn_terms"), "terms", StyleDefault),
+		},
+	}
 }
 
 // handleHelp sends a list of available commands.

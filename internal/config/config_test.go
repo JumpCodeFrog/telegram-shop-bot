@@ -148,3 +148,53 @@ func TestLoad_AllParamsValid(t *testing.T) {
 		}
 	}
 }
+
+func TestLoad_AdminGroupAndTopics(t *testing.T) {
+	t.Setenv("BOT_TOKEN", "test-token-123")
+	t.Setenv("ADMIN_GROUP_ID", "-1001234567890")
+	t.Setenv("TOPIC_ORDERS_NEW", "5")
+	t.Setenv("TOPIC_ORDERS_PAID", "7")
+	t.Setenv("TOPIC_ORDERS_DELIVERED", "9")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.AdminGroupID != -1001234567890 {
+		t.Errorf("AdminGroupID = %d, want -1001234567890", cfg.AdminGroupID)
+	}
+	if cfg.TopicOrdersNew != 5 || cfg.TopicOrdersPaid != 7 || cfg.TopicOrdersDelivered != 9 {
+		t.Errorf("topics = %d/%d/%d, want 5/7/9", cfg.TopicOrdersNew, cfg.TopicOrdersPaid, cfg.TopicOrdersDelivered)
+	}
+}
+
+func TestLoad_AdminGroupUnsetDefaultsToZero(t *testing.T) {
+	t.Setenv("BOT_TOKEN", "test-token-123")
+	for _, key := range []string{"ADMIN_GROUP_ID", "TOPIC_ORDERS_NEW", "TOPIC_ORDERS_PAID", "TOPIC_ORDERS_DELIVERED"} {
+		t.Setenv(key, "")
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.AdminGroupID != 0 {
+		t.Errorf("AdminGroupID = %d, want 0", cfg.AdminGroupID)
+	}
+	if cfg.TopicOrdersNew != 0 || cfg.TopicOrdersPaid != 0 || cfg.TopicOrdersDelivered != 0 {
+		t.Errorf("topics = %d/%d/%d, want 0/0/0", cfg.TopicOrdersNew, cfg.TopicOrdersPaid, cfg.TopicOrdersDelivered)
+	}
+}
+
+func TestLoad_InvalidAdminGroupID(t *testing.T) {
+	t.Setenv("BOT_TOKEN", "test-token-123")
+	t.Setenv("ADMIN_GROUP_ID", "not-a-number")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected error for non-numeric ADMIN_GROUP_ID, got nil")
+	}
+	if !strings.Contains(err.Error(), "ADMIN_GROUP_ID") {
+		t.Errorf("error should mention ADMIN_GROUP_ID, got: %v", err)
+	}
+}

@@ -8,6 +8,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased] — v1.2.0
 
+### Stars Subscriptions (recurring)
+
+- **30-day subscription products** — a product with `sub_period_days=30` is sold as a recurring Telegram Stars subscription: the invoice is sent via raw `sendInvoice` with `subscription_period=2592000` (tgbotapi v5 does not know the field). Subscription products are payable with Stars only; crypto is hidden at checkout and rejected with `sub_stars_only`.
+- **`/mysubs` command** — lists active subscriptions with expiry dates; each has a cancel button (`sub:cancel:<id>`) that calls raw `editUserStarSubscription{is_canceled:true}` and marks the row `canceled` locally (access remains until the paid period ends).
+- **Subscription bookkeeping** — `successful_payment` for a subscription order upserts a `subscriptions` row; `expires_at` comes from the raw update's `subscription_expiration_date` (webhook mode), falling back to now + 30 days when Telegram's field is unavailable (polling mode).
+- **`worker/subscription.go`** — hourly worker: marks overdue subscriptions `expired` and sends a one-shot `sub_expiring_soon` reminder 72h before expiry (`MarkReminded` only after a successful send, so failed reminders are retried).
+- **Admin wizard** — the add-product dialog got a final step: regular product vs. 30-day subscription.
+- ⚠️ **Recurring payments require live verification** («требует проверки в бою»): renewal `successful_payment` updates, `subscription_expiration_date` delivery, and `editUserStarSubscription` behavior cannot be exercised against the real Bot API from tests.
+
 ### Admin: Button Style Customization
 
 - **`/btnstyle` command** — new admin command that opens an interactive inline menu showing all 12 configurable button keys with their current style indicators (🔵🟢🔴⬜). Tapping any button opens a style picker with four options (Primary, Success, Danger, Default); the change is applied immediately and persisted to SQLite.

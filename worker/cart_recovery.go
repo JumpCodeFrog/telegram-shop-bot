@@ -4,23 +4,28 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"shop_bot/internal/storage"
 	"strings"
 	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/google/uuid"
+
+	"shop_bot/internal/service"
+	"shop_bot/internal/storage"
 )
 
 type CartRecoveryWorker struct {
 	cart           storage.CartStore
 	promos         storage.PromoStore
+	users          storage.UserStore
+	i18n           *service.I18nService
 	bot            *tgbotapi.BotAPI
+	metrics        *service.MetricsService
 	interval       time.Duration
 	abandonedAfter time.Duration
 }
 
-func NewCartRecoveryWorker(bot *tgbotapi.BotAPI, cart storage.CartStore, promos storage.PromoStore, interval time.Duration, abandonedAfter ...time.Duration) *CartRecoveryWorker {
+func NewCartRecoveryWorker(bot *tgbotapi.BotAPI, cart storage.CartStore, promos storage.PromoStore, users storage.UserStore, i18n *service.I18nService, metrics *service.MetricsService, interval time.Duration, abandonedAfter ...time.Duration) *CartRecoveryWorker {
 	age := 24 * time.Hour
 	if len(abandonedAfter) > 0 {
 		age = abandonedAfter[0]
@@ -29,6 +34,9 @@ func NewCartRecoveryWorker(bot *tgbotapi.BotAPI, cart storage.CartStore, promos 
 		bot:            bot,
 		cart:           cart,
 		promos:         promos,
+		users:          users,
+		i18n:           i18n,
+		metrics:        metrics,
 		interval:       interval,
 		abandonedAfter: age,
 	}
@@ -52,6 +60,8 @@ func (w *CartRecoveryWorker) Start(ctx context.Context) {
 }
 
 func (w *CartRecoveryWorker) runRecovery(ctx context.Context) {
+	w.recountActiveCarts(ctx)
+
 	// Find carts older than the configured abandonment threshold.
 	userIDs, err := w.cart.GetAbandonedCarts(ctx, w.abandonedAfter)
 	if err != nil {
@@ -62,6 +72,20 @@ func (w *CartRecoveryWorker) runRecovery(ctx context.Context) {
 	for _, userID := range userIDs {
 		w.processUser(ctx, userID)
 	}
+}
+
+// recountActiveCarts refreshes the ActiveCarts gauge from the database on
+// every tick so the metric survives restarts and out-of-band cart changes.
+func (w *CartRecoveryWorker) recountActiveCarts(ctx context.Context) {
+	if w.metrics == nil {
+		return
+	}
+	n, err := w.cart.CountActiveCarts(ctx)
+	if err != nil {
+		slog.Error("Failed to count active carts", "error", err)
+		return
+	}
+	w.metrics.ActiveCarts.Set(float64(n))
 }
 
 func (w *CartRecoveryWorker) processUser(ctx context.Context, userID int64) {
@@ -84,10 +108,12 @@ func (w *CartRecoveryWorker) processUser(ctx context.Context, userID int64) {
 		return
 	}
 
-	// 2. Send message
-	text := fmt.Sprintf("👋 Мы заметили, что вы оставили товары в корзине!\n\n"+
-		"Специально для вас мы подготовили промокод на скидку **10%%**: `%s`\n\n"+
-		"Поторопитесь, он действует всего 3 дня!", code)
+	// 2. Send message in the user's language (default en).
+	lang := "en"
+	if user, err := w.users.GetByTelegramID(ctx, userID); err == nil && user.LanguageCode != "" {
+		lang = user.LanguageCode
+	}
+	text := fmt.Sprintf(w.i18n.T(lang, "cart_recovery_message"), code)
 
 	msg := tgbotapi.NewMessage(userID, text)
 	msg.ParseMode = "Markdown"
@@ -99,5 +125,10 @@ func (w *CartRecoveryWorker) processUser(ctx context.Context, userID int64) {
 	// 3. Mark as sent
 	if err := w.cart.MarkRecoverySent(ctx, userID); err != nil {
 		slog.Error("Failed to mark recovery as sent", "user_id", userID, "error", err)
+	}
+
+	// The reminder was dispatched (promo issued, message send attempted).
+	if w.metrics != nil {
+		w.metrics.CartsAbandoned.Inc()
 	}
 }

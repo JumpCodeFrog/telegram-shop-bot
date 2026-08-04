@@ -33,6 +33,9 @@ kb := StyledKeyboard{
 b.styledBtn(BtnKeyMenuCatalog, b.t(lang, "btn_catalog"), "back:catalog", StylePrimary),
 b.styledBtn(BtnKeyMenuCart, b.t(lang, "btn_cart"), "back:cart", StyleDefault),
 },
+	{
+		b.styledBtn(BtnKeyMenuReferral, b.t(lang, "btn_referral"), "ref:open", StyleDefault),
+	},
 {
 Btn(b.t(lang, "btn_orders"), "back:orders"),
 Btn(b.t(lang, "btn_menu"), "back:menu"),

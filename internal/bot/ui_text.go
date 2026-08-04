@@ -206,6 +206,11 @@ func (b *Bot) formatProfileText(lang string, user *storage.User, orderCount int)
 		sb.WriteString(fmt.Sprintf(b.t(lang, "profile_username_line"), escapeHTML(user.Username)))
 	}
 	sb.WriteString(fmt.Sprintf(b.t(lang, "profile_loyalty_line"), escapeHTML(user.LoyaltyLevel), user.LoyaltyPts))
+	if next, threshold := loyaltyNextLevel(user.LoyaltyLevel); next != "" {
+		sb.WriteString(fmt.Sprintf(b.t(lang, "profile_loyalty_progress"), escapeHTML(next), user.LoyaltyPts, threshold))
+	} else {
+		sb.WriteString(b.t(lang, "profile_loyalty_max"))
+	}
 	sb.WriteString(fmt.Sprintf(b.t(lang, "profile_orders_line"), orderCount))
 	if user.ReferralCode.Valid && user.ReferralCode.String != "" {
 		sb.WriteString(fmt.Sprintf(b.t(lang, "profile_referral_line"), escapeHTML(user.ReferralCode.String)))
@@ -230,4 +235,21 @@ func (b *Bot) formatWishlistText(lang string, products []storage.Product) string
 
 func (b *Bot) productQuantityLabel(lang string, quantity int) string {
 	return fmt.Sprintf(b.t(lang, "product_qty_label"), quantity)
+}
+
+// loyaltyNextLevel returns the next loyalty level and the points threshold
+// needed to reach it. Thresholds mirror LoyaltyService.CheckAndUpgradeLevel
+// (internal/service/loyalty.go): 1000 → silver, 5000 → gold, 10000 → vip.
+// An empty next level means the maximum level is already reached.
+func loyaltyNextLevel(level string) (next string, threshold int) {
+	switch level {
+	case "bronze":
+		return "silver", 1000
+	case "silver":
+		return "gold", 5000
+	case "gold":
+		return "vip", 10000
+	default:
+		return "", 0
+	}
 }

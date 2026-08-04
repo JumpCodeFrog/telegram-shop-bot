@@ -50,6 +50,7 @@ func (m *mockCartStore) GetAbandonedCarts(_ context.Context, _ time.Duration) ([
 	return nil, m.err
 }
 func (m *mockCartStore) MarkRecoverySent(_ context.Context, _ int64) error { return m.err }
+func (m *mockCartStore) CountActiveCarts(_ context.Context) (int64, error) { return 0, m.err }
 
 // Feature: shop_bot, Property 6: Корректность вычисления итогов корзины
 // Validates: Requirements 4.9, 4.3

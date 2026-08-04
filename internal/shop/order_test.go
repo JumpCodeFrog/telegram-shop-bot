@@ -130,6 +130,7 @@ func (m *mockClearCartStore) GetAbandonedCarts(_ context.Context, _ time.Duratio
 	return nil, nil
 }
 func (m *mockClearCartStore) MarkRecoverySent(_ context.Context, _ int64) error { return nil }
+func (m *mockClearCartStore) CountActiveCarts(_ context.Context) (int64, error) { return 0, nil }
 func (m *mockClearCartStore) ClearCart(_ context.Context, userID int64) error {
 	if m.err != nil {
 		return m.err

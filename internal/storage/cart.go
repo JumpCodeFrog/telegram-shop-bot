@@ -82,6 +82,17 @@ func (s *SQLCartStore) MarkRecoverySent(ctx context.Context, userID int64) error
 	return err
 }
 
+// CountActiveCarts returns the number of distinct users that currently have
+// at least one item in their cart. Used for the active-carts gauge metric.
+func (s *SQLCartStore) CountActiveCarts(ctx context.Context) (int64, error) {
+	var n int64
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(DISTINCT user_id) FROM cart_items`).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("cart store: count active carts: %w", err)
+	}
+	return n, nil
+}
+
 func (s *SQLCartStore) GetItems(ctx context.Context, userID int64) ([]CartItem, error) {
 	query := `
 		SELECT c.id, c.user_id, c.product_id, c.quantity, c.added_at, p.name, p.price_usd

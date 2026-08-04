@@ -2,6 +2,7 @@ package payment
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -11,6 +12,13 @@ import (
 
 	"shop_bot/internal/storage"
 )
+
+// SubscriptionPeriodSeconds converts a subscription period in days to the
+// seconds value the Bot API expects. Telegram currently only accepts
+// 2592000 (30 days).
+func SubscriptionPeriodSeconds(days int) int {
+	return days * 24 * 60 * 60
+}
 
 // OrderGetter is the narrow order-lookup dependency HandlePreCheckout needs.
 type OrderGetter interface {
@@ -49,7 +57,15 @@ func NewStarsPayment(bot *tgbotapi.BotAPI, orders OrderGetter, translate Transla
 // SendInvoice creates and sends a Telegram Stars invoice to the given chat.
 // The invoice payload contains the order ID so it can be correlated later
 // during the PreCheckoutQuery / SuccessfulPayment flow.
-func (s *StarsPayment) SendInvoice(chatID int64, orderID int64, totalStars int, items []storage.OrderItem) error {
+//
+// subscriptionPeriodSeconds > 0 turns the invoice into a recurring Stars
+// subscription (Bot API `subscription_period`). tgbotapi v5 does not know
+// that field, so the subscription variant goes through a raw MakeRequest.
+func (s *StarsPayment) SendInvoice(chatID int64, orderID int64, totalStars int, items []storage.OrderItem, subscriptionPeriodSeconds int) error {
+	if subscriptionPeriodSeconds > 0 {
+		return s.sendSubscriptionInvoice(chatID, orderID, totalStars, items, subscriptionPeriodSeconds)
+	}
+
 	invoice := tgbotapi.InvoiceConfig{
 		BaseChat: tgbotapi.BaseChat{
 			ChatID: chatID,
@@ -68,6 +84,30 @@ func (s *StarsPayment) SendInvoice(chatID int64, orderID int64, totalStars int, 
 	_, err := s.bot.Send(invoice)
 	if err != nil {
 		return fmt.Errorf("stars: send invoice: %w", err)
+	}
+	return nil
+}
+
+// sendSubscriptionInvoice sends a recurring Stars invoice via the raw Bot API,
+// because tgbotapi v5 has no subscription_period field on InvoiceConfig.
+func (s *StarsPayment) sendSubscriptionInvoice(chatID, orderID int64, totalStars int, items []storage.OrderItem, periodSeconds int) error {
+	prices, err := json.Marshal([]tgbotapi.LabeledPrice{{Label: "Итого", Amount: totalStars}})
+	if err != nil {
+		return fmt.Errorf("stars: marshal subscription prices: %w", err)
+	}
+
+	params := tgbotapi.Params{
+		"chat_id":             strconv.FormatInt(chatID, 10),
+		"title":               fmt.Sprintf("Заказ #%d", orderID),
+		"description":         buildDescription(items),
+		"payload":             strconv.FormatInt(orderID, 10),
+		"currency":            "XTR",
+		"prices":              string(prices),
+		"subscription_period": strconv.Itoa(periodSeconds),
+	}
+
+	if _, err := s.bot.MakeRequest("sendInvoice", params); err != nil {
+		return fmt.Errorf("stars: send subscription invoice: %w", err)
 	}
 	return nil
 }

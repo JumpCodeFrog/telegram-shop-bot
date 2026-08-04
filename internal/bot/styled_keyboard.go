@@ -24,27 +24,39 @@ const (
 // Button key constants used for admin-configurable style overrides.
 // Each constant identifies a logical button in the UI.
 const (
-	BtnKeyMenuCatalog  = "menu_catalog"
-	BtnKeyMenuCart     = "menu_cart"
-	BtnKeyMenuOrders   = "menu_orders"
-	BtnKeyMenuProfile  = "menu_profile"
-	BtnKeyMenuSupport  = "menu_support"
-	BtnKeyProductAdd   = "product_add"
-	BtnKeyProductWish  = "product_wish"
-	BtnKeyCartCheckout = "cart_checkout"
-	BtnKeyCartRemove   = "cart_remove"
-	BtnKeyPayStars     = "pay_stars"
-	BtnKeyPayCrypto    = "pay_crypto"
-	BtnKeyPayCancel    = "pay_cancel"
+	BtnKeyMenuCatalog     = "menu_catalog"
+	BtnKeyMenuSearch      = "menu_search"
+	BtnKeyMenuCart        = "menu_cart"
+	BtnKeyMenuWishlist    = "menu_wishlist"
+	BtnKeyMenuOrders      = "menu_orders"
+	BtnKeyMenuProfile     = "menu_profile"
+	BtnKeyMenuReferral    = "menu_referral"
+	BtnKeyMenuSupport     = "menu_support"
+	BtnKeyMenuTerms       = "menu_terms"
+	BtnKeyCatalogCategory = "catalog_category"
+	BtnKeyCatalogProduct  = "catalog_product"
+	BtnKeyProductAdd      = "product_add"
+	BtnKeyProductWish     = "product_wish"
+	BtnKeyCartCheckout    = "cart_checkout"
+	BtnKeyCartRemove      = "cart_remove"
+	BtnKeyPayStars        = "pay_stars"
+	BtnKeyPayCrypto       = "pay_crypto"
+	BtnKeyPayCancel       = "pay_cancel"
 )
 
 // AllButtonKeys lists every configurable button key in display order.
 var AllButtonKeys = []string{
 	BtnKeyMenuCatalog,
+	BtnKeyMenuSearch,
 	BtnKeyMenuCart,
+	BtnKeyMenuWishlist,
 	BtnKeyMenuOrders,
 	BtnKeyMenuProfile,
+	BtnKeyMenuReferral,
 	BtnKeyMenuSupport,
+	BtnKeyMenuTerms,
+	BtnKeyCatalogCategory,
+	BtnKeyCatalogProduct,
 	BtnKeyProductAdd,
 	BtnKeyProductWish,
 	BtnKeyCartCheckout,
@@ -59,14 +71,26 @@ func ButtonKeyLabel(key string) string {
 	switch key {
 	case BtnKeyMenuCatalog:
 		return "🛍 Каталог"
+	case BtnKeyMenuSearch:
+		return "🔍 Поиск"
 	case BtnKeyMenuCart:
 		return "🛒 Корзина"
+	case BtnKeyMenuWishlist:
+		return "❤️ Избранное"
 	case BtnKeyMenuOrders:
 		return "📦 Заказы"
 	case BtnKeyMenuProfile:
 		return "👤 Профиль"
+	case BtnKeyMenuReferral:
+		return "🎁 Бонус за друга"
 	case BtnKeyMenuSupport:
 		return "🆘 Поддержка"
+	case BtnKeyMenuTerms:
+		return "📄 Условия"
+	case BtnKeyCatalogCategory:
+		return "🗂 Категория в каталоге"
+	case BtnKeyCatalogProduct:
+		return "🛍 Товар в списке"
 	case BtnKeyProductAdd:
 		return "🛒 Добавить в корзину"
 	case BtnKeyProductWish:
@@ -102,10 +126,11 @@ func StyleEmoji(style ButtonStyle) string {
 
 // StyledButton represents an inline keyboard button with optional style.
 type StyledButton struct {
-	Text         string      `json:"text"`
-	CallbackData string      `json:"callback_data,omitempty"`
-	URL          string      `json:"url,omitempty"`
-	Style        ButtonStyle `json:"style,omitempty"`
+	Text              string      `json:"text"`
+	CallbackData      string      `json:"callback_data,omitempty"`
+	URL               string      `json:"url,omitempty"`
+	SwitchInlineQuery *string     `json:"switch_inline_query,omitempty"`
+	Style             ButtonStyle `json:"style,omitempty"`
 }
 
 // StyledKeyboard is a 2D slice of StyledButton rows.
@@ -134,6 +159,12 @@ func BtnDanger(text, data string) StyledButton {
 // BtnURL creates a URL button (opens external link).
 func BtnURL(text, url string) StyledButton {
 	return StyledButton{Text: text, URL: url}
+}
+
+// BtnSwitchInline creates a share button: pressing it prompts the user to pick
+// a chat and pre-fills "@bot <query>" there (Bot API switch_inline_query).
+func BtnSwitchInline(text, query string) StyledButton {
+	return StyledButton{Text: text, SwitchInlineQuery: &query}
 }
 
 // styledBtn creates a button whose style comes from the admin-configured override.
@@ -230,4 +261,3 @@ func buildStyledParams(chatID int64, msgID int, text, parseMode string, kb Style
 	}
 	return params, nil
 }
-

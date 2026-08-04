@@ -30,12 +30,67 @@
       ]
     },
     {
+      "title": "Orders Created (24h)",
+      "type": "stat",
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "increase(shop_orders_created_total[24h])",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "title": "Orders Created Rate",
+      "type": "timeseries",
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "rate(shop_orders_created_total[1h])",
+          "refId": "A"
+        }
+      ]
+    },
+    {
       "title": "Successful Payments (24h)",
       "type": "stat",
       "datasource": "Prometheus",
       "targets": [
         {
           "expr": "sum(increase(shop_payments_successful_total[24h]))",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "title": "Successful Payments by Type",
+      "type": "timeseries",
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum(rate(shop_payments_successful_total[1h])) by (type)",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "title": "Carts Abandoned (24h)",
+      "type": "stat",
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "increase(shop_carts_abandoned_total[24h])",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "title": "Carts Abandoned Rate",
+      "type": "timeseries",
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "rate(shop_carts_abandoned_total[1h])",
           "refId": "A"
         }
       ]
@@ -66,5 +121,5 @@
   "timezone": "",
   "title": "Shop Bot Dashboard",
   "uid": "shop-bot-metrics",
-  "version": 1
+  "version": 2
 }

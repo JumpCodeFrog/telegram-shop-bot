@@ -82,7 +82,7 @@ func (b *Bot) CryptoBotWebhookHandler() http.HandlerFunc {
 
 		b.NotifyPaymentOutcome(ctx, outcome)
 
-		b.notifyAdmins(fmt.Sprintf(b.t("ru", "admin_order_paid_crypto"),
+		b.notifyAdmins(ctx, AdminEventOrderPaid, fmt.Sprintf(b.t("en", "admin_order_paid_crypto"),
 			payload.OrderID, order.UserID, order.TotalUSD))
 
 		b.outWebhook.Send(service.OutboundWebhookEvent{
@@ -134,7 +134,11 @@ func (b *Bot) TelegramWebhookHandler() http.HandlerFunc {
 			return
 		}
 
+		// Bot API subscription fields are invisible to tgbotapi v5, so the
+		// expiration date is lifted from the raw JSON before dispatch.
+		cleanup := b.stashSubscriptionExpiry(body)
 		b.HandleUpdate(update)
+		cleanup()
 		w.WriteHeader(http.StatusOK)
 	}
 }

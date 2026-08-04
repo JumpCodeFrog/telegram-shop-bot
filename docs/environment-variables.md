@@ -22,6 +22,19 @@ Copy `.env.example` to `.env` and fill in the values.
 
 ---
 
+## Admin notifications
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ADMIN_GROUP_ID` | `0` _(disabled)_ | Supergroup chat ID (usually negative) for admin order notifications. When set, a single message is posted to the group instead of DMing every `ADMIN_IDS` entry. |
+| `TOPIC_ORDERS_NEW` | _(empty)_ | Forum topic ID (`message_thread_id`) in `ADMIN_GROUP_ID` for new-order notifications. |
+| `TOPIC_ORDERS_PAID` | _(empty)_ | Forum topic ID for paid-order notifications. |
+| `TOPIC_ORDERS_DELIVERED` | _(empty)_ | Forum topic ID for delivered-order notifications. |
+
+> Topics are optional — without them messages land in the group's General topic. Without `ADMIN_GROUP_ID` the bot keeps the old behavior: a DM to each admin.
+
+---
+
 ## Database
 
 | Variable | Default | Description |

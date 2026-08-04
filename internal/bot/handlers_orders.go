@@ -23,14 +23,14 @@ return
 
 if len(orders) == 0 {
 kb := StyledKeyboard{
-{Btn(b.t(lang, "btn_back"), "back:catalog"), Btn(b.t(lang, "btn_menu"), "back:menu")},
+{Btn(b.t(lang, "btn_back"), "back:menu"), Btn(b.t(lang, "btn_menu"), "back:menu")},
 }
 b.sendOrEditStyled(chatID, msgID, b.t(lang, "orders_empty"), "", kb)
 return
 }
 
 kb := StyledKeyboard{
-{Btn(b.t(lang, "btn_back"), "back:catalog"), Btn(b.t(lang, "btn_menu"), "back:menu")},
+{Btn(b.t(lang, "btn_back"), "back:menu"), Btn(b.t(lang, "btn_menu"), "back:menu")},
 }
 b.sendOrEditStyled(chatID, msgID, b.formatOrdersText(lang, orders), "HTML", kb)
 }

@@ -33,6 +33,8 @@ type CartStore interface {
 	GetAbandonedCarts(ctx context.Context, olderThan time.Duration) ([]int64, error)
 	MarkRecoverySent(ctx context.Context, userID int64) error
 	GetItems(ctx context.Context, userID int64) ([]CartItem, error)
+	// CountActiveCarts returns the number of distinct users with items in cart.
+	CountActiveCarts(ctx context.Context) (int64, error)
 }
 
 type OrderStore interface {
@@ -61,6 +63,8 @@ type AnalyticsStore interface {
 	GetRevenueByDays(ctx context.Context, days int) ([]DailyRevenue, error)
 	GetTopProducts(ctx context.Context, limit int) ([]ProductStats, error)
 	GetPaymentMethodStats(ctx context.Context) ([]PaymentMethodStat, error)
+	TopBuyers(ctx context.Context, limit int) ([]TopBuyer, error)
+	PromoUsage(ctx context.Context) ([]PromoUsageStat, error)
 }
 
 type ReviewStore interface {

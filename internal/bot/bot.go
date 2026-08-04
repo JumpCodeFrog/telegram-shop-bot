@@ -2,6 +2,7 @@ package bot
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -30,6 +31,8 @@ type Bot struct {
 	products        storage.ProductStore
 	promos          storage.PromoStore
 	analytics       storage.AnalyticsStore
+	photos          storage.ProductPhotoStore
+	reviews         storage.ReviewStore
 	referrals       *storage.ReferralStore
 	referralService *service.ReferralService
 	stars           *payment.StarsPayment
@@ -42,6 +45,11 @@ type Bot struct {
 
 	wishlist   *storage.WishlistStore
 	uiSettings storage.UISettingsStore
+	subs       storage.SubscriptionStore
+	// pendingSubExpiry maps a Telegram payment charge ID to the
+	// subscription_expiration_date extracted from the raw webhook update JSON
+	// (tgbotapi v5 does not parse that field). Consumed by recordSubscription.
+	pendingSubExpiry sync.Map
 	// uiStyles is an in-memory cache of button style overrides loaded from DB.
 	// Invalidated and reloaded whenever an admin changes a button style.
 	uiStyles sync.Map
@@ -110,6 +118,7 @@ func NewWithAPI(cfg *config.Config, api *tgbotapi.BotAPI, db *storage.DB, metric
 		Referrals: referralStore,
 		Promos:    promoStore,
 		Cache:     cachedPS,
+		Metrics:   metrics,
 	}
 
 	b := &Bot{
@@ -133,6 +142,9 @@ func NewWithAPI(cfg *config.Config, api *tgbotapi.BotAPI, db *storage.DB, metric
 		wishlist:        storage.NewWishlistStore(db.Conn()),
 		outWebhook:      service.NewOutboundWebhookService(cfg.OutboundWebhookURL, cfg.OutboundWebhookSecret, logger),
 		uiSettings:      storage.NewSQLUISettingsStore(db.Conn()),
+		photos:          storage.NewSQLProductPhotoStore(db),
+		reviews:         storage.NewSQLReviewStore(db),
+		subs:            storage.NewSQLSubscriptionStore(db),
 	}
 	b.reloadButtonStyles(context.Background())
 	// handler is built lazily in Run so we have a context.
@@ -183,9 +195,11 @@ func (b *Bot) registerCommands() {
 		tgbotapi.BotCommand{Command: "catalog", Description: "Browse products"},
 		tgbotapi.BotCommand{Command: "cart", Description: "Your cart"},
 		tgbotapi.BotCommand{Command: "orders", Description: "My orders"},
+		tgbotapi.BotCommand{Command: "mysubs", Description: "My subscriptions"},
 		tgbotapi.BotCommand{Command: "wishlist", Description: "Wishlist"},
 		tgbotapi.BotCommand{Command: "search", Description: "Search products"},
 		tgbotapi.BotCommand{Command: "profile", Description: "Profile & loyalty"},
+		tgbotapi.BotCommand{Command: "referral", Description: "Invite friends & earn points"},
 		tgbotapi.BotCommand{Command: "support", Description: "Customer support"},
 		tgbotapi.BotCommand{Command: "paysupport", Description: "Payment help"},
 		tgbotapi.BotCommand{Command: "terms", Description: "Terms and conditions"},
@@ -196,9 +210,20 @@ func (b *Bot) registerCommands() {
 		b.logger.Warn("setMyCommands failed", "error", err)
 	}
 
-	// Set the chat menu button to show commands list (visible as "/" button in input field).
+	// Set the chat menu button: the Mini App when WEBAPP_URL is configured,
+	// otherwise the commands list (visible as "/" button in input field).
+	menuButton := `{"type":"commands"}`
+	if b.cfg.WebAppURL != "" {
+		if raw, err := json.Marshal(map[string]any{
+			"type":    "web_app",
+			"text":    b.t("en", "webapp_menu_button"),
+			"web_app": map[string]string{"url": b.cfg.WebAppURL},
+		}); err == nil {
+			menuButton = string(raw)
+		}
+	}
 	if _, err := b.api.MakeRequest("setChatMenuButton", tgbotapi.Params{
-		"menu_button": `{"type":"commands"}`,
+		"menu_button": menuButton,
 	}); err != nil {
 		b.logger.Warn("setChatMenuButton failed", "error", err)
 	}
@@ -266,12 +291,3 @@ func (b *Bot) t(lang, key string) string {
 	}
 	return b.i18n.T(lang, key)
 }
-
-// notifyAdmins sends a message to all configured admin IDs.
-func (b *Bot) notifyAdmins(text string) {
-	for _, adminID := range b.cfg.AdminIDs {
-		b.send(tgbotapi.NewMessage(adminID, text))
-	}
-}
-
-

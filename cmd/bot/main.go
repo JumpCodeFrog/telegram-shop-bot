@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
@@ -11,7 +12,10 @@ import (
 	"shop_bot/internal/config"
 	"shop_bot/internal/payment"
 	"shop_bot/internal/service"
+	"shop_bot/internal/shop"
 	"shop_bot/internal/storage"
+	"shop_bot/internal/webapi"
+	"shop_bot/web"
 	"shop_bot/worker"
 	"sync"
 	"syscall"
@@ -169,7 +173,7 @@ func main() {
 	cartStore := storage.NewCartStore(db.Conn())
 	promoStore := storage.NewSQLPromoStore(db)
 	userStore := storage.NewUserStore(db.Conn())
-	cartW := worker.NewCartRecoveryWorker(b.API(), cartStore, promoStore, time.Hour)
+	cartW := worker.NewCartRecoveryWorker(b.API(), cartStore, promoStore, userStore, i18n, metrics, time.Hour)
 	workers.Start(ctx, "cart_recovery", cartW.Start)
 
 	if redisClient != nil {
@@ -184,6 +188,12 @@ func main() {
 	onboardingW := worker.NewOnboardingWorker(b.API(), userStore, i18n, cfg.BotUsername, 24*time.Hour)
 	workers.Start(ctx, "onboarding", onboardingW.Start)
 
+	// Hourly subscription maintenance: expire overdue Stars subscriptions and
+	// send the one-shot "expiring soon" reminders through the bot layer.
+	subStore := storage.NewSQLSubscriptionStore(db)
+	subW := worker.NewSubscriptionWorker(subStore, b.NotifySubscriptionExpiring, time.Hour)
+	workers.Start(ctx, "subscriptions", subW.Start)
+
 	cryptoPayments := payment.NewCryptoBotPayment(cfg.CryptoBotToken)
 	if cryptoPayments.Configured() {
 		// Confirm through the bot's OrderService so polled payments get the
@@ -193,6 +203,28 @@ func main() {
 		workers.Start(ctx, "cryptobot_polling", pollingW.Start)
 	} else {
 		slog.Warn("CryptoBot disabled, skipping polling worker")
+	}
+
+	// Mini App REST API: reuses the bot's OrderService so web checkouts are
+	// confirmed by the same successful_payment / CryptoBot webhook pipeline.
+	var apiServer *webapi.Server
+	if cfg.WebAppURL != "" {
+		exchangeSvc := service.NewExchangeService(cfg.USDToStarsRate)
+		productStore := storage.NewSQLProductStore(db)
+		apiServer = webapi.New(webapi.Deps{
+			Auth:    webapi.NewAuthenticator(cfg.BotToken, webapi.DefaultAuthTTL),
+			Catalog: shop.NewCatalogService(productStore, exchangeSvc),
+			Cart:    shop.NewCartService(cartStore, productStore, exchangeSvc),
+			Orders:  b.OrderService(),
+			Users:   userStore,
+			Promos:  promoStore,
+			Reviews: storage.NewSQLReviewStore(db),
+			Photos:  storage.NewSQLProductPhotoStore(db),
+			I18n:    i18n,
+			Tg:      b.API(),
+			Crypto:  cryptoPayments,
+			Files:   b.API(),
+		}, logger)
 	}
 
 	// 8. Health Check & Metrics API
@@ -212,6 +244,22 @@ func main() {
 		// Mount webhook endpoints when WEBHOOK_URL is configured.
 		if cfg.WebhookURL != "" {
 			mux.Handle("/webhook/", b.WebhookHandler())
+		}
+
+		// Mount the Mini App (static files + REST API) only when WEBAPP_URL
+		// is configured; without an HTTPS domain the feature is off.
+		if apiServer != nil {
+			appFiles, err := fs.Sub(web.AppFS, "app")
+			if err != nil {
+				slog.Error("Mini App assets missing from embed", "error", err)
+				os.Exit(1)
+			}
+			mux.Handle("/app/", http.StripPrefix("/app/", http.FileServer(http.FS(appFiles))))
+			mux.Handle("/app", http.RedirectHandler("/app/", http.StatusMovedPermanently))
+			mux.Handle("/api/", apiServer.Handler())
+			slog.Info("Mini App mounted", "url", cfg.WebAppURL)
+		} else {
+			slog.Warn("WEBAPP_URL is not set — Mini App and REST API are disabled")
 		}
 
 		slog.Info("Health & Metrics API starting", "port", 8080)

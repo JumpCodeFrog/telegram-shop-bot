@@ -9,6 +9,7 @@ import (
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 
+	"shop_bot/internal/payment"
 	"shop_bot/internal/service"
 	"shop_bot/internal/shop"
 	"shop_bot/internal/storage"
@@ -37,9 +38,16 @@ func (b *Bot) onPayStars(cbID string, chatID, userID int64, msgID int, data, lan
 		b.alert(cbID, b.t(lang, "error_short"))
 		return
 	}
+	// Subscription products need a recurring invoice (subscription_period).
+	_, subDays, err := b.orderSubscriptionProduct(ctx, target)
+	if err != nil {
+		b.logger.Error("detect subscription product for stars payment", "order_id", orderID, "error", err)
+		b.alert(cbID, b.t(lang, "error_short"))
+		return
+	}
 
 	b.ack(cbID)
-	if err := b.stars.SendInvoice(chatID, orderID, target.TotalStars, target.Items); err != nil {
+	if err := b.stars.SendInvoice(chatID, orderID, target.TotalStars, target.Items, payment.SubscriptionPeriodSeconds(subDays)); err != nil {
 		b.logger.Error("send stars invoice", "error", err)
 		b.send(tgbotapi.NewMessage(chatID, b.t(lang, "payment_error")))
 		return
@@ -127,6 +135,16 @@ func (b *Bot) onPayCrypto(cbID string, chatID, userID int64, msgID int, data, la
 		return
 	}
 
+	// Subscription products are payable with Telegram Stars only.
+	if _, subDays, subErr := b.orderSubscriptionProduct(ctx, target); subErr != nil {
+		b.logger.Error("detect subscription product for crypto payment", "order_id", orderID, "error", subErr)
+		b.alert(cbID, b.t(lang, "error_short"))
+		return
+	} else if subDays > 0 {
+		b.alert(cbID, b.t(lang, "sub_stars_only"))
+		return
+	}
+
 	// Show skeleton state while generating the invoice.
 	skeletonKeyboard := tgbotapi.NewInlineKeyboardMarkup(
 		tgbotapi.NewInlineKeyboardRow(
@@ -198,6 +216,10 @@ func (b *Bot) handleSuccessfulPayment(msg *tgbotapi.Message) {
 		b.metrics.SuccessfulPayments.WithLabelValues("stars").Inc()
 	}
 
+	// Subscription orders additionally get a subscriptions row so /mysubs,
+	// the expiry worker and cancellation can track the recurring payment.
+	b.recordSubscription(ctx, outcome.Order, sp)
+
 	b.outWebhook.Send(service.OutboundWebhookEvent{
 		Event:      "order.paid",
 		OrderID:    orderID,
@@ -210,7 +232,7 @@ func (b *Bot) handleSuccessfulPayment(msg *tgbotapi.Message) {
 
 	lang := msg.From.LanguageCode
 
-	b.notifyAdmins(fmt.Sprintf(b.t("ru", "admin_order_paid_stars"), orderID, msg.From.ID))
+	b.notifyAdmins(ctx, AdminEventOrderPaid, fmt.Sprintf(b.t("en", "admin_order_paid_stars"), orderID, msg.From.ID))
 
 	receipt := fmt.Sprintf(b.t(lang, "stars_receipt"),
 		orderID,

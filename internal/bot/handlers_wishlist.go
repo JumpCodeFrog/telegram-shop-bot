@@ -2,8 +2,11 @@ package bot
 
 import (
 	"context"
+	"fmt"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+
+	"shop_bot/internal/storage"
 )
 
 // onWishlistToggle toggles a product in the user's wishlist and updates the button in-place.
@@ -49,12 +52,49 @@ func (b *Bot) onWishlistToggle(cbID string, chatID, userID int64, msgID int, dat
 	b.refreshProductKeyboard(chatID, userID, msgID, prodID, lang)
 }
 
+// onWishlistRemove removes a product from the wishlist screen (✖ button)
+// and re-renders the wishlist in place.
+func (b *Bot) onWishlistRemove(cbID string, chatID, userID int64, msgID int, data, lang string) {
+	prodID, err := parseIDFromCallback(data, "wish:rm:")
+	if err != nil {
+		b.logger.Error("parse wish remove callback", "error", err)
+		b.ack(cbID)
+		return
+	}
+
+	ctx := context.Background()
+	if err := b.wishlist.Remove(ctx, userID, prodID); err != nil {
+		b.logger.Error("wishlist remove", "error", err)
+		b.alert(cbID, b.t(lang, "error_short"))
+		return
+	}
+	b.toast(cbID, b.t(lang, "wishlist_removed"))
+	b.sendWishlist(chatID, userID, msgID, lang)
+}
+
+// wishlistKeyboard builds one row per wishlist item: product button + ✖ removal.
+func (b *Bot) wishlistKeyboard(lang string, products []storage.Product) StyledKeyboard {
+	kb := make(StyledKeyboard, 0, len(products)+1)
+	for _, p := range products {
+		kb = append(kb, []StyledButton{
+			b.styledBtn(BtnKeyCatalogProduct, "🛍 "+p.Name, fmt.Sprintf("product:%d", p.ID), StylePrimary),
+			Btn("✖", fmt.Sprintf("wish:rm:%d", p.ID)),
+		})
+	}
+	return append(kb, []StyledButton{
+		Btn(b.t(lang, "btn_back"), "back:menu"),
+		Btn(b.t(lang, "btn_menu"), "back:menu"),
+	})
+}
+
 // handleWishlist shows the user's wishlist.
 func (b *Bot) handleWishlist(msg *tgbotapi.Message) {
+	b.sendWishlist(msg.Chat.ID, msg.From.ID, 0, msg.From.LanguageCode)
+}
+
+// sendWishlist renders the wishlist. If msgID > 0 it edits the existing message.
+func (b *Bot) sendWishlist(chatID, userID int64, msgID int, lang string) {
 	ctx := context.Background()
-	lang := msg.From.LanguageCode
-	userID := msg.From.ID
-	chatID := msg.Chat.ID
 
 	products, err := b.wishlist.GetUserWishlist(ctx, userID)
 	if err != nil {
@@ -64,11 +104,13 @@ func (b *Bot) handleWishlist(msg *tgbotapi.Message) {
 	}
 
 	if len(products) == 0 {
-		b.send(tgbotapi.NewMessage(chatID, b.t(lang, "wishlist_empty")))
+		kb := StyledKeyboard{
+			{b.styledBtn(BtnKeyMenuCatalog, b.t(lang, "btn_catalog"), "back:catalog", StylePrimary)},
+			{Btn(b.t(lang, "btn_menu"), "back:menu")},
+		}
+		b.sendOrEditStyled(chatID, msgID, b.t(lang, "wishlist_empty"), "", kb)
 		return
 	}
 
-	reply := tgbotapi.NewMessage(chatID, b.formatWishlistText(lang, products))
-	reply.ParseMode = "HTML"
-	b.send(reply)
+	b.sendOrEditStyled(chatID, msgID, b.formatWishlistText(lang, products), "HTML", b.wishlistKeyboard(lang, products))
 }

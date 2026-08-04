@@ -26,6 +26,13 @@ type Config struct {
 	LocalesDir            string
 	OutboundWebhookURL    string
 	OutboundWebhookSecret string
+	AdminGroupID          int64
+	TopicOrdersNew        int
+	TopicOrdersPaid       int
+	TopicOrdersDelivered  int
+	// WebAppURL is the public HTTPS URL of the Mini App (mounted at /app/).
+	// Empty disables the Mini App and its REST API entirely.
+	WebAppURL string
 }
 
 // Load reads configuration from environment variables.
@@ -46,6 +53,24 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("USD_TO_STARS_RATE: %w", err)
 	}
 
+	adminGroupID, err := parseOptionalInt64(os.Getenv("ADMIN_GROUP_ID"))
+	if err != nil {
+		return nil, fmt.Errorf("ADMIN_GROUP_ID: %w", err)
+	}
+
+	topicOrdersNew, err := parsePositiveInt(os.Getenv("TOPIC_ORDERS_NEW"), 0)
+	if err != nil {
+		return nil, fmt.Errorf("TOPIC_ORDERS_NEW: %w", err)
+	}
+	topicOrdersPaid, err := parsePositiveInt(os.Getenv("TOPIC_ORDERS_PAID"), 0)
+	if err != nil {
+		return nil, fmt.Errorf("TOPIC_ORDERS_PAID: %w", err)
+	}
+	topicOrdersDelivered, err := parsePositiveInt(os.Getenv("TOPIC_ORDERS_DELIVERED"), 0)
+	if err != nil {
+		return nil, fmt.Errorf("TOPIC_ORDERS_DELIVERED: %w", err)
+	}
+
 	webhookURL := os.Getenv("WEBHOOK_URL")
 	webhookSecret := os.Getenv("TELEGRAM_WEBHOOK_SECRET")
 
@@ -58,6 +83,10 @@ func Load() (*Config, error) {
 		BotUsername:           os.Getenv("BOT_USERNAME"),
 		CryptoBotToken:        os.Getenv("CRYPTOBOT_TOKEN"),
 		AdminIDs:              adminIDs,
+		AdminGroupID:          adminGroupID,
+		TopicOrdersNew:        topicOrdersNew,
+		TopicOrdersPaid:       topicOrdersPaid,
+		TopicOrdersDelivered:  topicOrdersDelivered,
 		WebhookURL:            webhookURL,
 		DBPath:                getEnv("DB_PATH", "data/shop.db"),
 		LogLevel:              getEnv("LOG_LEVEL", "info"),
@@ -69,6 +98,7 @@ func Load() (*Config, error) {
 		LocalesDir:            getEnv("LOCALES_DIR", "locales"),
 		OutboundWebhookURL:    os.Getenv("OUTBOUND_WEBHOOK_URL"),
 		OutboundWebhookSecret: os.Getenv("OUTBOUND_WEBHOOK_SECRET"),
+		WebAppURL:             os.Getenv("WEBAPP_URL"),
 	}, nil
 }
 
@@ -100,6 +130,20 @@ func getEnv(key, defaultValue string) string {
 		return value
 	}
 	return defaultValue
+}
+
+// parseOptionalInt64 parses s as an int64 (negative values are valid: Telegram
+// supergroup IDs are negative); returns 0 when s is empty.
+func parseOptionalInt64(s string) (int64, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, nil
+	}
+	n, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("must be a number, got %q", s)
+	}
+	return n, nil
 }
 
 // parsePositiveInt parses s as a positive integer; returns defaultVal when s is empty.

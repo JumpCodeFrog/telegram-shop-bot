@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"strconv"
 
+	"shop_bot/internal/service"
 	"shop_bot/internal/storage"
 )
 
@@ -85,6 +86,8 @@ type PaymentDeps struct {
 	Referrals ReferralAwarder
 	Promos    PersonalPromoIssuer
 	Cache     ProductCacheInvalidator
+	// Metrics is optional; when set, CreateFromCart increments OrdersCreated.
+	Metrics *service.MetricsService
 }
 
 // OrderService provides business logic for managing orders.
@@ -159,6 +162,10 @@ func (s *OrderService) CreateFromCart(ctx context.Context, userID int64, cartVie
 	orderID, err := s.orders.CreateOrder(ctx, order, items)
 	if err != nil {
 		return 0, fmt.Errorf("order service: create order: %w", err)
+	}
+
+	if s.payments.Metrics != nil {
+		s.payments.Metrics.OrdersCreated.Inc()
 	}
 
 	// ClearCart is best-effort: the order is already committed. A failure here

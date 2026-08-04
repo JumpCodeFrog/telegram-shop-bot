@@ -207,13 +207,15 @@ func (b *Bot) onOrderConfirm(chatID, userID int64, msgID int, data, lang string)
 		return
 	}
 
-	b.notifyAdmins(fmt.Sprintf(
-		"🛍 Новый заказ #%d\nПользователь: %d\n💰 $%.2f / %d ⭐",
+	b.notifyAdmins(ctx, AdminEventOrderNew, fmt.Sprintf(
+		b.t("en", "admin_order_new"),
 		orderID, userID, view.TotalUSD, view.TotalStars,
 	))
 
-	text := b.formatPaymentMethodsText(lang, orderID, view, b.cryptoPaymentsEnabled())
-	kb := paymentMethodKeyboard(orderID, b.cryptoPaymentsEnabled(), view.TotalStars, view.TotalUSD, lang, b)
+	// Subscription products are payable with Stars only — hide crypto.
+	cryptoOK := b.cryptoPaymentsEnabled() && !cartHasSubscription(view)
+	text := b.formatPaymentMethodsText(lang, orderID, view, cryptoOK)
+	kb := paymentMethodKeyboard(orderID, cryptoOK, view.TotalStars, view.TotalUSD, lang, b)
 
 	b.sendOrEditStyled(chatID, msgID, text, "HTML", kb)
 }

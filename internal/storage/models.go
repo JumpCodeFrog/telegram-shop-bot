@@ -26,33 +26,50 @@ const (
 	StepStock
 	StepPhoto
 	StepCategory
+	// StepSubType asks whether the product is a one-off purchase or a
+	// 30-day Stars subscription. Appended last so persisted FSM states
+	// serialized with older step numbers keep their meaning.
+	StepSubType
 )
 
 // AddProductState holds the in-progress data for a multi-step add-product dialog.
+// EditProductID != 0 means the dialog only adds photos to an existing product
+// (photos are persisted directly, the other fields stay unused).
 type AddProductState struct {
-	Step        AddProductStep `json:"step"`
-	Name        string         `json:"name"`
-	Description string         `json:"description"`
-	PriceUSD    float64        `json:"price_usd"`
-	PriceStars  int            `json:"price_stars"`
-	Stock       int            `json:"stock"`
-	PhotoURL    string         `json:"photo_url"`
-	CreatedAt   time.Time      `json:"created_at"`
+	Step          AddProductStep `json:"step"`
+	Name          string         `json:"name"`
+	Description   string         `json:"description"`
+	PriceUSD      float64        `json:"price_usd"`
+	PriceStars    int            `json:"price_stars"`
+	Stock         int            `json:"stock"`
+	Photos        []string       `json:"photos"`
+	EditProductID int64          `json:"edit_product_id"`
+	CategoryID    int64          `json:"category_id"`
+	// SubPeriodDays is 30 for a Stars subscription product, 0 for a regular one.
+	SubPeriodDays int       `json:"sub_period_days"`
+	CreatedAt     time.Time `json:"created_at"`
+}
+
+// ReviewState tracks a buyer who has rated a delivered order and may now
+// attach an optional review text (or skip it).
+type ReviewState struct {
+	OrderID int64 `json:"order_id"`
+	Rating  int   `json:"rating"`
 }
 
 type User struct {
-	ID           int64     `db:"id"`
-	TelegramID   int64     `db:"telegram_id"`
-	Username     string    `db:"username"`
-	FirstName    string    `db:"first_name"`
-	LanguageCode string    `db:"language_code"`
-	IsPremium    bool      `db:"is_premium"`
-	BalanceUSD   float64   `db:"balance_usd"`
-	LoyaltyPts   int       `db:"loyalty_pts"`
-	LoyaltyLevel string    `db:"loyalty_level"`
+	ID           int64          `db:"id"`
+	TelegramID   int64          `db:"telegram_id"`
+	Username     string         `db:"username"`
+	FirstName    string         `db:"first_name"`
+	LanguageCode string         `db:"language_code"`
+	IsPremium    bool           `db:"is_premium"`
+	BalanceUSD   float64        `db:"balance_usd"`
+	LoyaltyPts   int            `db:"loyalty_pts"`
+	LoyaltyLevel string         `db:"loyalty_level"`
 	ReferralCode sql.NullString `db:"referral_code"`
-	ReferredBy   *int64    `db:"referred_by"`
-	CreatedAt    time.Time `db:"created_at"`
+	ReferredBy   *int64         `db:"referred_by"`
+	CreatedAt    time.Time      `db:"created_at"`
 }
 
 type Category struct {

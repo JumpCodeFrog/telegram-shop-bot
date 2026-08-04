@@ -39,7 +39,7 @@ func (b *Bot) sendCatalog(chatID int64, msgID int, lang string) {
 	kb := make(StyledKeyboard, 0, len(categories)+1)
 	for _, cat := range categories {
 		label := cat.Emoji + " " + cat.Name
-	kb = append(kb, []StyledButton{b.styledBtn(BtnKeyMenuCatalog, label, fmt.Sprintf("category:%d", cat.ID), StylePrimary)})
+		kb = append(kb, []StyledButton{b.styledBtn(BtnKeyCatalogCategory, label, fmt.Sprintf("category:%d", cat.ID), StylePrimary)})
 	}
 	kb = append(kb, []StyledButton{Btn(b.t(lang, "btn_menu"), "back:menu")})
 
@@ -102,7 +102,7 @@ func (b *Bot) onCategorySelected(chatID, userID int64, msgID int, data, lang str
 		if _, ok := wishlistIDs[p.ID]; ok {
 			label = "❤️ " + p.Name
 		}
-		kb = append(kb, []StyledButton{b.styledBtn(BtnKeyMenuCatalog, label, fmt.Sprintf("product:%d", p.ID), StylePrimary)})
+		kb = append(kb, []StyledButton{b.styledBtn(BtnKeyCatalogProduct, label, fmt.Sprintf("product:%d", p.ID), StylePrimary)})
 	}
 
 	// Pagination row (only if more than one page).
@@ -143,6 +143,10 @@ func (b *Bot) onProductSelected(chatID, userID int64, msgID int, data, lang stri
 	}
 
 	text := b.formatProductText(lang, p)
+	avg, reviewCount := b.productRating(ctx, prodID)
+	if reviewCount > 0 {
+		text += "\n" + b.formatRatingLine(lang, avg, reviewCount)
+	}
 
 	inWishlist, _ := b.wishlist.IsInWishlist(ctx, userID, prodID)
 	quantity, err := b.cartQuantity(ctx, userID, prodID)
@@ -150,15 +154,34 @@ func (b *Bot) onProductSelected(chatID, userID int64, msgID int, data, lang stri
 		b.logger.Warn("get cart quantity for product view", "user_id", userID, "product_id", prodID, "error", err)
 	}
 	kb := b.productKeyboard(p, inWishlist, quantity, lang)
+	if reviewCount > 0 {
+		kb = insertReviewsRow(kb, Btn(b.t(lang, "review_btn_list"), fmt.Sprintf("review:list:%d", prodID)))
+	}
 	kbJSON, _ := json.Marshal(map[string]interface{}{"inline_keyboard": kb})
 	kbStr := string(kbJSON)
 
-	if p.PhotoURL != "" {
+	photos, err := b.photos.List(ctx, prodID)
+	if err != nil {
+		b.logger.Warn("list product photos", "product_id", prodID, "error", err)
+	}
+	if len(photos) > 1 {
+		// Gallery: album via sendMediaGroup, then the card text with buttons
+		// as a separate message (albums cannot carry a reply markup).
+		b.sendProductGallery(chatID, msgID, photos, text, kb)
+		return
+	}
+
+	cover := p.PhotoURL
+	if cover == "" && len(photos) == 1 {
+		cover = photos[0].FileID
+	}
+
+	if cover != "" {
 		if msgID > 0 {
 			// EditMessageMedia with styled keyboard via raw API.
 			mediaJSON, _ := json.Marshal(map[string]interface{}{
 				"type":       "photo",
-				"media":      p.PhotoURL,
+				"media":      cover,
 				"caption":    text,
 				"parse_mode": "HTML",
 			})
@@ -172,7 +195,7 @@ func (b *Bot) onProductSelected(chatID, userID int64, msgID int, data, lang stri
 				_, _ = b.api.Request(tgbotapi.NewDeleteMessage(chatID, msgID))
 				_, _ = b.api.MakeRequest("sendPhoto", tgbotapi.Params{
 					"chat_id":      strconv.FormatInt(chatID, 10),
-					"photo":        p.PhotoURL,
+					"photo":        cover,
 					"caption":      text,
 					"parse_mode":   "HTML",
 					"reply_markup": kbStr,
@@ -181,7 +204,7 @@ func (b *Bot) onProductSelected(chatID, userID int64, msgID int, data, lang stri
 		} else {
 			_, _ = b.api.MakeRequest("sendPhoto", tgbotapi.Params{
 				"chat_id":      strconv.FormatInt(chatID, 10),
-				"photo":        p.PhotoURL,
+				"photo":        cover,
 				"caption":      text,
 				"parse_mode":   "HTML",
 				"reply_markup": kbStr,
@@ -190,6 +213,36 @@ func (b *Bot) onProductSelected(chatID, userID int64, msgID int, data, lang stri
 	} else {
 		b.sendOrEditStyled(chatID, msgID, text, "HTML", kb)
 	}
+}
+
+// sendProductGallery sends a product with more than one photo: an album of up
+// to storage.MaxProductPhotos images followed by a separate styled text card.
+// A previous card message (msgID > 0) is deleted because a text/photo message
+// cannot be edited into an album.
+func (b *Bot) sendProductGallery(chatID int64, msgID int, photos []storage.ProductPhoto, text string, kb StyledKeyboard) {
+	if msgID > 0 {
+		_, _ = b.api.Request(tgbotapi.NewDeleteMessage(chatID, msgID))
+	}
+	if len(photos) > storage.MaxProductPhotos {
+		photos = photos[:storage.MaxProductPhotos]
+	}
+	media := make([]interface{}, 0, len(photos))
+	for _, ph := range photos {
+		media = append(media, tgbotapi.NewInputMediaPhoto(photoFileData(ph.FileID)))
+	}
+	if _, err := b.api.SendMediaGroup(tgbotapi.NewMediaGroup(chatID, media)); err != nil {
+		b.logger.Warn("send product media group", "chat_id", chatID, "error", err)
+	}
+	b.sendOrEditStyled(chatID, 0, text, "HTML", kb)
+}
+
+// photoFileData converts a stored photo reference (Telegram file_id or an
+// http(s) URL) into the request payload type tgbotapi expects.
+func photoFileData(ref string) tgbotapi.RequestFileData {
+	if strings.HasPrefix(ref, "http://") || strings.HasPrefix(ref, "https://") {
+		return tgbotapi.FileURL(ref)
+	}
+	return tgbotapi.FileID(ref)
 }
 
 // productKeyboard builds the styled inline keyboard for a product detail view.
@@ -207,7 +260,7 @@ func (b *Bot) productKeyboard(p *storage.Product, inWishlist bool, quantity int,
 		},
 		{b.styledBtn(BtnKeyProductAdd, b.t(lang, "btn_add_to_cart"), fmt.Sprintf("cart:add:%d", p.ID), StyleSuccess)},
 		{
-			Btn(wishBtnLabel, fmt.Sprintf("wish:%d", p.ID)),
+			b.styledBtn(BtnKeyProductWish, wishBtnLabel, fmt.Sprintf("wish:%d", p.ID), StyleDefault),
 			Btn(b.t(lang, "btn_back"), fmt.Sprintf("back:category:%d", p.CategoryID)),
 			Btn(b.t(lang, "btn_menu"), "back:menu"),
 		},
@@ -251,6 +304,9 @@ func (b *Bot) refreshProductKeyboard(chatID, userID int64, msgID int, prodID int
 	}
 
 	kb := b.productKeyboard(p, inWishlist, quantity, lang)
+	if _, reviewCount := b.productRating(ctx, prodID); reviewCount > 0 {
+		kb = insertReviewsRow(kb, Btn(b.t(lang, "review_btn_list"), fmt.Sprintf("review:list:%d", prodID)))
+	}
 	kbJSON, err := json.Marshal(map[string]interface{}{"inline_keyboard": kb})
 	if err != nil {
 		b.logger.Error("marshal product keyboard", "error", err)

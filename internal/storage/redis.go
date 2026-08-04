@@ -17,6 +17,11 @@ type FSMStore interface {
 	SetPromoState(ctx context.Context, userID int64, enteredAt time.Time, ttl time.Duration) error
 	GetPromoState(ctx context.Context, userID int64) (time.Time, error)
 	DelPromoState(ctx context.Context, userID int64) error
+
+	SetReviewState(ctx context.Context, userID int64, state *ReviewState, ttl time.Duration) error
+	// GetReviewState returns nil when the user has no pending review state.
+	GetReviewState(ctx context.Context, userID int64) (*ReviewState, error)
+	DelReviewState(ctx context.Context, userID int64) error
 }
 
 type RedisFSMStore struct {
@@ -85,5 +90,35 @@ func (s *RedisFSMStore) GetPromoState(ctx context.Context, userID int64) (time.T
 
 func (s *RedisFSMStore) DelPromoState(ctx context.Context, userID int64) error {
 	key := fmt.Sprintf("fsm:promo:%d", userID)
+	return s.client.Del(ctx, key).Err()
+}
+
+func (s *RedisFSMStore) SetReviewState(ctx context.Context, userID int64, state *ReviewState, ttl time.Duration) error {
+	data, err := json.Marshal(state)
+	if err != nil {
+		return err
+	}
+	key := fmt.Sprintf("fsm:review:%d", userID)
+	return s.client.Set(ctx, key, data, ttl).Err()
+}
+
+func (s *RedisFSMStore) GetReviewState(ctx context.Context, userID int64) (*ReviewState, error) {
+	key := fmt.Sprintf("fsm:review:%d", userID)
+	val, err := s.client.Get(ctx, key).Result()
+	if err == redis.Nil {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var state ReviewState
+	if err := json.Unmarshal([]byte(val), &state); err != nil {
+		return nil, err
+	}
+	return &state, nil
+}
+
+func (s *RedisFSMStore) DelReviewState(ctx context.Context, userID int64) error {
+	key := fmt.Sprintf("fsm:review:%d", userID)
 	return s.client.Del(ctx, key).Err()
 }

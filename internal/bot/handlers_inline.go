@@ -42,7 +42,14 @@ func (b *Bot) handleInlineQuery(iq *tgbotapi.InlineQuery) {
 		if !p.IsActive || p.Stock <= 0 {
 			continue
 		}
-		results = append(results, b.inlineResultForProduct(lang, p))
+		cover := p.PhotoURL
+		if cover == "" {
+			// Fall back to the first gallery photo when no cover is set.
+			if photos, err := b.photos.List(ctx, p.ID); err == nil && len(photos) > 0 {
+				cover = photos[0].FileID
+			}
+		}
+		results = append(results, b.inlineResultForProduct(lang, p, cover))
 	}
 
 	_, _ = b.api.Request(tgbotapi.InlineConfig{
@@ -52,12 +59,12 @@ func (b *Bot) handleInlineQuery(iq *tgbotapi.InlineQuery) {
 	})
 }
 
-func (b *Bot) inlineResultForProduct(lang string, p *storage.Product) interface{} {
+func (b *Bot) inlineResultForProduct(lang string, p *storage.Product, cover string) interface{} {
 	id := fmt.Sprintf("prod_%d", p.ID)
 	caption := b.formatProductCaption(lang, p)
 
-	if p.PhotoURL != "" {
-		r := tgbotapi.NewInlineQueryResultCachedPhoto(id, p.PhotoURL)
+	if cover != "" {
+		r := tgbotapi.NewInlineQueryResultCachedPhoto(id, cover)
 		r.Title = p.Name
 		r.Caption = caption
 		r.ParseMode = "HTML"

@@ -16,16 +16,23 @@ type memoryPromoEntry struct {
 	expiresAt time.Time
 }
 
+type memoryReviewEntry struct {
+	state     *ReviewState
+	expiresAt time.Time
+}
+
 type MemoryFSMStore struct {
 	mu          sync.RWMutex
 	addProducts map[int64]memoryAddProductEntry
 	promos      map[int64]memoryPromoEntry
+	reviews     map[int64]memoryReviewEntry
 }
 
 func NewMemoryFSMStore() *MemoryFSMStore {
 	return &MemoryFSMStore{
 		addProducts: make(map[int64]memoryAddProductEntry),
 		promos:      make(map[int64]memoryPromoEntry),
+		reviews:     make(map[int64]memoryReviewEntry),
 	}
 }
 
@@ -92,5 +99,38 @@ func (s *MemoryFSMStore) DelPromoState(_ context.Context, userID int64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.promos, userID)
+	return nil
+}
+
+func (s *MemoryFSMStore) SetReviewState(_ context.Context, userID int64, state *ReviewState, ttl time.Duration) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.reviews[userID] = memoryReviewEntry{
+		state:     state,
+		expiresAt: time.Now().Add(ttl),
+	}
+	return nil
+}
+
+func (s *MemoryFSMStore) GetReviewState(_ context.Context, userID int64) (*ReviewState, error) {
+	s.mu.RLock()
+	entry, ok := s.reviews[userID]
+	s.mu.RUnlock()
+	if !ok {
+		return nil, nil
+	}
+	if time.Now().After(entry.expiresAt) {
+		s.mu.Lock()
+		delete(s.reviews, userID)
+		s.mu.Unlock()
+		return nil, nil
+	}
+	return entry.state, nil
+}
+
+func (s *MemoryFSMStore) DelReviewState(_ context.Context, userID int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.reviews, userID)
 	return nil
 }

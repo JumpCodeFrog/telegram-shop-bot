@@ -79,6 +79,25 @@ func (s *I18nService) T(lang, key string) string {
 	return key
 }
 
+// Dict returns the full translation map for lang with English fallback:
+// every English key is present, overridden by the requested locale where
+// translated. The result is a copy the caller may own.
+func (s *I18nService) Dict(lang string) map[string]string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	out := make(map[string]string, len(s.locales["en"]))
+	for k, v := range s.locales["en"] {
+		out[k] = v
+	}
+	if translations, ok := s.locales[normalizeLang(lang)]; ok {
+		for k, v := range translations {
+			out[k] = v
+		}
+	}
+	return out
+}
+
 // Tf is a convenience wrapper that looks up the translation for key and formats
 // it with fmt.Sprintf using the provided args. Useful for keys that contain %s/%d.
 func (s *I18nService) Tf(lang, key string, args ...any) string {
