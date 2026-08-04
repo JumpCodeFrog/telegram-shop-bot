@@ -6,7 +6,59 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [Unreleased] — v1.2.0
+## [2.0.0] — 2026-08-04
+
+### ⚠️ Breaking Changes
+
+- **`OrderService.ConfirmPayment` signature** — was `ConfirmPayment(ctx, orderID, method, paymentID) error`, now returns `(*shop.PaymentOutcome, error)`. The outcome reports everything that happened during confirmation (points awarded, level-up, referral bonus, personal promo issued); sending user-facing messages based on it is the bot layer's job. All three confirmation paths (Stars `successful_payment`, CryptoBot webhook, CryptoBot polling) were updated.
+- **Worker constructors changed:**
+  - `NewCryptoBotPollingWorker(crypto, orders PaymentConfirmer, notify func(ctx, *shop.PaymentOutcome), interval)` — the poller now confirms through `OrderService` (same loyalty/referral/cache side effects as webhooks) and reports outcomes via callback instead of writing to the order store directly.
+  - `NewCartRecoveryWorker(bot, cart, promos, users, i18n, metrics, interval, …)` — gained `*service.I18nService` (reminders in the user's language) and `*service.MetricsService` (gauges).
+  - `NewLoyaltyWorker(store, svc, rdb, bot, i18n, users)` — gained a `storage.UserStore`: the notification language is read from the DB instead of hardcoded `"ru"`.
+- **Default language is now `en`** — an empty or unknown Telegram `language_code` falls back to English (previously Russian), as the docs always promised. Language tags are normalized to their primary subtag (`ru-RU` → `ru`, `zh-hans-CN` → `zh`).
+- **WAL journal mode** — the SQLite DSN now sets `journal_mode=WAL`, `busy_timeout=5000`, `foreign_keys=1`. The data directory gains `*.db-wal` / `*.db-shm` files (gitignored); naive `cp shop.db` backups are no longer safe — use the built-in `VACUUM INTO` backups (see Reliability).
+- **Dead code removed** — `internal/service/payment*.go` stub adapters (`VerifyPayment` → always `true`), the unused duplicate `internal/bot/middleware/admin.go`, the root `migration/` directory, and 17 dead i18n keys (including the balance leftovers and the `$0.00` line in the profile).
+
+### Critical Fixes
+
+- **False payment confirmation in the CryptoBot polling worker** — the 30-second poller fetched `active` invoices and unconditionally flipped orders `pending → paid`, confirming *unpaid* orders. Now only invoices with `status == "paid"` are processed; the rest are logged at debug level.
+- **Pre-checkout approved without validation** — Stars `pre_checkout_query` was always answered `ok=true`. Now the referenced order must exist, belong to the paying user, still be `pending`, and its `TotalStars` must equal the invoice amount — otherwise the checkout is declined with a localized reason.
+- **Stock check ignored quantity** — `CreateFromCart` only required `stock > 0`; ordering 5 of an item with 1 in stock passed. Now `stock >= quantity` is enforced per item and violations fail with `*shop.ErrInsufficientStock{ProductName, Have, Want}` and a human message (`error_insufficient_stock`).
+- **Graceful shutdown** — every background goroutine (workers + HTTP server) is registered in a named worker group; shutdown stops updates, shuts the HTTP server down, drains workers for up to 10 s (stuck workers are logged by name) and only then closes the DB.
+- **Loyalty worker hardening** — no more type-assertion panics on malformed Redis Stream messages (garbage is logged and XAck'ed, not retried forever); `XReadGroup` failures back off exponentially 1 s → 30 s; `XAck` errors are logged.
+- **Stale product cache after payment** — confirming a payment now invalidates the cached products of the order (`ProductCacheInvalidator`; no-op without Redis). Previously the cached stock could stay wrong for up to an hour.
+- **CryptoBot webhook retry storm** — idempotent repeats (`ErrOrderStatusConflict` / `ErrNotFound`) now return HTTP 200 instead of 500, so CryptoBot stops re-delivering forever; the webhook secret is compared with `subtle.ConstantTimeCompare`.
+- **Subscriptions were never persisted** (found by the E2E suite) — migration `014` declared `subscriptions.user_id REFERENCES users(id)`, but the code stores the buyer's *Telegram* ID there (same convention as `orders.user_id`), so with `foreign_keys=1` every real insert failed. Migration `016_subscriptions_user_fk.sql` rebuilds the table without the bogus FK, keeping data and indexes.
+- **Referral link never attached the referrer** (found by the E2E suite) — `ReferralStore.SetReferrer` ran `UPDATE users … WHERE id = ?` with a Telegram ID, so `referred_by` was never set. It now addresses the user by `telegram_id`; the first referrer wins, and repeated `/start` deep links no longer inflate `referral_stats`.
+
+### Loyalty & Referrals (now actually working)
+
+- **Cashback on every paid order** — `ConfirmPayment` awards `CalculateCashback(level, totalUSD)` points (1–10 % by level), records the transaction and runs `CheckAndUpgradeLevel`; the buyer gets `loyalty_points_awarded` / `loyalty_level_up` messages.
+- **Referral bonus on the first paid order** of an invited user: the referrer receives **100 points** (`referral_bonus_referrer`), the newcomer receives a personal one-off promo code `REF-XXXXXXXX` (−10 %, 30 days, `referral_welcome_promo`). Idempotent even under concurrent confirmations: `referral_awards` keyed by `referred_user_id` + `INSERT OR IGNORE`.
+- **Personal promo codes** — `promo_codes.bound_user_id`: a bound code is visible and applicable only to its owner (NULL = public, behavior unchanged).
+- **`/referral` screen** (also `ref:open` callback and menu/profile button) — personal link `t.me/<bot>?start=ref_<code>`, invited count, total points earned, a "Share" button (`switch_inline_query`).
+- **Profile** shows real points/level and progress to the next level; referral codes are generated with `crypto/rand`.
+
+### UX / Main Menu
+
+- **2-column main menu**: [🛍 Catalog | 🔍 Search], [🛒 Cart | ❤️ Wishlist], [📦 Orders | 👤 Profile], [🎁 Referral | 🆘 Support], [📄 Terms].
+- **`/search`** — every hit is a button opening the product card; Back | Menu row on all branches (results, empty, hint).
+- **`/wishlist`** — each item is a product button plus a ✖ remove button; an empty wishlist offers a catalog button.
+- **6 new configurable button keys** — `menu_search`, `menu_wishlist`, `menu_referral`, `menu_terms`, `catalog_category`, `catalog_product` (categories and product lists are now styled independently of the catalog menu button); `/btnstyle` now manages 18 keys, and `product_wish` is actually applied on the product card.
+- **Navigation fixes** — `back:` targets `wishlist` and `search`; Back from orders/support/terms leads to the menu; `handleCallback` is nil-safe for callbacks without an attached message.
+- **`SetMyCommands`** now registers `/mysubs`, `/wishlist` and `/referral` too.
+
+### Reviews & Ratings
+
+- **Rating request after delivery** — once an admin marks an order delivered, the buyer gets a 1–5 ⭐ row (`review:<orderID>:<rating>`), then an optional free-text step (FSM, with Skip).
+- **Only verified buyers** can rate (a delivered order with the product is required); one review per product per user — re-rating replaces via upsert.
+- **Product card** shows `⭐ 4.7 (12)` when reviews exist and a "Reviews" button (`review:list:<productID>`) with the last 3 texts.
+- **`/reviews` (admin)** — the 10 most recent reviews with delete buttons (`review:del:<id>`).
+
+### Product Photos
+
+- **Admin wizard accepts photos as Telegram messages** (largest `PhotoSize` is stored as `file_id`); URL input remains an alternative; up to **10 photos** per product; edit mode manages the photo list with per-photo delete buttons.
+- **Gallery on the product card** — one photo renders as before; several photos are sent as a media group with the card (and its buttons) as a separate message. Inline mode uses the first photo.
 
 ### Stars Subscriptions (recurring)
 
@@ -16,6 +68,54 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **`worker/subscription.go`** — hourly worker: marks overdue subscriptions `expired` and sends a one-shot `sub_expiring_soon` reminder 72h before expiry (`MarkReminded` only after a successful send, so failed reminders are retried).
 - **Admin wizard** — the add-product dialog got a final step: regular product vs. 30-day subscription.
 - ⚠️ **Recurring payments require live verification** («требует проверки в бою»): renewal `successful_payment` updates, `subscription_expiration_date` delivery, and `editUserStarSubscription` behavior cannot be exercised against the real Bot API from tests.
+
+### Mini App + REST API
+
+- **`web/app/`** — a vanilla-JS Mini App embedded into the binary (no build step): catalog → product card (photos, price, rating) → cart (+/−/remove) → checkout via `Telegram.WebApp.openInvoice` (Stars) or `openLink` (crypto). Theme from `themeParams`, strings served by the bot (`GET /api/i18n?lang=`).
+- **REST API `/api/*`** (`internal/webapi/`) — `GET /api/me`, `GET /api/catalog`, `GET /api/products?category=&page=`, `GET /api/products/{id}` (with rating and photos), `GET/POST/DELETE /api/cart`, `POST /api/checkout {method: stars|crypto, promo?}` → `{invoice_link}`, `GET /api/photo/{file_id}` (proxies `getFile`). JSON errors are `{"error":"<i18n key>"}`; request bodies are capped at 64 KB.
+- **Authentication** — `Authorization: tma <initData>` validated per the Telegram spec (secret = HMAC-SHA256(key="WebAppData", msg=botToken); sorted data-check-string; `auth_date` TTL 1 hour), covered by the official test vector.
+- **Opt-in via `WEBAPP_URL`** — when set (must be public HTTPS), `/app` (static) and `/api/` are mounted on the existing :8080 server and the bot's menu button becomes a `web_app` button. Without it nothing is mounted and the bot works exactly as before (a warning is logged).
+
+### Analytics & Metrics
+
+- **`/analytics`** — 14-day revenue chart with text bars (`▇`), top-10 buyers (total spent, order count) and a promo-code report (uses, total discount); fully localized via `admin_*` keys.
+- **`/export_orders [from] [to]`** — CSV export now accepts an optional date range (`/export_orders 2026-01-01 2026-02-01`); format errors are reported in a human way.
+- **Live Prometheus metrics** — `OrdersCreated` incremented in `CreateFromCart`, `ActiveCarts` gauge recomputed by the cart-recovery worker each tick, `CartsAbandoned` incremented when a reminder is sent; new panels in `monitoring/grafana_dashboard.json`.
+
+### Admin Notifications via Topics
+
+- **`notifyAdmins(ctx, kind, text)`** (`internal/bot/notify.go`) — with `ADMIN_GROUP_ID` configured, order events (new / paid / delivered) go to the supergroup, optionally routed into forum topics via `TOPIC_ORDERS_NEW` / `TOPIC_ORDERS_PAID` / `TOPIC_ORDERS_DELIVERED`; without it, the old behavior remains (DM to every admin).
+- Group notifications use English i18n keys (`admin_order_new`, `admin_order_paid_*`); the last hardcoded Russian admin texts are gone.
+
+### Internationalisation
+
+- **All 5 locales complete** — `ru`, `en`, `es`, `de`, `zh` now have full key parity, including the admin panel (`admin_*` keys, admin's own `language_code` is respected) and worker messages (cart recovery, loyalty level-up in the recipient's DB language). The parity test covers all 5 locales plus a reverse "key used in code exists in ru.json" check.
+- Truncated es/de/zh translations (terms, onboarding, promo, error, paysupport texts) were completed properly, not machine-stubbed.
+
+### Reliability & Ops
+
+- **Backups without the sqlite3 CLI** — the daily backup runs `VACUUM INTO 'backups/shop_YYYYMMDD_HHMMSS.db'` on the live connection pool, so it works in scratch Docker images; rotation keeps the **7 newest** files.
+- **HTTP server & workers** — one shared HTTP server on :8080 serves `/health`, `/metrics`, Telegram/CryptoBot webhooks, and (opt-in) `/app` + `/api/`; everything shuts down in order (see Critical Fixes).
+
+### Testing
+
+- Property test (rapid): double/concurrent `ConfirmPayment` of one order ⇒ exactly one stock decrement, one points award, one `referral_awards` row.
+- Unit tests: polling worker (paid/active/mixed invoices), all four pre-checkout rejections + happy path, Mini App `initData` validation against the official Telegram vector, i18n tag normalization, backup rotation, review/subscription stores, WAL pragma.
+- End-to-end scenarios (`internal/bot`, mock Bot API): full purchase flow with points and review, referral first-purchase bonus (and no second bonus), subscription payment bookkeeping.
+
+### Migrations summary
+
+| File | Description |
+|------|-------------|
+| `012_reviews.sql` | `reviews` table — rating 1..5, optional text, `UNIQUE(product_id, user_id)` |
+| `013_product_photos.sql` | `product_photos` — Telegram `file_id` gallery, `ON DELETE CASCADE` |
+| `014_subscriptions.sql` | `products.sub_period_days` + `subscriptions` table with indexes |
+| `015_referral_awards.sql` | `promo_codes.bound_user_id` (personal promos) + `referral_awards` idempotency table |
+| `016_subscriptions_user_fk.sql` | Rebuilds `subscriptions` without the incorrect `user_id → users(id)` FK (column holds Telegram IDs) |
+
+---
+
+## [1.2.0]
 
 ### Admin: Button Style Customization
 

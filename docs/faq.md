@@ -4,7 +4,7 @@
 
 ### Can I run this without Redis?
 
-No — Redis is required for FSM state (the add-product wizard and promo code input) and caching.  
+Yes. If Redis is unreachable at startup, the bot falls back to an in-memory FSM store and disables the Redis-dependent loyalty notification worker — everything else works. Redis is still recommended in production for persistent dialog state and product caching.  
 The easiest way to get Redis locally: `docker run -d -p 6379:6379 redis:7-alpine`
 
 ### What database does it use?
@@ -43,7 +43,7 @@ Leave `CRYPTOBOT_TOKEN` empty. The "Pay with Crypto" button is hidden automatica
 ### How do I add products?
 
 As admin, send `/addproduct` — the bot guides you through a step-by-step dialog:  
-name → description → price (USD) → stock → photo (or `/skip`) → category.
+name → description → price (USD) → stock → photos (send photos as messages or a URL, up to 10; `/done` or `/skip`) → category → type (regular product or 30-day Stars subscription).
 
 ### How do I add categories?
 
@@ -76,8 +76,8 @@ See [`CONTRIBUTING.md`](../CONTRIBUTING.md) for details on submitting translatio
 
 ### What language codes are supported?
 
-Any IETF language tag that Telegram sends (e.g. `en`, `ru`, `de`, `zh`, `es`).  
-As long as a matching `.json` file exists in `LOCALES_DIR`, it will be used.
+The bot ships with 5 locales: `ru`, `en`, `es`, `de`, `zh`.  
+Any IETF language tag that Telegram sends is normalized to its primary subtag (`ru-RU` → `ru`, `zh-hans-CN` → `zh`); as long as a matching `.json` file exists in `LOCALES_DIR`, it will be used. Anything else falls back to `en`.
 
 ---
 
@@ -95,11 +95,13 @@ Logs: `docker compose logs -f bot`
 
 ### How do I back up the database?
 
-The `data/` volume contains the SQLite file. For automated backups:
-```bash
-cp data/shop.db backups/shop_$(date +%Y%m%d_%H%M%S).db
+Backups are automatic: a background worker runs `VACUUM INTO 'backups/shop_YYYYMMDD_HHMMSS.db'` every 24 hours on the live connection (no `sqlite3` binary needed — works inside scratch Docker images) and keeps the 7 newest files. The `backups/` volume is already created by Docker Compose.
+
+To take a manual snapshot, use the same mechanism from any SQLite client:
+```sql
+VACUUM INTO 'backups/manual.db';
 ```
-Or use the `backups/` volume that Docker Compose already creates.
+> ⚠️ Don't just `cp data/shop.db` while the bot is running — the database uses WAL mode, so a plain copy without the `-wal`/`-shm` files can be inconsistent.
 
 ### How do I update to a new version?
 
@@ -129,6 +131,6 @@ make test
 make coverage   # with HTML coverage report
 ```
 
-### The bot sends messages in Russian — how do I change the default language?
+### What is the default language?
 
-The bot mirrors the user's Telegram language. To test a specific language, change your Telegram language setting or use the `lang` field in integration tests.
+English. The bot mirrors the user's Telegram language (`language_code`) across the 5 shipped locales and falls back to `en` when the language is empty or has no locale file. To test a specific language, change your Telegram language setting or use the `lang` field in integration tests.

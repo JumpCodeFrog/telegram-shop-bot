@@ -26,6 +26,13 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+// Injected by goreleaser via -ldflags "-X main.version=… -X main.commit=… -X main.date=…".
+var (
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
+)
+
 func logLevel(level string) slog.Level {
 	switch level {
 	case "debug":
@@ -118,6 +125,7 @@ func main() {
 	}
 	logger := slog.New(handler)
 	slog.SetDefault(logger)
+	slog.Info("shop_bot starting", "version", version, "commit", commit, "built", date)
 
 	// 3. Initialize DB
 	db, err := storage.New(cfg.DBPath)

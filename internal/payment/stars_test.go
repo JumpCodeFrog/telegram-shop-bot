@@ -60,7 +60,6 @@ func TestInvoiceStartParameter(t *testing.T) {
 	}
 }
 
-
 // mockOrderGetter serves a single order (or an error) for pre-checkout tests.
 type mockOrderGetter struct {
 	order *storage.Order

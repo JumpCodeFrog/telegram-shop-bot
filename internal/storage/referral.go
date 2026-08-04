@@ -52,18 +52,29 @@ func (s *ReferralStore) GetLeaderboard(ctx context.Context, limit int) ([]User, 
 	return users, nil
 }
 
-func (s *ReferralStore) SetReferrer(ctx context.Context, userID, referrerID int64) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE users SET referred_by = ? WHERE id = ? AND referred_by IS NULL`, referrerID, userID)
+// SetReferrer links a referred user (addressed by Telegram ID — that is all
+// the bot layer has at /start time) to a referrer's internal users.id.
+// The first referrer wins: a repeated deep link neither overwrites the link
+// nor inflates the referrer's stats.
+func (s *ReferralStore) SetReferrer(ctx context.Context, telegramID, referrerID int64) error {
+	res, err := s.db.ExecContext(ctx, `UPDATE users SET referred_by = ? WHERE telegram_id = ? AND referred_by IS NULL`, referrerID, telegramID)
 	if err != nil {
 		return err
 	}
-	
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return nil // already referred (or unknown user) — keep stats untouched
+	}
+
 	// Initialize or update stats for referrer
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO referral_stats (user_id, total_referrals) VALUES (?, 1)
 		ON CONFLICT(user_id) DO UPDATE SET total_referrals = total_referrals + 1
 	`, referrerID)
-	
+
 	return err
 }
 

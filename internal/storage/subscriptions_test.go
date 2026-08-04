@@ -145,9 +145,9 @@ func TestSubDueForReminder(t *testing.T) {
 	pPast := seedProduct(t, db, "Past")
 	pCanceled := seedProduct(t, db, "Canceled")
 
-	upsertSub(t, store, userID, pDue, "ch-due", "", 10*time.Hour)        // inside window
-	upsertSub(t, store, userID, pFar, "ch-far", "", 72*time.Hour)        // outside window
-	upsertSub(t, store, userID, pPast, "ch-past", "", -time.Hour)        // already expired
+	upsertSub(t, store, userID, pDue, "ch-due", "", 10*time.Hour) // inside window
+	upsertSub(t, store, userID, pFar, "ch-far", "", 72*time.Hour) // outside window
+	upsertSub(t, store, userID, pPast, "ch-past", "", -time.Hour) // already expired
 	upsertSub(t, store, userID, pCanceled, "ch-can", SubStatusCanceled, 10*time.Hour)
 
 	due, err := store.DueForReminder(ctx, 24*time.Hour)

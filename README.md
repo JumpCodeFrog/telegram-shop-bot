@@ -22,7 +22,7 @@
 
 ## 🇬🇧 English
 
-A full-featured e-commerce bot for Telegram — catalog, cart, Telegram Stars & USDT payments, promo codes, wishlist, loyalty program, referral system, and admin panel. Ships as a single binary. No CGO. No bloat.
+A full-featured e-commerce bot for Telegram — catalog, cart, Telegram Stars & USDT payments, Stars subscriptions, reviews & ratings, promo codes, wishlist, working loyalty & referral programs, a built-in Mini App, and an admin panel. 5 languages out of the box. Ships as a single binary. No CGO. No bloat.
 
 ### ✨ Features
 
@@ -31,34 +31,42 @@ A full-featured e-commerce bot for Telegram — catalog, cart, Telegram Stars & 
 <td width="50%">
 
 **🛍️ Buyer**
-- Product catalog with categories
+- Product catalog with categories & photo galleries
 - Cart & checkout inside Telegram
 - **Telegram Stars** payments (built-in)
+- **Stars subscriptions** — recurring 30-day products, `/mysubs` to manage
 - **USDT via CryptoBot** (optional)
-- Promo codes with category limits
+- **Mini App** — full shop UI inside Telegram (opt-in via `WEBAPP_URL`)
+- **Reviews & ratings** — 1–5 ⭐ after delivery, average shown on the product card
+- Promo codes with category limits + personal one-off codes
 - Wishlist — price drop & restock alerts
 - Search: `/search <query>`
-- Referral program with anti-fraud
+- **Loyalty program** — 1–10 % cashback in points, levels
+- **Referral program** — `/referral` link; 100 points for the referrer, −10 % promo for the friend
 
 </td>
 <td width="50%">
 
 **🔧 Admin**
-- Manage products & categories
+- Manage products & categories (photos straight from Telegram, up to 10 per product)
 - Order management & status updates
 - Promo code CRUD
-- Analytics with CSV export
+- Review moderation: `/reviews`
+- Analytics: `/analytics` (14-day revenue chart, top buyers, promo report), CSV export with date range
+- **Topics notifications** — order events into a supergroup / forum topics (`ADMIN_GROUP_ID`)
 - **Button style customization** — `/btnstyle` interactive menu to set Primary/Success/Danger/Default per button
 - Admin panel: `/admin`
 
 **⚙️ Infrastructure**
-- SQLite embedded DB, auto-migrations
+- SQLite embedded DB (WAL), auto-migrations
 - Redis FSM (falls back to in-memory)
+- Automatic daily backups (`VACUUM INTO`, keeps 7) — no sqlite3 binary needed
+- Graceful shutdown of all workers
 - Prometheus + Grafana metrics
 - Health check at `:8080/health`
 - Polling or Webhook (auto-detected)
 - Docker multi-stage, non-root runtime
-- i18n: Russian & English out of the box
+- i18n: 🇬🇧 🇷🇺 🇪🇸 🇩🇪 🇨🇳 — 5 languages out of the box
 
 </td>
 </tr>
@@ -135,6 +143,13 @@ go run ./cmd/bot            # start
 | `WEBHOOK_URL` | no | — | Public HTTPS URL for webhook mode |
 | `TELEGRAM_WEBHOOK_SECRET` | no | — | Webhook verification secret |
 | `LOCALES_DIR` | no | `locales` | Path to translations folder |
+| `WEBAPP_URL` | no | — | Public HTTPS URL of the Mini App; empty = Mini App disabled |
+| `ADMIN_GROUP_ID` | no | — | Supergroup ID for admin order notifications (instead of DMs) |
+| `TOPIC_ORDERS_NEW` | no | — | Forum topic ID for new-order notifications |
+| `TOPIC_ORDERS_PAID` | no | — | Forum topic ID for paid-order notifications |
+| `TOPIC_ORDERS_DELIVERED` | no | — | Forum topic ID for delivered-order notifications |
+| `OUTBOUND_WEBHOOK_URL` | no | — | External URL receiving `order.paid` / `order.delivered` events |
+| `OUTBOUND_WEBHOOK_SECRET` | no | — | `X-Webhook-Secret` header value for outbound webhooks |
 
 > 💡 No `WEBHOOK_URL` → polling mode (great for development).  
 > No Redis → automatic fallback to in-memory state.
@@ -150,15 +165,33 @@ go run ./cmd/bot            # start
 | `/search <query>` | Search products |
 | `/cart` | Your cart |
 | `/orders` | Order history |
+| `/mysubs` | Your Stars subscriptions (with cancel buttons) |
 | `/profile` | Your profile & loyalty status |
+| `/referral` | Your referral link, invited count & earned points |
 | `/wishlist` | Your wishlist |
 | `/support` | Contact support |
 | `/paysupport` | Payment help |
 | `/terms` | Terms of service |
 | `/help` | List of commands |
 | `/cancel` | Cancel current action |
-| `/admin` | Admin panel *(admins only)* |
-| `/btnstyle` | Customize button colors *(admins only)* |
+
+**Admin commands** *(require your ID in `ADMIN_IDS`)*:
+
+| Command | Description |
+|---|---|
+| `/admin` | Admin panel |
+| `/addproduct` | Add a product (step-by-step wizard, photos & subscriptions supported) |
+| `/editproduct <id> <field> <value>` | Edit a product |
+| `/deleteproduct <id>` | Delete a product |
+| `/addcategory <name>` | Add a category |
+| `/editcategory` / `/deletecategory` / `/listcategories` | Manage categories |
+| `/addpromo` / `/listpromos` / `/deletepromo` | Manage promo codes |
+| `/orders_all` | All orders |
+| `/setdelivered <id>` | Mark an order delivered (triggers review request) |
+| `/reviews` | Latest reviews with delete buttons |
+| `/analytics` | Revenue chart, top buyers, promo report |
+| `/export_orders [from] [to]` | CSV export, optional date range |
+| `/btnstyle` | Customize button colors |
 
 ---
 
@@ -168,6 +201,20 @@ go run ./cmd/bot            # start
 
 **CryptoBot (USDT)** — optional. Set `CRYPTOBOT_TOKEN` to enable.  
 Background worker polls payment status every 30 seconds. Signatures verified via HMAC-SHA256.
+
+**Stars subscriptions** — a product created as a "30-day subscription" is sold as a recurring Stars payment (`subscription_period=2592000`). Subscriptions are Stars-only; users manage them via `/mysubs`.
+
+---
+
+### 📱 Mini App
+
+A lightweight web shop (vanilla JS, embedded in the binary — no build step) that opens right inside Telegram: catalog, product cards with photos and ratings, cart, and checkout via `openInvoice` (Stars) or CryptoBot.
+
+1. Serve the bot's port 8080 behind a public **HTTPS** domain (Telegram requires HTTPS for Web Apps).
+2. Set `WEBAPP_URL=https://shop.example.com/app` in `.env`.
+3. Restart — the bot's menu button becomes the Mini App, static files are served at `/app/`, and the REST API at `/api/*` (authorized via Telegram `initData`, HMAC-verified).
+
+> Without `WEBAPP_URL` the Mini App and its API are not mounted at all — the bot works exactly as before.
 
 ---
 
@@ -234,13 +281,15 @@ telegram-shop-bot/
 │   ├── telegram-smoke/    # Smoke test via Telegram API
 │   └── usability-smoke/   # Buyer flow smoke test (no token)
 ├── internal/
-│   ├── bot/               # Handlers, middleware, UI
+│   ├── bot/               # Handlers, keyboards, notifications, webhook
 │   ├── config/            # Configuration loading
-│   ├── payment/           # Stars & CryptoBot adapters
-│   ├── service/           # Business logic
-│   ├── shop/              # Catalog, cart, orders
-│   └── storage/           # SQLite / Redis, migrations
-├── locales/               # Translations (ru.json, en.json)
+│   ├── payment/           # Stars (incl. subscriptions) & CryptoBot adapters
+│   ├── service/           # Cross-cutting services (i18n, loyalty, metrics)
+│   ├── shop/              # Catalog, cart, orders (PaymentOutcome pipeline)
+│   ├── storage/           # SQLite stores, Redis cache/FSM, migrations
+│   └── webapi/            # Mini App REST API (initData auth)
+├── web/app/               # Mini App frontend (embedded, vanilla JS)
+├── locales/               # Translations (ru, en, es, de, zh)
 ├── worker/                # Background workers
 ├── monitoring/            # Grafana dashboard JSON
 ├── Dockerfile
@@ -301,7 +350,7 @@ MIT — do whatever you want. See [LICENSE](LICENSE).
   <a href="#-english">🇬🇧 Switch to English</a>
 </p>
 
-Полноценный интернет-магазин внутри Telegram — каталог, корзина, оплата Stars и USDT, промокоды, витрина, программа лояльности, реферальная система и панель администратора. Один бинарник. Без CGO. Без лишнего.
+Полноценный интернет-магазин внутри Telegram — каталог, корзина, оплата Stars и USDT, подписки Stars, отзывы и рейтинги, промокоды, вишлист, рабочие программа лояльности и рефералка, встроенный Mini App и панель администратора. 5 языков из коробки. Один бинарник. Без CGO. Без лишнего.
 
 ### ✨ Возможности
 
@@ -310,34 +359,42 @@ MIT — do whatever you want. See [LICENSE](LICENSE).
 <td width="50%">
 
 **🛍️ Покупателям**
-- Каталог товаров с категориями
+- Каталог товаров с категориями и фотогалереями
 - Корзина и оформление заказа в Telegram
 - Оплата **Telegram Stars** (встроено)
+- **Подписки Stars** — регулярные 30-дневные товары, управление через `/mysubs`
 - Оплата **USDT через CryptoBot** (опционально)
-- Промокоды с ограничениями по категориям
+- **Mini App** — полноценная витрина внутри Telegram (включается через `WEBAPP_URL`)
+- **Отзывы и рейтинги** — 1–5 ⭐ после доставки, средняя оценка на карточке товара
+- Промокоды с ограничениями по категориям + персональные одноразовые коды
 - Список желаний — уведомления о снижении цены и появлении товара
 - Поиск: `/search <запрос>`
-- Реферальная программа с защитой от фрода
+- **Программа лояльности** — кэшбэк баллами 1–10 %, уровни
+- **Реферальная программа** — ссылка `/referral`; 100 баллов рефереру, промокод −10 % другу
 
 </td>
 <td width="50%">
 
 **🔧 Администраторам**
-- Управление товарами и категориями
+- Управление товарами и категориями (фото прямо из Telegram, до 10 на товар)
 - Заказы и изменение статусов
 - Управление промокодами
-- Аналитика и выгрузка в CSV
+- Модерация отзывов: `/reviews`
+- Аналитика: `/analytics` (график выручки за 14 дней, топ покупателей, отчёт по промо), CSV-выгрузка с фильтром дат
+- **Уведомления в Topics** — события заказов в супергруппу / топики форума (`ADMIN_GROUP_ID`)
 - **Настройка цветов кнопок** — `/btnstyle` интерактивное меню: Primary/Success/Danger/Default для каждой кнопки
 - Вход: `/admin`
 
 **⚙️ Инфраструктура**
-- SQLite встроенная БД, миграции автоматически
+- SQLite встроенная БД (WAL), миграции автоматически
 - Redis FSM (fallback в память при отсутствии)
+- Автоматические ежедневные бэкапы (`VACUUM INTO`, хранятся 7) — бинарь sqlite3 не нужен
+- Graceful shutdown всех воркеров
 - Prometheus + Grafana метрики
 - Health check на `:8080/health`
 - Polling или Webhook (выбор по конфигу)
 - Docker multi-stage, non-root пользователь
-- i18n: русский и английский из коробки
+- i18n: 🇷🇺 🇬🇧 🇪🇸 🇩🇪 🇨🇳 — 5 языков из коробки
 
 </td>
 </tr>
@@ -414,6 +471,13 @@ go run ./cmd/bot            # запустить
 | `WEBHOOK_URL` | нет | — | Публичный HTTPS URL для webhook |
 | `TELEGRAM_WEBHOOK_SECRET` | нет | — | Секрет для верификации webhook |
 | `LOCALES_DIR` | нет | `locales` | Путь к папке переводов |
+| `WEBAPP_URL` | нет | — | Публичный HTTPS URL Mini App; пусто = Mini App выключен |
+| `ADMIN_GROUP_ID` | нет | — | ID супергруппы для уведомлений админам (вместо личек) |
+| `TOPIC_ORDERS_NEW` | нет | — | ID топика форума для новых заказов |
+| `TOPIC_ORDERS_PAID` | нет | — | ID топика для оплаченных заказов |
+| `TOPIC_ORDERS_DELIVERED` | нет | — | ID топика для доставленных заказов |
+| `OUTBOUND_WEBHOOK_URL` | нет | — | Внешний URL для событий `order.paid` / `order.delivered` |
+| `OUTBOUND_WEBHOOK_SECRET` | нет | — | Значение заголовка `X-Webhook-Secret` исходящих вебхуков |
 
 > 💡 Без `WEBHOOK_URL` — режим polling (удобно для разработки).  
 > Без Redis — автоматически используется хранилище в памяти.
@@ -429,15 +493,33 @@ go run ./cmd/bot            # запустить
 | `/search <запрос>` | Поиск товаров |
 | `/cart` | Корзина |
 | `/orders` | История заказов |
+| `/mysubs` | Подписки Stars (с кнопками отмены) |
 | `/profile` | Профиль и статус лояльности |
+| `/referral` | Реферальная ссылка, приглашённые и начисленные баллы |
 | `/wishlist` | Список желаний |
 | `/support` | Поддержка |
 | `/paysupport` | Помощь с оплатой |
 | `/terms` | Условия использования |
 | `/help` | Список команд |
 | `/cancel` | Отмена действия |
-| `/admin` | Панель администратора *(только для админов)* |
-| `/btnstyle` | Настройка цветов кнопок *(только для админов)* |
+
+**Команды администратора** *(нужен ID в `ADMIN_IDS`)*:
+
+| Команда | Описание |
+|---|---|
+| `/admin` | Панель администратора |
+| `/addproduct` | Добавить товар (пошаговый мастер, фото и подписки поддерживаются) |
+| `/editproduct <id> <поле> <значение>` | Редактировать товар |
+| `/deleteproduct <id>` | Удалить товар |
+| `/addcategory <название>` | Добавить категорию |
+| `/editcategory` / `/deletecategory` / `/listcategories` | Управление категориями |
+| `/addpromo` / `/listpromos` / `/deletepromo` | Управление промокодами |
+| `/orders_all` | Все заказы |
+| `/setdelivered <id>` | Отметить заказ доставленным (запускает запрос отзыва) |
+| `/reviews` | Последние отзывы с кнопками удаления |
+| `/analytics` | График выручки, топ покупателей, отчёт по промокодам |
+| `/export_orders [от] [до]` | CSV-выгрузка, опциональный диапазон дат |
+| `/btnstyle` | Настройка цветов кнопок |
 
 ---
 
@@ -447,6 +529,20 @@ go run ./cmd/bot            # запустить
 
 **CryptoBot (USDT)** — опционально. Установи `CRYPTOBOT_TOKEN` для включения.  
 Фоновый воркер проверяет статус платежей каждые 30 секунд. Подпись верифицируется через HMAC-SHA256.
+
+**Подписки Stars** — товар, созданный как «подписка на 30 дней», продаётся регулярным платежом Stars (`subscription_period=2592000`). Подписки оплачиваются только Stars; управление — через `/mysubs`.
+
+---
+
+### 📱 Mini App
+
+Лёгкая веб-витрина (vanilla JS, встроена в бинарник — без сборки), открывается прямо в Telegram: каталог, карточки с фото и рейтингом, корзина, оформление через `openInvoice` (Stars) или CryptoBot.
+
+1. Выведи порт 8080 бота за публичный **HTTPS**-домен (Telegram требует HTTPS для Web Apps).
+2. Установи `WEBAPP_URL=https://shop.example.com/app` в `.env`.
+3. Перезапусти — кнопка меню бота станет Mini App, статика доступна на `/app/`, REST API на `/api/*` (авторизация по Telegram `initData` с проверкой HMAC).
+
+> Без `WEBAPP_URL` Mini App и его API вообще не монтируются — бот работает как раньше.
 
 ---
 
@@ -513,13 +609,15 @@ telegram-shop-bot/
 │   ├── telegram-smoke/    # Smoke-тест через Telegram API
 │   └── usability-smoke/   # Smoke-тест пути покупателя (без токена)
 ├── internal/
-│   ├── bot/               # Хендлеры, middleware, UI
+│   ├── bot/               # Хендлеры, клавиатуры, уведомления, webhook
 │   ├── config/            # Загрузка конфигурации
-│   ├── payment/           # Адаптеры Stars и CryptoBot
-│   ├── service/           # Бизнес-логика
-│   ├── shop/              # Каталог, корзина, заказы
-│   └── storage/           # SQLite / Redis, миграции
-├── locales/               # Переводы (ru.json, en.json)
+│   ├── payment/           # Адаптеры Stars (включая подписки) и CryptoBot
+│   ├── service/           # Сквозные сервисы (i18n, лояльность, метрики)
+│   ├── shop/              # Каталог, корзина, заказы (пайплайн PaymentOutcome)
+│   ├── storage/           # SQLite-сторы, Redis кэш/FSM, миграции
+│   └── webapi/            # REST API Mini App (авторизация по initData)
+├── web/app/               # Фронтенд Mini App (встроен в бинарник, vanilla JS)
+├── locales/               # Переводы (ru, en, es, de, zh)
 ├── worker/                # Фоновые воркеры
 ├── monitoring/            # Grafana dashboard JSON
 ├── Dockerfile
@@ -558,10 +656,13 @@ make preflight  # Проверить окружение
 ### 🌍 Локализация
 
 Переводы в `locales/`. Доступны:
-- 🇷🇺 `ru.json` — русский (по умолчанию)
-- 🇬🇧 `en.json` — английский
+- 🇷🇺 `ru.json` — русский
+- 🇬🇧 `en.json` — английский (по умолчанию при неизвестном языке)
+- 🇪🇸 `es.json` — испанский
+- 🇩🇪 `de.json` — немецкий
+- 🇨🇳 `zh.json` — китайский
 
-Чтобы добавить новый язык — создай `locales/de.json` по образцу. Язык выбирается автоматически по настройкам Telegram.
+Чтобы добавить новый язык — создай `locales/<код>.json` по образцу `en.json`. Язык выбирается автоматически по настройкам Telegram (`language_code` нормализуется: `ru-RU` → `ru`); Mini App и админка тоже переведены.
 
 ---
 

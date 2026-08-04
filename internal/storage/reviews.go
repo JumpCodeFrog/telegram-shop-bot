@@ -103,7 +103,6 @@ func scanReviews(rows *sql.Rows) ([]Review, error) {
 	return reviews, rows.Err()
 }
 
-
 // nullableID maps a zero ID to NULL so that optional foreign keys
 // (e.g. order_id) do not trip foreign_keys enforcement.
 func nullableID(id int64) sql.NullInt64 {
