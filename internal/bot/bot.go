@@ -3,8 +3,11 @@ package bot
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -19,6 +22,34 @@ import (
 	"shop_bot/internal/shop"
 	"shop_bot/internal/storage"
 )
+
+var ErrTelegramInitialization = errors.New("Telegram rejected the token or could not be reached")
+var errTelegramTransport = errors.New("Telegram request failed")
+
+type sanitizedTelegramClient struct {
+	client tgbotapi.HTTPClient
+}
+
+type pendingSubscriptionSignal struct {
+	expiresAt time.Time
+	renewal   bool
+	refs      int
+}
+
+func (c sanitizedTelegramClient) Do(request *http.Request) (*http.Response, error) {
+	response, err := c.client.Do(request)
+	if err == nil {
+		return response, nil
+	}
+	// net/http can return a response together with an error. The dependency
+	// will not receive it on this branch, so close its body here.
+	if response != nil && response.Body != nil {
+		_ = response.Body.Close()
+	}
+	// url.Error embeds request.URL, and the Telegram Bot API URL embeds the
+	// bot token. All tgbotapi calls use this boundary, including long polling.
+	return nil, errTelegramTransport
+}
 
 // Bot is the main Telegram bot that routes updates to handlers.
 type Bot struct {
@@ -46,10 +77,10 @@ type Bot struct {
 	wishlist   *storage.WishlistStore
 	uiSettings storage.UISettingsStore
 	subs       storage.SubscriptionStore
-	// pendingSubExpiry maps a Telegram payment charge ID to the
-	// subscription_expiration_date extracted from the raw webhook update JSON
-	// (tgbotapi v5 does not parse that field). Consumed by recordSubscription.
-	pendingSubExpiry sync.Map
+	// tgbotapi v5 omits recurring fields. Reference-counted signals preserve
+	// them across concurrent duplicate deliveries of the same charge.
+	pendingSubSignalsMu sync.Mutex
+	pendingSubSignals   map[string]pendingSubscriptionSignal
 	// uiStyles is an in-memory cache of button style overrides loaded from DB.
 	// Invalidated and reloaded whenever an admin changes a button style.
 	uiStyles sync.Map
@@ -68,9 +99,15 @@ func handlerCtx() (context.Context, context.CancelFunc) {
 
 // New creates a new Bot with all dependencies injected.
 func New(cfg *config.Config, db *storage.DB, metrics *service.MetricsService, fsm storage.FSMStore, redisClient *redis.Client, logger *slog.Logger) (*Bot, error) {
-	api, err := tgbotapi.NewBotAPI(cfg.BotToken)
+	api, err := tgbotapi.NewBotAPIWithClient(
+		cfg.BotToken,
+		tgbotapi.APIEndpoint,
+		sanitizedTelegramClient{client: &http.Client{}},
+	)
 	if err != nil {
-		return nil, err
+		// tgbotapi transport errors contain the request URL, and the token is
+		// embedded in that URL. Keep the secret out of caller logs.
+		return nil, ErrTelegramInitialization
 	}
 
 	return NewWithAPI(cfg, api, db, metrics, fsm, redisClient, logger)
@@ -234,25 +271,101 @@ func (b *Bot) Run(ctx context.Context) error {
 	b.ensureHandler(ctx)
 	b.registerCommands()
 
-	u := tgbotapi.NewUpdate(0)
-	u.Timeout = 60
-	u.AllowedUpdates = []string{"message", "callback_query", "pre_checkout_query", "inline_query"}
-
-	updates := b.api.GetUpdatesChan(u)
-
+	offset := 0
 	var wg sync.WaitGroup
 	for {
-		select {
-		case <-ctx.Done():
-			b.api.StopReceivingUpdates()
+		if err := ctx.Err(); err != nil {
 			wg.Wait()
-			return ctx.Err()
-		case update := <-updates:
+			return err
+		}
+		response, err := b.api.MakeRequest("getUpdates", tgbotapi.Params{
+			"offset":          strconv.Itoa(offset),
+			"limit":           "100",
+			"timeout":         "1",
+			"allowed_updates": `["message","callback_query","pre_checkout_query","inline_query"]`,
+		})
+		if err != nil {
+			if ctx.Err() != nil {
+				wg.Wait()
+				return ctx.Err()
+			}
+			b.logger.Warn("getUpdates failed; retrying", "error", err)
+			timer := time.NewTimer(time.Second)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				wg.Wait()
+				return ctx.Err()
+			case <-timer.C:
+			}
+			continue
+		}
+		var rawUpdates []json.RawMessage
+		if err := json.Unmarshal(response.Result, &rawUpdates); err != nil {
+			b.logger.Warn("getUpdates returned malformed result", "error", err)
+			continue
+		}
+		retryBatch := false
+		for index, raw := range rawUpdates {
+			update, cleanup, err := b.decodeTelegramUpdate(raw)
+			if err != nil {
+				handled, updateID, quarantineErr := b.quarantineUndecodableStarsUpdate(ctx, raw)
+				if handled && quarantineErr == nil {
+					if updateID >= offset {
+						offset = updateID + 1
+					}
+					continue
+				}
+				if handled {
+					b.logger.Error("polling Stars payment decode failure was not durably handled", "error", quarantineErr)
+					retryBatch = true
+					break
+				}
+				b.logger.Warn("skip malformed Telegram update", "error", err)
+				continue
+			}
+			if update.Message != nil && update.Message.SuccessfulPayment != nil {
+				// A payment is an ordering barrier. Finish older updates first, then
+				// advance getUpdates offset only after settlement/review is durable.
+				wg.Wait()
+				err := b.processSuccessfulPayment(update.Message)
+				cleanup()
+				if err != nil {
+					b.logger.Error("polling Stars payment not durably handled", "update_id", update.UpdateID, "error", err)
+					retryBatch = true
+					break
+				}
+				if update.UpdateID >= offset {
+					offset = update.UpdateID + 1
+				}
+				// Do not let a later asynchronous update advance the in-memory
+				// offset before this durable payment barrier is visible to the next
+				// provider request. Remaining rows are fetched again and stay safe
+				// under idempotent routing.
+				if index+1 < len(rawUpdates) {
+					break
+				}
+				continue
+			}
+			if update.UpdateID >= offset {
+				offset = update.UpdateID + 1
+			}
 			wg.Add(1)
-			go func(upd tgbotapi.Update) {
+			go func(upd tgbotapi.Update, done func()) {
 				defer wg.Done()
+				defer done()
 				b.handler(upd)
-			}(update)
+			}(update, cleanup)
+		}
+		if retryBatch {
+			timer := time.NewTimer(time.Second)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				wg.Wait()
+				return ctx.Err()
+			case <-timer.C:
+			}
 		}
 	}
 }
@@ -267,19 +380,21 @@ func (b *Bot) HandleUpdate(update tgbotapi.Update) {
 // RegisterTelegramWebhook registers the bot's webhook URL with the Telegram API.
 func (b *Bot) RegisterTelegramWebhook(webhookURL string) error {
 	b.registerCommands()
-	if b.cfg.TelegramWebhookSecret != "" {
-		params := tgbotapi.Params{
-			"url":          webhookURL + "/telegram-webhook",
-			"secret_token": b.cfg.TelegramWebhookSecret,
-		}
-		_, err := b.api.MakeRequest("setWebhook", params)
-		return err
+	callbackURL := config.TelegramWebhookURL(webhookURL)
+	if callbackURL == "" {
+		return fmt.Errorf("telegram webhook URL is required")
 	}
-	wh, err := tgbotapi.NewWebhook(webhookURL + "/telegram-webhook")
-	if err != nil {
-		return err
+	if b.cfg == nil {
+		return fmt.Errorf("telegram webhook configuration is required")
 	}
-	_, err = b.api.Request(wh)
+	if err := config.ValidateTelegramWebhookSecret(b.cfg.TelegramWebhookSecret); err != nil {
+		return fmt.Errorf("telegram webhook secret: %w", err)
+	}
+	params := tgbotapi.Params{
+		"url":          callbackURL,
+		"secret_token": b.cfg.TelegramWebhookSecret,
+	}
+	_, err := b.api.MakeRequest("setWebhook", params)
 	return err
 }
 

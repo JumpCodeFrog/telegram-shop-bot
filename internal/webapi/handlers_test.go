@@ -1,9 +1,11 @@
 package webapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -623,6 +625,31 @@ func TestPhotoProxyStreamsFile(t *testing.T) {
 	if ct := rec.Header().Get("Content-Type"); ct != "image/png" {
 		t.Errorf("Content-Type = %q, want image/png", ct)
 	}
+}
+
+func TestPhotoProxyRedactsTokenFromTransportFailure(t *testing.T) {
+	const token = "123456789:secret-that-must-not-appear"
+	var logs bytes.Buffer
+	f := newFixture(t)
+	f.server.logger = slog.New(slog.NewTextHandler(&logs, nil))
+	f.server.deps.Files = staticFileResolver("https://api.telegram.org/file/bot" + token + "/photo.jpg")
+	f.server.httpClient = &http.Client{Transport: testRoundTripper(func(request *http.Request) (*http.Response, error) {
+		return nil, fmt.Errorf("download failed at %s", request.URL)
+	})}
+
+	rec := f.request(t, http.MethodGet, "/api/photo/AgACfileid", "", true)
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502", rec.Code)
+	}
+	if strings.Contains(logs.String(), token) {
+		t.Fatalf("photo proxy log leaked token: %s", logs.String())
+	}
+}
+
+type testRoundTripper func(*http.Request) (*http.Response, error)
+
+func (f testRoundTripper) RoundTrip(request *http.Request) (*http.Response, error) {
+	return f(request)
 }
 
 type staticFileResolver string

@@ -21,35 +21,19 @@ func envValue(env map[string]string, key, fallback string) string {
 
 func main() {
 	_ = godotenv.Load()
-
 	env := map[string]string{
-		"BOT_TOKEN":               os.Getenv("BOT_TOKEN"),
-		"CRYPTOBOT_TOKEN":         os.Getenv("CRYPTOBOT_TOKEN"),
-		"DB_PATH":                 os.Getenv("DB_PATH"),
-		"REDIS_ADDR":              os.Getenv("REDIS_ADDR"),
-		"REDIS_PASSWORD":          os.Getenv("REDIS_PASSWORD"),
-		"WEBHOOK_URL":             os.Getenv("WEBHOOK_URL"),
-		"TELEGRAM_WEBHOOK_SECRET": os.Getenv("TELEGRAM_WEBHOOK_SECRET"),
-		"APP_ENV":                 os.Getenv("APP_ENV"),
-		"LOG_LEVEL":               os.Getenv("LOG_LEVEL"),
+		"BOT_TOKEN": os.Getenv("BOT_TOKEN"), "CRYPTOBOT_TOKEN": os.Getenv("CRYPTOBOT_TOKEN"),
+		"DB_PATH": os.Getenv("DB_PATH"), "REDIS_ADDR": os.Getenv("REDIS_ADDR"),
+		"WEBHOOK_URL": os.Getenv("WEBHOOK_URL"), "TELEGRAM_WEBHOOK_SECRET": os.Getenv("TELEGRAM_WEBHOOK_SECRET"),
+		"APP_ENV": os.Getenv("APP_ENV"), "LOG_LEVEL": os.Getenv("LOG_LEVEL"),
 	}
-
 	dbPath := envValue(env, "DB_PATH", "data/shop.db")
 	redisAddr := envValue(env, "REDIS_ADDR", "localhost:6379")
-	appEnv := envValue(env, "APP_ENV", "development")
-	logLevel := envValue(env, "LOG_LEVEL", "info")
-
-	fmt.Println("Telegram Shop Bot Preflight")
-	fmt.Println()
-
-	hasFailures := false
-	hasWarnings := false
-
+	fail, warnings := false, false
 	check := func(ok bool, label, detail string) {
 		status := "OK"
 		if !ok {
-			status = "FAIL"
-			hasFailures = true
+			status, fail = "FAIL", true
 		}
 		fmt.Printf("[%s] %s", status, label)
 		if detail != "" {
@@ -57,26 +41,17 @@ func main() {
 		}
 		fmt.Println()
 	}
-	warn := func(label, detail string) {
-		hasWarnings = true
-		fmt.Printf("[WARN] %s", label)
-		if detail != "" {
-			fmt.Printf(": %s", detail)
-		}
-		fmt.Println()
-	}
-
+	warn := func(label, detail string) { warnings = true; fmt.Printf("[WARN] %s: %s\n", label, detail) }
+	fmt.Println("Telegram Shop Bot Preflight")
+	fmt.Println()
 	check(env["BOT_TOKEN"] != "", "BOT_TOKEN present", "")
 	if env["CRYPTOBOT_TOKEN"] == "" {
-		warn("CRYPTOBOT_TOKEN", "not set; USDT checkout and CryptoBot polling worker will stay disabled")
+		warn("CRYPTOBOT_TOKEN", "not set; crypto checkout disabled")
 	} else {
 		check(true, "CRYPTOBOT_TOKEN present", "crypto checkout enabled")
 	}
 	check(true, "DB_PATH", dbPath)
 	check(true, "REDIS_ADDR", redisAddr)
-	check(true, "APP_ENV", appEnv)
-	check(true, "LOG_LEVEL", logLevel)
-
 	db, err := storage.New(dbPath)
 	if err != nil {
 		check(false, "SQLite open + migrations", err.Error())
@@ -84,46 +59,30 @@ func main() {
 		check(true, "SQLite open + migrations", dbPath)
 		_ = db.Close()
 	}
-
-	host, port, err := net.SplitHostPort(redisAddr)
-	if err != nil {
-		warn("Redis TCP", fmt.Sprintf("invalid REDIS_ADDR %q; app will fall back to in-memory FSM", redisAddr))
+	if host, port, err := net.SplitHostPort(redisAddr); err != nil {
+		warn("Redis TCP", "invalid address; in-memory fallback will be used")
+	} else if conn, err := net.DialTimeout("tcp", net.JoinHostPort(host, port), time.Second); err != nil {
+		warn("Redis TCP", "unavailable; in-memory fallback will be used")
 	} else {
-		conn, err := net.DialTimeout("tcp", net.JoinHostPort(host, port), time.Second)
-		if err != nil {
-			warn("Redis TCP", err.Error()+"; app will fall back to in-memory FSM")
-		} else {
-			_ = conn.Close()
-			check(true, "Redis TCP", redisAddr)
-		}
+		_ = conn.Close()
+		check(true, "Redis TCP", redisAddr)
 	}
-
 	if _, err := exec.LookPath("sqlite3"); err != nil {
-		warn("sqlite3 CLI available", "backup worker will skip backups until installed")
+		warn("sqlite3 CLI", "backup worker will skip backups")
 	} else {
 		check(true, "sqlite3 CLI available", "")
 	}
-
-	if _, err := exec.LookPath("redis-cli"); err != nil {
-		warn("redis-cli available", "optional helper for manual ops")
-	} else {
-		check(true, "redis-cli available", "")
-	}
-
 	if env["WEBHOOK_URL"] == "" {
-		check(true, "Webhook mode", "not configured; polling mode expected")
+		check(true, "Webhook mode", "polling expected")
 	} else {
-		secretSet := env["TELEGRAM_WEBHOOK_SECRET"] != ""
-		detail := fmt.Sprintf("url configured, secret_set=%t", secretSet)
-		check(true, "Webhook mode", detail)
+		check(true, "Webhook mode", fmt.Sprintf("configured, secret_set=%t", env["TELEGRAM_WEBHOOK_SECRET"] != ""))
 	}
-
 	fmt.Println()
-	if hasFailures {
+	if fail {
 		fmt.Println("Preflight completed with failures.")
 		os.Exit(1)
 	}
-	if hasWarnings {
+	if warnings {
 		fmt.Println("Preflight completed with warnings.")
 		return
 	}

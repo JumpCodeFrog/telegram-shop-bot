@@ -25,17 +25,22 @@ type OrderGetter interface {
 	GetOrder(ctx context.Context, id int64) (*storage.Order, error)
 }
 
+type subscriptionCheckoutGuard interface {
+	HasSubscriptionEntitlementConflict(ctx context.Context, userID, productID int64) (bool, error)
+}
+
 // Translator resolves an i18n key for the given language. The bot layer
 // injects its locale service; payment code stays free of i18n plumbing.
 type Translator func(lang, key string) string
 
 // Pre-checkout rejection i18n keys, one per validation rule.
 const (
-	PreCheckoutKeyOrderNotFound   = "precheckout_order_not_found"
-	PreCheckoutKeyWrongUser       = "precheckout_wrong_user"
-	PreCheckoutKeyNotPending      = "precheckout_order_not_pending"
-	PreCheckoutKeyAmountMismatch  = "precheckout_amount_mismatch"
-	PreCheckoutKeyValidationError = "precheckout_validation_error"
+	PreCheckoutKeyOrderNotFound    = "precheckout_order_not_found"
+	PreCheckoutKeyWrongUser        = "precheckout_wrong_user"
+	PreCheckoutKeyNotPending       = "precheckout_order_not_pending"
+	PreCheckoutKeyAmountMismatch   = "precheckout_amount_mismatch"
+	PreCheckoutKeyCurrencyMismatch = "precheckout_currency_mismatch"
+	PreCheckoutKeyValidationError  = "precheckout_validation_error"
 )
 
 // StarsPayment handles Telegram Stars payments via the Bot Payments API.
@@ -152,8 +157,24 @@ func (s *StarsPayment) validatePreCheckout(ctx context.Context, query *tgbotapi.
 		return PreCheckoutKeyValidationError
 	case query.From == nil || order.UserID != query.From.ID:
 		return PreCheckoutKeyWrongUser
-	case order.Status != storage.OrderStatusPending:
+	case order.Status != storage.OrderStatusPending ||
+		(order.PaymentState != "" && order.PaymentState != storage.PaymentStatePending):
 		return PreCheckoutKeyNotPending
+	}
+	if order.SubscriptionProductID > 0 {
+		if guard, ok := s.orders.(subscriptionCheckoutGuard); ok {
+			conflict, guardErr := guard.HasSubscriptionEntitlementConflict(ctx, order.UserID, order.SubscriptionProductID)
+			if guardErr != nil {
+				return PreCheckoutKeyValidationError
+			}
+			if conflict {
+				return PreCheckoutKeyNotPending
+			}
+		}
+	}
+	switch {
+	case query.Currency != "XTR":
+		return PreCheckoutKeyCurrencyMismatch
 	case order.TotalStars != query.TotalAmount:
 		return PreCheckoutKeyAmountMismatch
 	}

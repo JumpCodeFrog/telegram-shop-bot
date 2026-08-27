@@ -6,6 +6,32 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [3.0.0] — 2026-08-27
+
+### Added
+
+- **Safe one-command bootstrap** — `telegram-shop-bot quickstart` now runs guided `init` → actionable `doctor` → normal `run`. The initializer asks only for a BotFather token and Telegram admin ID, validates bot identity with read-only `getMe`, derives `BOT_USERNAME`, atomically creates `.env` without overwriting an existing config, and applies private `0600` permissions on Unix. Previously the documented path required 6–7 commands plus manual editing, and `make setup` copied valid-looking placeholders into a group-readable file.
+- **Unified diagnostics** — `telegram-shop-bot doctor` validates config, SQLite migrations, optional Redis, Telegram identity, webhook state and pending updates without printing the token or raw provider errors. It blocks polling when Telegram still has a webhook, verifies Redis with an authenticated `PING` instead of a bare TCP connect, and reports disabled inline mode. The old `cmd/preflight` entry point keeps its local/offline compatibility contract.
+- **Small CLI contract** — `init`, `doctor`, `quickstart`, `run`, `version`, and `help` are available from the existing release binary without adding a CLI framework; running the binary with no arguments still starts the bot exactly as before.
+- **Immutable commerce ledger** — order, payment, and fulfillment now have independent projections backed by append-only timelines, payment attempts, captures, refunds, anomalies, and operator resolutions. Provider ID, payer, amount, currency, and occurrence time are validated before settlement.
+- **Guarded payment operations** — `reconcile-stars` performs a bounded read-only comparison with Telegram, while `payment-review` lists, previews, and resolves quarantined Stars and CryptoBot facts with explicit apply and order confirmation gates.
+
+### Changed
+
+- **Quick-start documentation** now leads with the real one-command flow (`make quickstart`) in English and Russian. `.env.example` no longer contains valid-looking secrets, and manual Docker setup stays available as a separate path.
+- **Recurring Stars settlement** now commits payment and entitlement atomically, snapshots the subscription contract on the order, rejects stale or incompatible renewals, and prevents exact replays from extending access twice.
+- **Revenue analytics** now reports gross captures, refunds, and net revenue while excluding compensated quarantined captures.
+- **Webhook URL contract** now treats `WEBHOOK_URL` as the public base URL. Telegram uses `/telegram-webhook`; CryptoBot uses `/cryptobot-webhook`.
+
+### Fixed
+
+- **Webhook route contract** — `WEBHOOK_URL` is now consistently the public base URL: Telegram registers and the HTTP server accepts `<base>/telegram-webhook`; CryptoBot uses `<base>/cryptobot-webhook`. Previously the server mounted an unstripped `/webhook/` prefix while the inner handler expected root paths, so documented webhook requests returned 404.
+- **Startup secret redaction** — Telegram transport failures during normal `run` now return a stable sanitized error instead of logging the request URL containing `BOT_TOKEN`. Token prevalidation only rejects structurally unsafe values; Telegram `getMe` remains authoritative so future BotFather token alphabets are not blocked locally.
+- **Durable Stars acknowledgement** — webhook and polling acknowledgements are held until each charge is settled or durably quarantined. Failed updates no longer disappear through premature offset advancement.
+- **Public webhook authentication** — every public Telegram webhook requires a strong secret regardless of application mode.
+- **CryptoBot correctness** — exact decimal conversion, provider occurrence timestamps, malformed fact preservation, and mutable-head pagination prevent rounding drift, duplicate settlement, and skipped paid invoices.
+- **Refund and anomaly finality** — subscription entitlements roll back on refund, resolved malformed facts remain terminal on replay, and non-existent orders can be closed without fabricated revenue.
+
 ## [2.0.0] — 2026-08-04
 
 ### ⚠️ Breaking Changes
@@ -64,7 +90,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - **30-day subscription products** — a product with `sub_period_days=30` is sold as a recurring Telegram Stars subscription: the invoice is sent via raw `sendInvoice` with `subscription_period=2592000` (tgbotapi v5 does not know the field). Subscription products are payable with Stars only; crypto is hidden at checkout and rejected with `sub_stars_only`.
 - **`/mysubs` command** — lists active subscriptions with expiry dates; each has a cancel button (`sub:cancel:<id>`) that calls raw `editUserStarSubscription{is_canceled:true}` and marks the row `canceled` locally (access remains until the paid period ends).
-- **Subscription bookkeeping** — `successful_payment` for a subscription order upserts a `subscriptions` row; `expires_at` comes from the raw update's `subscription_expiration_date` (webhook mode), falling back to now + 30 days when Telegram's field is unavailable (polling mode).
+- **Subscription bookkeeping** — the initial recurring capture and entitlement commit atomically; `expires_at` uses Telegram's raw `subscription_expiration_date` when present, while only the first capture may use the deterministic order-period fallback. Renewal captures require an explicit provider expiry and exact replays never extend access twice.
 - **`worker/subscription.go`** — hourly worker: marks overdue subscriptions `expired` and sends a one-shot `sub_expiring_soon` reminder 72h before expiry (`MarkReminded` only after a successful send, so failed reminders are retried).
 - **Admin wizard** — the add-product dialog got a final step: regular product vs. 30-day subscription.
 - ⚠️ **Recurring payments require live verification** («требует проверки в бою»): renewal `successful_payment` updates, `subscription_expiration_date` delivery, and `editUserStarSubscription` behavior cannot be exercised against the real Bot API from tests.

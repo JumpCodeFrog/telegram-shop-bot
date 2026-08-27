@@ -2,6 +2,7 @@ package bot
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"strconv"
@@ -187,63 +188,180 @@ func (b *Bot) handlePreCheckout(query *tgbotapi.PreCheckoutQuery) {
 	}
 }
 
-// handleSuccessfulPayment handles a successful Stars payment, updating the order status.
+// handleSuccessfulPayment is the router-compatible wrapper. Provider ingress
+// calls processSuccessfulPayment directly so it can withhold its ACK when no
+// durable settlement or review fact could be written.
 func (b *Bot) handleSuccessfulPayment(msg *tgbotapi.Message) {
+	if err := b.processSuccessfulPayment(msg); err != nil {
+		b.logger.Error("Stars payment was not durably handled", "error", err)
+	}
+}
+
+// processSuccessfulPayment handles a successful Stars payment. A nil result
+// means the charge was either settled, recognized as an exact replay, or
+// durably quarantined for operator review. Any non-nil result is retryable by
+// the Telegram webhook/polling ingress and must not be acknowledged there.
+func (b *Bot) processSuccessfulPayment(msg *tgbotapi.Message) error {
+	if msg == nil {
+		return nil
+	}
 	sp := msg.SuccessfulPayment
 	if sp == nil {
-		return
+		return nil
 	}
 
 	orderID, err := strconv.ParseInt(sp.InvoicePayload, 10, 64)
-	if err != nil {
-		b.logger.Error("parse order ID from successful payment", "error", err)
-		return
+	if err != nil || orderID <= 0 {
+		ctx, cancel := handlerCtx()
+		defer cancel()
+		if quarantineErr := b.recordStarsPaymentAnomaly(ctx, msg, 0, "stars_invalid_order_payload"); quarantineErr != nil {
+			return fmt.Errorf("parse Stars order ID and quarantine provider fact: %w", quarantineErr)
+		}
+		b.logger.Warn("Stars payment quarantined: invalid order payload")
+		return nil
 	}
 
-	ctx := context.Background()
-	outcome, err := b.order.ConfirmPayment(ctx, orderID, "stars", sp.TelegramPaymentChargeID)
+	ctx, cancel := handlerCtx()
+	defer cancel()
+	payerID := int64(0)
+	if msg.From != nil {
+		payerID = msg.From.ID
+	}
+	receipt := shop.PaymentReceipt{
+		OrderID: orderID, Provider: storage.PaymentMethodStars,
+		ExternalID: sp.TelegramPaymentChargeID, PayerID: payerID,
+		Currency: sp.Currency, AmountMinor: int64(sp.TotalAmount), Scale: 0,
+	}
+	if msg.Date > 0 {
+		receipt.OccurredAt = time.Unix(int64(msg.Date), 0).UTC()
+	}
+	if expiresAt, ok := b.takePendingSubExpiry(sp.TelegramPaymentChargeID); ok {
+		receipt.SubscriptionExpiresAt = expiresAt
+	}
+	if b.isPendingSubscriptionRenewal(sp.TelegramPaymentChargeID) {
+		_, renewalErr := b.order.RecordSubscriptionRenewal(ctx, receipt)
+		if renewalErr != nil {
+			if errors.Is(renewalErr, storage.ErrPaymentNeedsReview) ||
+				errors.Is(renewalErr, storage.ErrPaymentReceiptMismatch) ||
+				errors.Is(renewalErr, storage.ErrPaymentIdentityConflict) {
+				b.logger.Warn("Stars subscription renewal quarantined", "order_id", orderID, "reason", renewalErr)
+				return nil
+			}
+			if quarantineErr := b.recordStarsPaymentAnomaly(ctx, msg, orderID, "stars_subscription_renewal_failure"); quarantineErr != nil {
+				return errors.Join(renewalErr, quarantineErr)
+			}
+			b.logger.Warn("Stars subscription renewal quarantined", "order_id", orderID, "reason", renewalErr)
+			return nil
+		}
+		if b.metrics != nil {
+			b.metrics.SuccessfulPayments.WithLabelValues("stars").Inc()
+		}
+		return nil
+	}
+	outcome, err := b.order.ConfirmPaymentReceipt(ctx, receipt)
 	if err != nil {
+		if errors.Is(err, storage.ErrProductOutOfStock) {
+			recordErr := b.order.RecordUnexpectedPayment(ctx, receipt, "out_of_stock_after_charge")
+			if recordErr == nil || errors.Is(recordErr, storage.ErrPaymentNeedsReview) {
+				b.logger.Warn("Stars payment quarantined after stock conflict", "order_id", orderID)
+				return nil
+			}
+		}
 		if errors.Is(err, storage.ErrOrderStatusConflict) {
 			// Duplicate Stars payment event — already confirmed, safe to ignore.
 			b.logger.Info("stars payment already confirmed (idempotent)", "order_id", orderID)
-			return
+			return nil
 		}
-		b.logger.Error("confirm stars payment", "order_id", orderID, "error", err)
-		return
+		if errors.Is(err, storage.ErrPaymentNeedsReview) ||
+			errors.Is(err, storage.ErrPaymentReceiptMismatch) ||
+			errors.Is(err, storage.ErrPaymentIdentityConflict) ||
+			errors.Is(err, storage.ErrNotFound) {
+			b.logger.Warn("Stars payment durably quarantined", "order_id", orderID, "reason", err)
+			return nil
+		}
+		// ConfirmPaymentReceipt durably quarantines known validation failures.
+		// Re-recording the normalized fact is intentional: it proves the ACK
+		// boundary even if a future domain path returns a new error before doing
+		// so. Exact anomaly retries are idempotent.
+		if quarantineErr := b.recordStarsPaymentAnomaly(ctx, msg, orderID, "stars_payment_processing_failure"); quarantineErr != nil {
+			return errors.Join(err, quarantineErr)
+		}
+		b.logger.Warn("Stars payment quarantined", "order_id", orderID, "reason", err)
+		return nil
 	}
 
 	if b.metrics != nil {
 		b.metrics.SuccessfulPayments.WithLabelValues("stars").Inc()
 	}
 
-	// Subscription orders additionally get a subscriptions row so /mysubs,
-	// the expiry worker and cancellation can track the recurring payment.
-	b.recordSubscription(ctx, outcome.Order, sp)
-
 	b.outWebhook.Send(service.OutboundWebhookEvent{
 		Event:      "order.paid",
 		OrderID:    orderID,
-		UserID:     msg.From.ID,
+		UserID:     payerID,
 		TotalUSD:   outcome.Order.TotalUSD,
 		TotalStars: outcome.Order.TotalStars,
 		Method:     "stars",
 		PaymentID:  sp.TelegramPaymentChargeID,
 	})
 
-	lang := msg.From.LanguageCode
+	lang := ""
+	if msg.From != nil {
+		lang = msg.From.LanguageCode
+	}
 
-	b.notifyAdmins(ctx, AdminEventOrderPaid, fmt.Sprintf(b.t("en", "admin_order_paid_stars"), orderID, msg.From.ID))
+	b.notifyAdmins(ctx, AdminEventOrderPaid, fmt.Sprintf(b.t("en", "admin_order_paid_stars"), orderID, payerID))
 
-	receipt := fmt.Sprintf(b.t(lang, "stars_receipt"),
+	receiptText := fmt.Sprintf(b.t(lang, "stars_receipt"),
 		orderID,
 		sp.TotalAmount,
 		time.Now().Format("02.01.2006"),
 	)
-	reply := tgbotapi.NewMessage(msg.Chat.ID, receipt)
-	reply.ParseMode = "HTML"
-	b.send(reply)
+	if msg.Chat != nil {
+		reply := tgbotapi.NewMessage(msg.Chat.ID, receiptText)
+		reply.ParseMode = "HTML"
+		b.send(reply)
+	}
 
 	b.NotifyPaymentOutcome(ctx, outcome)
+	return nil
+}
+
+func (b *Bot) recordStarsPaymentAnomaly(ctx context.Context, msg *tgbotapi.Message, orderID int64, reason string) error {
+	if msg == nil || msg.SuccessfulPayment == nil {
+		return fmt.Errorf("Stars payment anomaly is missing provider fields")
+	}
+	sp := msg.SuccessfulPayment
+	payerID := int64(0)
+	if msg.From != nil {
+		payerID = msg.From.ID
+	}
+	occurredAt := time.Time{}
+	if msg.Date > 0 {
+		occurredAt = time.Unix(int64(msg.Date), 0).UTC()
+	}
+	amountMinor := int64(sp.TotalAmount)
+	if amountMinor < 0 {
+		amountMinor = 0
+	}
+	payloadDigest := sha256.Sum256([]byte(sp.InvoicePayload))
+	err := b.order.RecordPaymentAnomaly(ctx, storage.PaymentAnomaly{
+		ProposedOrderID: orderID,
+		Provider:        storage.PaymentMethodStars,
+		EventKind:       storage.PaymentEventCaptured,
+		ExternalID:      sp.TelegramPaymentChargeID,
+		PayerID:         payerID,
+		AmountMinor:     amountMinor,
+		Currency:        sp.Currency,
+		Scale:           0,
+		RawAmount:       strconv.Itoa(sp.TotalAmount),
+		RawPayload:      fmt.Sprintf("invoice_payload_sha256:%x", payloadDigest),
+		Reason:          reason,
+		OccurredAt:      occurredAt,
+	})
+	if err == nil || errors.Is(err, storage.ErrPaymentNeedsReview) {
+		return nil
+	}
+	return fmt.Errorf("persist Stars payment review fact: %w", err)
 }
 
 // NotifyPaymentOutcome sends the user-facing messages for the side effects of

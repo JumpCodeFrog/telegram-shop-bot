@@ -2,9 +2,6 @@
 .env
 .env.*
 !.env.example
-.claude
-.gemini
-.serena
 data/*.db
 backups/
 node_modules/

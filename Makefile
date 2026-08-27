@@ -1,4 +1,6 @@
-.PHONY: build test lint run seed preflight docker-build docker-up docker-down dev setup coverage
+.PHONY: build test lint run seed init doctor reconcile-stars payment-review quickstart preflight docker-build docker-up docker-down dev setup coverage
+
+PROVIDER ?= stars
 
 build:
 	go build ./...
@@ -14,7 +16,7 @@ lint:
 	go vet ./...
 
 run:
-	go run ./cmd/bot
+	go run ./cmd/bot run
 
 seed:
 	go run ./cmd/seed
@@ -22,7 +24,23 @@ seed:
 preflight:
 	go run ./cmd/preflight
 
-## setup: copy .env.example → .env (if absent), create data/ dir, run preflight checks
+init:
+	go run ./cmd/bot init
+
+doctor:
+	go run ./cmd/bot doctor
+
+reconcile-stars:
+	go run ./cmd/bot reconcile-stars $(ARGS)
+
+payment-review:
+	go run ./cmd/bot payment-review list --provider=$(PROVIDER)
+
+## quickstart: ask two questions, verify the setup, then start the shop
+quickstart:
+	go run ./cmd/bot quickstart
+
+## setup: legacy non-interactive bootstrap; use `make init` for the guided setup
 setup:
 	@if [ ! -f .env ]; then \
 		cp .env.example .env; \
@@ -35,8 +53,8 @@ setup:
 	@echo ""
 	@echo "Next steps:"
 	@echo "  1. Edit .env and set BOT_TOKEN, ADMIN_IDS"
-	@echo "  2. make run          (local)"
-	@echo "  3. make seed         (optional: load demo products)"
+	@echo "  2. make doctor       (online readiness check)"
+	@echo "  3. make run          (local)"
 
 ## dev: start development environment with hot-reload (requires Docker)
 dev:
@@ -50,4 +68,3 @@ docker-up:
 
 docker-down:
 	docker compose down
-

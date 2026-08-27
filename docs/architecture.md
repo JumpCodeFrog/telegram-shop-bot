@@ -72,7 +72,7 @@ cmd/bot/main.go          Entry point — wires everything, owns the worker group
 │   ├── ui_settings.go   UISettingsStore — button style overrides
 │   ├── redis.go         Redis-backed FSM store
 │   ├── memory_fsm.go    In-memory FSM fallback (no Redis needed)
-│   └── migrations/      SQL migration files 001–016 (run in order at startup)
+│   └── migrations/      SQL migration files 001–018 (run in order at startup)
 │
 ├── internal/payment/    Payment provider adapters
 │   ├── stars.go         Telegram Stars (validated pre-checkout, subscription_period)
@@ -117,18 +117,19 @@ User taps "⭐ Pay with Stars"
     → bot.handlePreCheckout()      validates: order exists, owner, pending, amount matches
     → Telegram sends successful_payment
     → bot.handleSuccessfulPayment()
-    → shop.OrderService.ConfirmPayment() → *PaymentOutcome
+    → shop.OrderService.ConfirmPaymentReceipt() → *PaymentOutcome
 ```
 
 ### PaymentOutcome pipeline
 
 All three confirmation paths — Stars `successful_payment`, the CryptoBot webhook, and the
-CryptoBot polling worker — converge on `OrderService.ConfirmPayment`, which is idempotent
+CryptoBot polling worker — converge on `OrderService.ConfirmPaymentReceipt`, which validates
+the complete provider fact before entering the idempotent atomic settlement boundary
 (`ErrOrderStatusConflict` on repeats) and returns a `*PaymentOutcome`:
 
 ```
-ConfirmPayment(ctx, orderID, method, paymentID)
-    → OrderStore.UpdateOrderStatus(pending → paid)     stock decrement, promo usage (one tx)
+ConfirmPaymentReceipt(ctx, validatedReceipt)
+    → OrderStore atomic settlement (pending → paid)    ledger, stock, subscription, promo (one tx)
     → invalidate Redis cache for the ordered products  (no-op without Redis)
     → loyalty: points = CalculateCashback(level, totalUSD) → AddPoints + CheckAndUpgradeLevel
     → referral: first paid order of a referred user?
@@ -142,7 +143,8 @@ Bot layer (NotifyPaymentOutcome):
     → receipt to the buyer, points / level-up messages
     → referral bonus message to the referrer, welcome promo to the buyer
     → notifyAdmins(AdminEventOrderPaid, …)             group topic or DM fan-out
-    → subscription order → SubscriptionStore.Upsert    (charge id, expires_at)
+    → subscription order → atomic order/payment/subscription settlement
+      (immutable product/period snapshot, charge id, expires_at)
 ```
 
 ---
@@ -153,16 +155,16 @@ Bot layer (NotifyPaymentOutcome):
 User taps "💎 Pay with Crypto"
     → bot.onPayCrypto()
     → payment.CryptoBotPayment.CreateInvoice()
-    → CryptoBot sends webhook POST /webhook/cryptobot
+    → CryptoBot sends webhook POST /cryptobot-webhook
     → bot.handleCryptoBotWebhook()      constant-time secret check
-    → shop.OrderService.ConfirmPayment() → outcome messages (see above)
+    → shop.OrderService.ConfirmPaymentReceipt() → outcome messages (see above)
     → idempotent repeats answer HTTP 200 (no retry storms)
 
 Fallback (missed webhook):
     worker.CryptoBotPollingWorker  (every 30s)
-    → fetches active invoices via CryptoBot API
+    → fetches paid invoices via bounded CryptoBot API windows
     → confirms ONLY invoices with status == "paid"
-    → same ConfirmPayment + outcome pipeline as the webhook
+    → same ConfirmPaymentReceipt + outcome pipeline as the webhook
 ```
 
 ---

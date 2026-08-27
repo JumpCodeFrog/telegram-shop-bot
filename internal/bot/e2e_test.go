@@ -296,10 +296,11 @@ func (e *e2eEnv) preCheckout(userID int64, queryID, payload string, totalStars i
 
 func (e *e2eEnv) successfulPayment(userID int64, payload string, totalStars int, chargeID string) []tgCall {
 	e.updSeq++
-	return e.do(tgbotapi.Update{
+	update := tgbotapi.Update{
 		UpdateID: e.updSeq,
 		Message: &tgbotapi.Message{
 			MessageID: e.updSeq,
+			Date:      int(time.Now().Unix()),
 			Chat:      &tgbotapi.Chat{ID: userID, Type: "private"},
 			From:      &tgbotapi.User{ID: userID, LanguageCode: "ru"},
 			SuccessfulPayment: &tgbotapi.SuccessfulPayment{
@@ -309,7 +310,32 @@ func (e *e2eEnv) successfulPayment(userID int64, payload string, totalStars int,
 				TelegramPaymentChargeID: chargeID,
 			},
 		},
+	}
+	// Drive the same raw-update boundary as production so subscription-only
+	// fields omitted by tgbotapi v5 are present during settlement.
+	expiresAt := time.Now().Add(30 * 24 * time.Hour).Unix()
+	raw, err := json.Marshal(map[string]any{
+		"update_id": update.UpdateID,
+		"message": map[string]any{
+			"message_id": update.Message.MessageID,
+			"date":       update.Message.Date,
+			"chat":       update.Message.Chat,
+			"from":       update.Message.From,
+			"successful_payment": map[string]any{
+				"currency": "XTR", "total_amount": totalStars, "invoice_payload": payload,
+				"telegram_payment_charge_id": chargeID, "subscription_expiration_date": expiresAt,
+			},
+		},
 	})
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	decoded, cleanup, err := e.bot.decodeTelegramUpdate(raw)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	defer cleanup()
+	return e.do(decoded)
 }
 
 // --- journey building blocks ---
@@ -777,7 +803,7 @@ func TestE2E_CryptoWebhook(t *testing.T) {
 
 	handler := e.bot.CryptoBotWebhookHandler()
 	body := fmt.Sprintf(
-		`{"update_type":"invoice_paid","payload":{"invoice_id":555,"status":"paid","payload":"%d"}}`, orderID)
+		`{"update_type":"invoice_paid","payload":{"invoice_id":555,"status":"paid","asset":"USDT","amount":"10.00","paid_at":"2026-08-27T10:00:00Z","payload":"%d"}}`, orderID)
 
 	post := func(payload, signature string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodPost, "/cryptobot-webhook", strings.NewReader(payload))
@@ -825,7 +851,7 @@ func TestE2E_CryptoWebhook(t *testing.T) {
 	// Broken signature on a fresh pending order → 403, nothing changes.
 	order2 := e.placeOrder(buyer, e.prodReg, "")
 	body2 := fmt.Sprintf(
-		`{"update_type":"invoice_paid","payload":{"invoice_id":556,"status":"paid","payload":"%d"}}`, order2)
+		`{"update_type":"invoice_paid","payload":{"invoice_id":556,"status":"paid","asset":"USDT","amount":"10.00","paid_at":"2026-08-27T10:00:00Z","payload":"%d"}}`, order2)
 	if rec := post(body2, cryptoSign(body2+"tampered")); rec.Code != http.StatusForbidden {
 		t.Fatalf("tampered webhook status = %d, want 403", rec.Code)
 	}

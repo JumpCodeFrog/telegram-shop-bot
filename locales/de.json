@@ -229,6 +229,8 @@
   "precheckout_amount_mismatch": "Der Rechnungsbetrag stimmt nicht mit der Bestellsumme überein",
   "precheckout_validation_error": "Bestellung konnte nicht geprüft werden, bitte versuche es später erneut",
   "sub_stars_only": "⭐ Das ist ein Abo — es kann nur mit Telegram Stars bezahlt werden.",
+  "sub_already_active": "📅 Dieses Abo ist bereits aktiv. Kündige es unter /mysubs, bevor du es erneut kaufst.",
+  "sub_alone": "📅 Ein Abo muss der einzige Artikel im Warenkorb sein und die Menge muss eins betragen.",
   "sub_none": "📅 Du hast keine aktiven Abos.",
   "sub_list_title": "📅 <b>Deine Abos</b>\n\n",
   "sub_list_item": "• <b>%s</b> — aktiv bis %s\n",
@@ -288,5 +290,6 @@
   "webapp_err_crypto_disabled": "Krypto-Zahlungen sind nicht verfügbar.",
   "webapp_err_sub_stars_only": "Abos können nur mit Telegram Stars bezahlt werden.",
   "webapp_err_sub_alone": "Bitte bestelle ein Abo getrennt von anderen Artikeln.",
+  "webapp_err_sub_active": "Dieses Abo ist bereits aktiv oder wartet auf Zahlung.",
   "btn_menu": "🏠 Hauptmenü"
 }

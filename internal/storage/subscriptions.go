@@ -39,8 +39,10 @@ func NewSQLSubscriptionStore(d *DB) *SQLSubscriptionStore {
 }
 
 // Upsert inserts a subscription or, on (user_id, product_id) conflict, renews
-// it: moves expires_at forward, refreshes order/charge/status, and clears
-// reminded_at so the next period gets its own reminder.
+// it: moves expires_at forward and clears reminded_at. The initial charge ID
+// stays immutable because Telegram cancellation targets the subscription's
+// first payment identity; a canceled subscription is never reactivated by a
+// late duplicate renewal delivery.
 func (s *SQLSubscriptionStore) Upsert(ctx context.Context, sub Subscription) error {
 	status := sub.Status
 	if status == "" {
@@ -50,11 +52,11 @@ func (s *SQLSubscriptionStore) Upsert(ctx context.Context, sub Subscription) err
 		`INSERT INTO subscriptions (user_id, product_id, order_id, telegram_charge_id, status, expires_at)
 		 VALUES (?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(user_id, product_id) DO UPDATE SET
-		     order_id           = excluded.order_id,
-		     telegram_charge_id = excluded.telegram_charge_id,
-		     status             = excluded.status,
-		     expires_at         = excluded.expires_at,
-		     reminded_at        = NULL,
+		     order_id           = CASE WHEN excluded.expires_at >= subscriptions.expires_at THEN excluded.order_id ELSE subscriptions.order_id END,
+		     telegram_charge_id = subscriptions.telegram_charge_id,
+		     status             = CASE WHEN subscriptions.status = 'canceled' THEN subscriptions.status ELSE excluded.status END,
+		     expires_at         = MAX(subscriptions.expires_at, excluded.expires_at),
+		     reminded_at        = CASE WHEN excluded.expires_at > subscriptions.expires_at THEN NULL ELSE subscriptions.reminded_at END,
 		     updated_at         = CURRENT_TIMESTAMP`,
 		sub.UserID, sub.ProductID, nullableID(sub.OrderID), sub.ChargeID, status, sub.ExpiresAt.UTC())
 	if err != nil {
