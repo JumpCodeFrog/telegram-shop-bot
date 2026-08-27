@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"strings"
 	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
@@ -19,11 +18,7 @@ type smokeReport struct {
 }
 
 func expectedTelegramWebhookURL(raw string) string {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return ""
-	}
-	return strings.TrimRight(raw, "/") + "/telegram-webhook"
+	return config.TelegramWebhookURL(raw)
 }
 
 func buildSmokeReport(self tgbotapi.User, info tgbotapi.WebhookInfo, envWebhookURL string) smokeReport {

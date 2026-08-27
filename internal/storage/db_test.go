@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -102,5 +103,62 @@ func TestClose(t *testing.T) {
 	// After close, queries should fail.
 	if err := db.Conn().Ping(); err == nil {
 		t.Error("expected error after Close(), got nil")
+	}
+}
+
+func TestApplyMigrationIsAtomic(t *testing.T) {
+	db, err := New(filepath.Join(t.TempDir(), "atomic.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	err = db.applyMigration("999_broken.sql", `
+		CREATE TABLE must_rollback (id INTEGER PRIMARY KEY);
+		INSERT INTO table_that_does_not_exist VALUES (1);
+	`)
+	if err == nil {
+		t.Fatal("broken migration unexpectedly succeeded")
+	}
+	var count int
+	if err := db.Conn().QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='must_rollback'`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("half-migrated table exists: count=%d", count)
+	}
+	if err := db.Conn().QueryRow(`SELECT COUNT(*) FROM schema_migrations WHERE version='999_broken.sql'`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("failed migration was recorded: count=%d", count)
+	}
+}
+
+func TestOpenReadOnlyRejectsWritesAndDoesNotMigrate(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "readonly.db")
+	db, err := New(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	readOnly, err := OpenReadOnly(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer readOnly.Close()
+	if _, err := readOnly.Conn().Exec(`INSERT INTO categories (name) VALUES ('mutated')`); err == nil {
+		t.Fatal("read-only connection accepted a write")
+	}
+}
+
+func TestOpenReadOnlyDoesNotCreateMissingDatabase(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "missing database #1.db")
+	if _, err := OpenReadOnly(path); err == nil {
+		t.Fatal("OpenReadOnly unexpectedly opened a missing database")
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("missing database was created: %v", err)
 	}
 }

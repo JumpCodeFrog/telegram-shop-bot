@@ -12,7 +12,6 @@ package bot
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -38,62 +37,18 @@ func cartHasSubscription(view *shop.CartView) bool {
 	return false
 }
 
-// orderSubscriptionProduct returns the first subscription product of an order
-// (product ID and period in days), or (0, 0) for a regular order. Products
-// deleted since the order was placed are skipped.
+// orderSubscriptionProduct reads only the immutable checkout snapshot. A
+// later catalog edit must never turn an already-created regular order into a
+// recurring invoice (or strip recurring terms from a subscription order).
 func (b *Bot) orderSubscriptionProduct(ctx context.Context, order *storage.Order) (productID int64, periodDays int, err error) {
+	_ = ctx
 	if order == nil {
 		return 0, 0, nil
 	}
-	for _, item := range order.Items {
-		p, err := b.products.GetProduct(ctx, item.ProductID)
-		if err != nil {
-			if errors.Is(err, storage.ErrNotFound) {
-				continue
-			}
-			return 0, 0, fmt.Errorf("load product %d: %w", item.ProductID, err)
-		}
-		if p != nil && p.SubPeriodDays > 0 {
-			return p.ID, p.SubPeriodDays, nil
-		}
+	if order.SubscriptionProductID > 0 && order.SubscriptionPeriodDays > 0 {
+		return order.SubscriptionProductID, order.SubscriptionPeriodDays, nil
 	}
 	return 0, 0, nil
-}
-
-// recordSubscription upserts the subscription row for a paid subscription
-// order. Expiry comes from the raw update's subscription_expiration_date when
-// the webhook stashed one; otherwise now + the product's period (30 days).
-func (b *Bot) recordSubscription(ctx context.Context, order *storage.Order, sp *tgbotapi.SuccessfulPayment) {
-	if b.subs == nil || order == nil || sp == nil {
-		return
-	}
-	productID, days, err := b.orderSubscriptionProduct(ctx, order)
-	if err != nil {
-		b.logger.Error("subscription: detect subscription product", "order_id", order.ID, "error", err)
-		return
-	}
-	if days <= 0 {
-		return
-	}
-
-	expiresAt, ok := b.takePendingSubExpiry(sp.TelegramPaymentChargeID)
-	if !ok {
-		expiresAt = time.Now().Add(time.Duration(days) * 24 * time.Hour)
-	}
-
-	sub := storage.Subscription{
-		UserID:    order.UserID,
-		ProductID: productID,
-		OrderID:   order.ID,
-		ChargeID:  sp.TelegramPaymentChargeID,
-		Status:    storage.SubStatusActive,
-		ExpiresAt: expiresAt,
-	}
-	if err := b.subs.Upsert(ctx, sub); err != nil {
-		b.logger.Error("subscription: upsert", "order_id", order.ID, "product_id", productID, "error", err)
-		return
-	}
-	b.logger.Info("subscription recorded", "order_id", order.ID, "product_id", productID, "expires_at", expiresAt)
 }
 
 // stashSubscriptionExpiry extracts successful_payment.subscription_expiration_date
@@ -105,8 +60,10 @@ func (b *Bot) stashSubscriptionExpiry(rawUpdate []byte) func() {
 	var probe struct {
 		Message struct {
 			SuccessfulPayment *struct {
-				ChargeID  string `json:"telegram_payment_charge_id"`
-				ExpiresAt int64  `json:"subscription_expiration_date"`
+				ChargeID         string `json:"telegram_payment_charge_id"`
+				ExpiresAt        int64  `json:"subscription_expiration_date"`
+				IsRecurring      bool   `json:"is_recurring"`
+				IsFirstRecurring bool   `json:"is_first_recurring"`
 			} `json:"successful_payment"`
 		} `json:"message"`
 	}
@@ -114,25 +71,69 @@ func (b *Bot) stashSubscriptionExpiry(rawUpdate []byte) func() {
 		return noop
 	}
 	sp := probe.Message.SuccessfulPayment
-	if sp == nil || sp.ChargeID == "" || sp.ExpiresAt <= 0 {
+	if sp == nil || sp.ChargeID == "" {
 		return noop
 	}
-	b.pendingSubExpiry.Store(sp.ChargeID, time.Unix(sp.ExpiresAt, 0))
-	chargeID := sp.ChargeID
-	return func() { b.pendingSubExpiry.Delete(chargeID) }
+	expiresAt := time.Time{}
+	if sp.ExpiresAt > 0 {
+		expiresAt = time.Unix(sp.ExpiresAt, 0)
+	}
+	renewal := sp.IsRecurring && !sp.IsFirstRecurring
+	b.pendingSubSignalsMu.Lock()
+	if b.pendingSubSignals == nil {
+		b.pendingSubSignals = make(map[string]pendingSubscriptionSignal)
+	}
+	signal := b.pendingSubSignals[sp.ChargeID]
+	if expiresAt.After(signal.expiresAt) {
+		signal.expiresAt = expiresAt
+	}
+	signal.renewal = signal.renewal || renewal
+	signal.refs++
+	b.pendingSubSignals[sp.ChargeID] = signal
+	b.pendingSubSignalsMu.Unlock()
+	return func() {
+		b.pendingSubSignalsMu.Lock()
+		current := b.pendingSubSignals[sp.ChargeID]
+		current.refs--
+		if current.refs <= 0 {
+			delete(b.pendingSubSignals, sp.ChargeID)
+		} else {
+			b.pendingSubSignals[sp.ChargeID] = current
+		}
+		b.pendingSubSignalsMu.Unlock()
+	}
 }
 
-// takePendingSubExpiry pops the stashed subscription expiry for a charge ID.
+// decodeTelegramUpdate preserves subscription fields that tgbotapi v5 does
+// not model. Webhook and polling both pass the exact provider JSON through
+// this boundary before the SDK-compatible update is handled.
+func (b *Bot) decodeTelegramUpdate(raw []byte) (tgbotapi.Update, func(), error) {
+	var update tgbotapi.Update
+	if err := json.Unmarshal(raw, &update); err != nil {
+		return update, func() {}, err
+	}
+	return update, b.stashSubscriptionExpiry(raw), nil
+}
+
+func (b *Bot) isPendingSubscriptionRenewal(chargeID string) bool {
+	b.pendingSubSignalsMu.Lock()
+	defer b.pendingSubSignalsMu.Unlock()
+	return b.pendingSubSignals[chargeID].renewal
+}
+
+// takePendingSubExpiry reads the stashed expiry. It remains available to every
+// concurrent duplicate delivery until all reference-counted cleanups run.
 func (b *Bot) takePendingSubExpiry(chargeID string) (time.Time, bool) {
 	if chargeID == "" {
 		return time.Time{}, false
 	}
-	v, ok := b.pendingSubExpiry.LoadAndDelete(chargeID)
-	if !ok {
+	b.pendingSubSignalsMu.Lock()
+	defer b.pendingSubSignalsMu.Unlock()
+	signal, ok := b.pendingSubSignals[chargeID]
+	if !ok || signal.expiresAt.IsZero() {
 		return time.Time{}, false
 	}
-	t, ok := v.(time.Time)
-	return t, ok
+	return signal.expiresAt, true
 }
 
 // handleMySubs handles the /mysubs command.

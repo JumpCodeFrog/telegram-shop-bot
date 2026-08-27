@@ -229,6 +229,8 @@
   "precheckout_amount_mismatch": "Invoice amount does not match the order total",
   "precheckout_validation_error": "Could not verify the order, please try again later",
   "sub_stars_only": "⭐ This is a subscription — it can only be paid with Telegram Stars.",
+  "sub_already_active": "📅 This subscription is already active. Cancel it in /mysubs before buying it again.",
+  "sub_alone": "📅 A subscription must be the only cart item and its quantity must be one.",
   "sub_none": "📅 You have no active subscriptions.",
   "sub_list_title": "📅 <b>Your subscriptions</b>\n\n",
   "sub_list_item": "• <b>%s</b> — active until %s\n",
@@ -288,5 +290,6 @@
   "webapp_err_crypto_disabled": "Crypto payments are not available.",
   "webapp_err_sub_stars_only": "Subscriptions can only be paid with Telegram Stars.",
   "webapp_err_sub_alone": "Please order a subscription separately from other items.",
+  "webapp_err_sub_active": "This subscription is already active or awaiting payment.",
   "btn_menu": "🏠 Main Menu"
 }

@@ -72,10 +72,12 @@ When available, Redis is used for:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `WEBHOOK_URL` | _(empty)_ | Public HTTPS URL for Telegram to POST updates. Leave empty to use long polling. |
-| `TELEGRAM_WEBHOOK_SECRET` | _(empty)_ | Secret token for webhook request verification. Required in production when `WEBHOOK_URL` is set. Generate with `openssl rand -hex 32`. |
+| `WEBHOOK_URL` | _(empty)_ | Public HTTPS base URL; Telegram posts to `<WEBHOOK_URL>/telegram-webhook`. Leave empty to use long polling. |
+| `TELEGRAM_WEBHOOK_SECRET` | _(empty)_ | Strong secret token for webhook request verification. Required whenever `WEBHOOK_URL` is set, in every `APP_ENV`. Generate with `openssl rand -hex 32`. |
 
 > When `WEBHOOK_URL` is empty the bot uses **long polling** — recommended for local development.
+
+If CryptoBot is enabled, configure its callback as `<WEBHOOK_URL>/cryptobot-webhook`.
 
 ---
 

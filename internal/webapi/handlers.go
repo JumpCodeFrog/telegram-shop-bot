@@ -497,6 +497,10 @@ func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request, auth *Au
 		s.writeError(w, http.StatusBadRequest, "webapp_err_empty_cart")
 		return
 	}
+	if err := shop.ValidateSubscriptionCart(view); err != nil {
+		s.writeError(w, http.StatusBadRequest, "webapp_err_sub_alone")
+		return
+	}
 
 	// Subscription products are payable only with Stars and must be ordered
 	// alone: Telegram subscription invoices carry exactly one price that
@@ -506,10 +510,6 @@ func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request, auth *Au
 		if it.Product.SubPeriodDays > 0 {
 			if req.Method != storage.PaymentMethodStars {
 				s.writeError(w, http.StatusBadRequest, "webapp_err_sub_stars_only")
-				return
-			}
-			if len(view.Items) > 1 || it.Quantity > 1 {
-				s.writeError(w, http.StatusBadRequest, "webapp_err_sub_alone")
 				return
 			}
 			subPeriod = subscriptionPeriodSeconds
@@ -530,6 +530,8 @@ func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request, auth *Au
 			s.writeError(w, http.StatusConflict, "webapp_err_out_of_stock")
 		case errors.Is(err, storage.ErrEmptyCart):
 			s.writeError(w, http.StatusBadRequest, "webapp_err_empty_cart")
+		case errors.Is(err, storage.ErrSubscriptionOrderConflict):
+			s.writeError(w, http.StatusConflict, "webapp_err_sub_active")
 		default:
 			s.logger.Error("webapi: create order", "user_id", userID, "error", err)
 			s.writeError(w, http.StatusInternalServerError, "webapp_err_internal")
@@ -703,7 +705,9 @@ func (s *Server) handlePhoto(w http.ResponseWriter, r *http.Request, _ *AuthResu
 	}
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
-		s.logger.Warn("webapi: fetch file", "file_id", fileID, "error", err)
+		// net/http errors include the request URL; Telegram download URLs
+		// embed BOT_TOKEN. Keep the provider URL out of application logs.
+		s.logger.Warn("webapi: fetch file", "file_id", fileID, "error", "Telegram file download failed")
 		s.writeError(w, http.StatusBadGateway, "webapp_err_internal")
 		return
 	}

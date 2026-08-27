@@ -2,14 +2,15 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"io/fs"
 	"log/slog"
-	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"shop_bot/internal/bot"
 	"shop_bot/internal/config"
+	"shop_bot/internal/launcher"
 	"shop_bot/internal/payment"
 	"shop_bot/internal/service"
 	"shop_bot/internal/shop"
@@ -46,13 +47,37 @@ func logLevel(level string) slog.Level {
 	}
 }
 
-func redisAvailable(addr string) bool {
-	conn, err := net.DialTimeout("tcp", addr, time.Second)
-	if err != nil {
-		return false
+func redisAvailable(addr, password string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	return launcher.CheckRedis(ctx, addr, password) == nil
+}
+
+func main() {
+	commands := commandSet{
+		init: func() int {
+			_, err := launcher.RunInit(context.Background(), launcher.DefaultInitOptions())
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Setup failed: %v\n", err)
+				return 1
+			}
+			return 0
+		},
+		doctor: func() int {
+			return launcher.RunDoctor(context.Background(), launcher.DefaultDoctorOptions()).ExitCode()
+		},
+		reconcileStars: func(args []string) int {
+			return launcher.RunStarsReconcileCLI(context.Background(), args, launcher.DefaultStarsReconcileOptions())
+		},
+		paymentReview: func(args []string) int {
+			return launcher.RunPaymentReview(context.Background(), args, launcher.DefaultPaymentReviewOptions())
+		},
+		run: func() int {
+			runBot()
+			return 0
+		},
 	}
-	_ = conn.Close()
-	return true
+	os.Exit(dispatch(os.Args[1:], os.Stdout, commands, version, commit, date))
 }
 
 // workerGroup owns every background goroutine of the process. Start registers
@@ -104,7 +129,7 @@ func (g *workerGroup) Drain(timeout time.Duration) {
 	}
 }
 
-func main() {
+func runBot() {
 	// 1. Load config
 	if err := godotenv.Load(); err != nil {
 		slog.Warn("No .env file found, using environment variables")
@@ -147,7 +172,7 @@ func main() {
 		fsm         storage.FSMStore
 		redisClient *redis.Client
 	)
-	if redisAvailable(cfg.RedisAddr) {
+	if redisAvailable(cfg.RedisAddr, cfg.RedisPassword) {
 		redisFSM := storage.NewRedisFSMStore(cfg.RedisAddr, cfg.RedisPassword)
 		fsm = redisFSM
 		redisClient = redisFSM.Client()
@@ -251,7 +276,9 @@ func main() {
 
 		// Mount webhook endpoints when WEBHOOK_URL is configured.
 		if cfg.WebhookURL != "" {
-			mux.Handle("/webhook/", b.WebhookHandler())
+			// WEBHOOK_URL is the public origin/base. Telegram is registered at
+			// WEBHOOK_URL + /telegram-webhook; keep the local route identical.
+			mountWebhookRoutes(mux, b)
 		}
 
 		// Mount the Mini App (static files + REST API) only when WEBAPP_URL

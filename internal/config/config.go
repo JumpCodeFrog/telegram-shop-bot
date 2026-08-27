@@ -1,7 +1,6 @@
 package config
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -38,67 +37,87 @@ type Config struct {
 // Load reads configuration from environment variables.
 // Returns an error if required fields are missing or invalid.
 func Load() (*Config, error) {
-	botToken := os.Getenv("BOT_TOKEN")
-	if botToken == "" {
-		return nil, errors.New("BOT_TOKEN is required but not set")
+	return load(os.LookupEnv)
+}
+
+// LoadFromMap validates and loads configuration from values. It is used by
+// diagnostics so checking a .env file does not mutate the current process.
+func LoadFromMap(values map[string]string) (*Config, error) {
+	return load(func(key string) (string, bool) {
+		value, ok := values[key]
+		return value, ok
+	})
+}
+
+type lookupFunc func(string) (string, bool)
+
+func load(lookup lookupFunc) (*Config, error) {
+	botToken := strings.TrimSpace(value(lookup, "BOT_TOKEN"))
+	if err := ValidateBotToken(botToken); err != nil {
+		return nil, fmt.Errorf("BOT_TOKEN: %w", err)
 	}
 
-	adminIDs, err := parseAdminIDs(os.Getenv("ADMIN_IDS"))
+	adminIDs, err := parseAdminIDs(value(lookup, "ADMIN_IDS"))
 	if err != nil {
 		return nil, fmt.Errorf("ADMIN_IDS: %w", err)
 	}
 
-	usdToStars, err := parsePositiveInt(os.Getenv("USD_TO_STARS_RATE"), defaultUSDToStarsRate)
+	usdToStars, err := parsePositiveInt(value(lookup, "USD_TO_STARS_RATE"), defaultUSDToStarsRate)
 	if err != nil {
 		return nil, fmt.Errorf("USD_TO_STARS_RATE: %w", err)
 	}
 
-	adminGroupID, err := parseOptionalInt64(os.Getenv("ADMIN_GROUP_ID"))
+	adminGroupID, err := parseOptionalInt64(value(lookup, "ADMIN_GROUP_ID"))
 	if err != nil {
 		return nil, fmt.Errorf("ADMIN_GROUP_ID: %w", err)
 	}
 
-	topicOrdersNew, err := parsePositiveInt(os.Getenv("TOPIC_ORDERS_NEW"), 0)
+	topicOrdersNew, err := parsePositiveInt(value(lookup, "TOPIC_ORDERS_NEW"), 0)
 	if err != nil {
 		return nil, fmt.Errorf("TOPIC_ORDERS_NEW: %w", err)
 	}
-	topicOrdersPaid, err := parsePositiveInt(os.Getenv("TOPIC_ORDERS_PAID"), 0)
+	topicOrdersPaid, err := parsePositiveInt(value(lookup, "TOPIC_ORDERS_PAID"), 0)
 	if err != nil {
 		return nil, fmt.Errorf("TOPIC_ORDERS_PAID: %w", err)
 	}
-	topicOrdersDelivered, err := parsePositiveInt(os.Getenv("TOPIC_ORDERS_DELIVERED"), 0)
+	topicOrdersDelivered, err := parsePositiveInt(value(lookup, "TOPIC_ORDERS_DELIVERED"), 0)
 	if err != nil {
 		return nil, fmt.Errorf("TOPIC_ORDERS_DELIVERED: %w", err)
 	}
 
-	webhookURL := os.Getenv("WEBHOOK_URL")
-	webhookSecret := os.Getenv("TELEGRAM_WEBHOOK_SECRET")
+	webhookURL := strings.TrimSpace(value(lookup, "WEBHOOK_URL"))
+	webhookSecret := strings.TrimSpace(value(lookup, "TELEGRAM_WEBHOOK_SECRET"))
 
-	if os.Getenv("APP_ENV") == "production" && webhookURL != "" && webhookSecret == "" {
-		return nil, errors.New("TELEGRAM_WEBHOOK_SECRET is required in production when WEBHOOK_URL is set")
+	// A configured WEBHOOK_URL makes this endpoint public regardless of the
+	// friendly APP_ENV label. Never expose Telegram update handling without a
+	// strong shared secret that Telegram sends back on every request.
+	if webhookURL != "" {
+		if err := ValidateTelegramWebhookSecret(webhookSecret); err != nil {
+			return nil, fmt.Errorf("TELEGRAM_WEBHOOK_SECRET: %w when WEBHOOK_URL is set", err)
+		}
 	}
 
 	return &Config{
 		BotToken:              botToken,
-		BotUsername:           os.Getenv("BOT_USERNAME"),
-		CryptoBotToken:        os.Getenv("CRYPTOBOT_TOKEN"),
+		BotUsername:           value(lookup, "BOT_USERNAME"),
+		CryptoBotToken:        value(lookup, "CRYPTOBOT_TOKEN"),
 		AdminIDs:              adminIDs,
 		AdminGroupID:          adminGroupID,
 		TopicOrdersNew:        topicOrdersNew,
 		TopicOrdersPaid:       topicOrdersPaid,
 		TopicOrdersDelivered:  topicOrdersDelivered,
 		WebhookURL:            webhookURL,
-		DBPath:                getEnv("DB_PATH", "data/shop.db"),
-		LogLevel:              getEnv("LOG_LEVEL", "info"),
-		AppEnv:                getEnv("APP_ENV", "development"),
-		RedisAddr:             getEnv("REDIS_ADDR", "localhost:6379"),
-		RedisPassword:         os.Getenv("REDIS_PASSWORD"),
+		DBPath:                getEnv(lookup, "DB_PATH", "data/shop.db"),
+		LogLevel:              getEnv(lookup, "LOG_LEVEL", "info"),
+		AppEnv:                getEnv(lookup, "APP_ENV", "development"),
+		RedisAddr:             getEnv(lookup, "REDIS_ADDR", "localhost:6379"),
+		RedisPassword:         value(lookup, "REDIS_PASSWORD"),
 		TelegramWebhookSecret: webhookSecret,
 		USDToStarsRate:        usdToStars,
-		LocalesDir:            getEnv("LOCALES_DIR", "locales"),
-		OutboundWebhookURL:    os.Getenv("OUTBOUND_WEBHOOK_URL"),
-		OutboundWebhookSecret: os.Getenv("OUTBOUND_WEBHOOK_SECRET"),
-		WebAppURL:             os.Getenv("WEBAPP_URL"),
+		LocalesDir:            getEnv(lookup, "LOCALES_DIR", "locales"),
+		OutboundWebhookURL:    value(lookup, "OUTBOUND_WEBHOOK_URL"),
+		OutboundWebhookSecret: value(lookup, "OUTBOUND_WEBHOOK_SECRET"),
+		WebAppURL:             value(lookup, "WEBAPP_URL"),
 	}, nil
 }
 
@@ -120,16 +139,24 @@ func parseAdminIDs(raw string) ([]int64, error) {
 		if err != nil {
 			return nil, fmt.Errorf("invalid ID %q: %w", p, err)
 		}
+		if err := ValidateAdminUserID(id); err != nil {
+			return nil, err
+		}
 		ids = append(ids, id)
 	}
 	return ids, nil
 }
 
-func getEnv(key, defaultValue string) string {
-	if value, exists := os.LookupEnv(key); exists {
-		return value
+func getEnv(lookup lookupFunc, key, defaultValue string) string {
+	if current, exists := lookup(key); exists {
+		return current
 	}
 	return defaultValue
+}
+
+func value(lookup lookupFunc, key string) string {
+	current, _ := lookup(key)
+	return current
 }
 
 // parseOptionalInt64 parses s as an int64 (negative values are valid: Telegram

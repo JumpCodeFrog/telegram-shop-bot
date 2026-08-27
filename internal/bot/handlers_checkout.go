@@ -84,6 +84,10 @@ func (b *Bot) handlePromoInput(msg *tgbotapi.Message) {
 		b.sendOrEditStyled(chatID, 0, b.t(lang, "cart_empty"), "", nil)
 		return
 	}
+	if err := shop.ValidateSubscriptionCart(view); err != nil {
+		b.sendOrEditStyled(chatID, 0, b.t(lang, "sub_alone"), "", nil)
+		return
+	}
 
 	// Check category restriction if promo has one.
 	if promo.CategoryID != nil {
@@ -135,6 +139,29 @@ func (b *Bot) onOrderConfirm(chatID, userID int64, msgID int, data, lang string)
 	if len(view.Items) == 0 {
 		b.sendOrEditStyled(chatID, msgID, b.t(lang, "order_empty_cart"), "", nil)
 		return
+	}
+	if err := shop.ValidateSubscriptionCart(view); err != nil {
+		b.sendOrEditStyled(chatID, msgID, b.t(lang, "sub_alone"), "", nil)
+		return
+	}
+	if cartHasSubscription(view) && b.subs != nil {
+		active, subErr := b.subs.ListActiveByUser(ctx, userID)
+		if subErr != nil {
+			b.logger.Error("check active subscription before checkout", "user_id", userID, "error", subErr)
+			b.sendOrEditStyled(chatID, msgID, b.t(lang, "error_short"), "", nil)
+			return
+		}
+		for _, item := range view.Items {
+			if item.Product.SubPeriodDays <= 0 {
+				continue
+			}
+			for _, sub := range active {
+				if sub.ProductID == item.Product.ID {
+					b.sendOrEditStyled(chatID, msgID, b.t(lang, "sub_already_active"), "", nil)
+					return
+				}
+			}
+		}
 	}
 
 	// Resolve promo if provided.
@@ -197,6 +224,10 @@ func (b *Bot) onOrderConfirm(chatID, userID int64, msgID int, data, lang string)
 	orderID, err := b.order.CreateFromCart(ctx, userID, view, promo)
 	if err != nil {
 		var stockErr *shop.ErrInsufficientStock
+		if errors.Is(err, storage.ErrSubscriptionOrderConflict) {
+			b.sendOrEditStyled(chatID, msgID, b.t(lang, "sub_already_active"), "", nil)
+			return
+		}
 		if errors.As(err, &stockErr) {
 			b.sendOrEditStyled(chatID, msgID,
 				fmt.Sprintf(b.t(lang, "error_insufficient_stock"), stockErr.ProductName, stockErr.Have), "", nil)
@@ -257,6 +288,9 @@ func ensureOrderPayableForUser(order *storage.Order, userID int64) error {
 	}
 	if order.Status != storage.OrderStatusPending {
 		return storage.ErrOrderStatusConflict
+	}
+	if order.PaymentState == storage.PaymentStateNeedsReview {
+		return storage.ErrPaymentNeedsReview
 	}
 	return nil
 }

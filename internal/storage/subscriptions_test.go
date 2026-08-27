@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -73,11 +74,40 @@ func TestSubUpsert_InsertThenRenew(t *testing.T) {
 	if got := subs[0].ExpiresAt.Unix(); got != renewed.Unix() {
 		t.Errorf("ExpiresAt after renewal = %v, want %v", subs[0].ExpiresAt, renewed)
 	}
-	if subs[0].ChargeID != "ch-2" {
-		t.Errorf("ChargeID = %q, want %q", subs[0].ChargeID, "ch-2")
+	if subs[0].ChargeID != "ch-1" {
+		t.Errorf("ChargeID = %q, want immutable initial %q", subs[0].ChargeID, "ch-1")
 	}
 	if subs[0].RemindedAt.Valid {
 		t.Errorf("RemindedAt still set after renewal, want cleared")
+	}
+}
+
+func TestSubUpsertDoesNotRegressExpiryOrCharge(t *testing.T) {
+	db, err := New(filepath.Join(t.TempDir(), "sub-monotonic.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	store := NewSQLSubscriptionStore(db)
+	userID := seedUser(t, db, 42)
+	productID := seedProduct(t, db, "Monotonic")
+	now := time.Now().UTC().Truncate(time.Second)
+	newer := Subscription{UserID: userID, ProductID: productID, ChargeID: "new", Status: SubStatusActive, ExpiresAt: now.Add(60 * 24 * time.Hour)}
+	older := newer
+	older.ChargeID = "old"
+	older.ExpiresAt = now.Add(30 * 24 * time.Hour)
+	if err := store.Upsert(context.Background(), newer); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Upsert(context.Background(), older); err != nil {
+		t.Fatal(err)
+	}
+	subs, err := store.ListActiveByUser(context.Background(), userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(subs) != 1 || subs[0].ChargeID != "new" || !subs[0].ExpiresAt.Equal(newer.ExpiresAt) {
+		t.Fatalf("subscriptions = %+v", subs)
 	}
 }
 

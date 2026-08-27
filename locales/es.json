@@ -229,6 +229,8 @@
   "precheckout_amount_mismatch": "El importe de la factura no coincide con el total del pedido",
   "precheckout_validation_error": "No se pudo verificar el pedido, inténtalo más tarde",
   "sub_stars_only": "⭐ Esto es una suscripción: solo se puede pagar con Telegram Stars.",
+  "sub_already_active": "📅 Esta suscripción ya está activa. Cancélala en /mysubs antes de volver a comprarla.",
+  "sub_alone": "📅 La suscripción debe ser el único artículo del carrito y la cantidad debe ser uno.",
   "sub_none": "📅 No tienes suscripciones activas.",
   "sub_list_title": "📅 <b>Tus suscripciones</b>\n\n",
   "sub_list_item": "• <b>%s</b> — activa hasta %s\n",
@@ -288,5 +290,6 @@
   "webapp_err_crypto_disabled": "Los pagos con cripto no están disponibles.",
   "webapp_err_sub_stars_only": "Las suscripciones solo se pueden pagar con Telegram Stars.",
   "webapp_err_sub_alone": "Pide la suscripción por separado de otros artículos.",
+  "webapp_err_sub_active": "Esta suscripción ya está activa o pendiente de pago.",
   "btn_menu": "🏠 Menú principal"
 }

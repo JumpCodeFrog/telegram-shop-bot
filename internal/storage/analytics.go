@@ -6,23 +6,36 @@ import (
 	"fmt"
 )
 
-// RevenueSummary contains aggregate revenue figures across all orders.
+// RevenueSummary contains capture gross, succeeded refunds, and net revenue.
+// The legacy Total* fields are net values.
 type RevenueSummary struct {
 	TotalOrders int
 	PaidOrders  int
+	GrossUSD    float64
+	RefundUSD   float64
 	TotalUSD    float64
+	GrossStars  int
+	RefundStars int
 	TotalStars  int
 }
 
-// DailyRevenue contains revenue figures for a single calendar day.
+// DailyRevenue contains cashflow for a single calendar day. Captures use their
+// ledger creation day; refunds use completed_at and fall back to created_at.
+// The legacy Total* fields are net values and may be negative on refund days.
 type DailyRevenue struct {
-	Date       string
-	TotalUSD   float64
-	TotalStars int
-	OrderCount int
+	Date        string
+	GrossUSD    float64
+	RefundUSD   float64
+	TotalUSD    float64
+	GrossStars  int
+	RefundStars int
+	TotalStars  int
+	OrderCount  int
 }
 
-// ProductStats contains sales figures for a single product.
+// ProductStats contains gross merchandising figures for a single product.
+// It is an inventory/sales ranking rather than a cash-ledger view: refunds do
+// not infer returned quantities and therefore do not reduce these figures.
 type ProductStats struct {
 	ProductID    int64
 	Name         string
@@ -30,21 +43,33 @@ type ProductStats struct {
 	TotalRevenue float64
 }
 
-// PaymentMethodStat contains aggregate figures for a single payment method.
+// PaymentMethodStat contains per-provider gross, refunds, and net revenue. USD
+// fields apply to crypto and Stars fields apply to Telegram Stars; Total* is net.
 type PaymentMethodStat struct {
-	Method     string
-	OrderCount int
-	TotalUSD   float64
+	Method      string
+	OrderCount  int
+	GrossUSD    float64
+	RefundUSD   float64
+	TotalUSD    float64
+	GrossStars  int
+	RefundStars int
+	TotalStars  int
 }
 
-// TopBuyer contains aggregate paid-order figures for a single user.
+// TopBuyer contains aggregate capture gross, refunds, and net USD-equivalent
+// value for a single user. Stars refunds use their capture's proportional
+// catalog USD value. TotalUSD is net.
 type TopBuyer struct {
-	UserID   int64
-	Orders   int
-	TotalUSD float64
+	UserID    int64
+	Orders    int
+	GrossUSD  float64
+	RefundUSD float64
+	TotalUSD  float64
 }
 
-// PromoUsageStat contains usage figures for a single promo code. The total
+// PromoUsageStat contains checkout usage figures for a single promo code, not
+// cash-ledger revenue. Refunds do not reverse promo redemption or the discount
+// applied at checkout. The total
 // discount is reconstructed from paid orders (order totals are stored after
 // the discount was applied), so it is only computable when every paid order
 // carries a discount percentage strictly between 0 and 100; otherwise
@@ -70,12 +95,51 @@ func NewSQLAnalyticsStore(d *DB) *SQLAnalyticsStore {
 func (s *SQLAnalyticsStore) GetRevenueSummary(ctx context.Context) (*RevenueSummary, error) {
 	var r RevenueSummary
 	err := s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*),
-		        SUM(CASE WHEN status = 'paid' THEN 1 ELSE 0 END),
-		        COALESCE(SUM(CASE WHEN status = 'paid' THEN total_usd ELSE 0 END), 0),
-		        COALESCE(SUM(CASE WHEN status = 'paid' THEN total_stars ELSE 0 END), 0)
-		 FROM orders`,
-	).Scan(&r.TotalOrders, &r.PaidOrders, &r.TotalUSD, &r.TotalStars)
+		`WITH captures AS (
+		     SELECT a.order_id, a.provider, a.external_id, a.amount_minor,
+		            CASE WHEN a.provider = 'crypto' THEN a.amount_minor / 100.0
+		                 ELSE o.total_usd END AS gross_usd
+		       FROM payment_attempts a
+		       JOIN orders o ON o.id = a.order_id
+		      WHERE a.status = 'succeeded'
+		         OR (a.status = 'needs_review' AND EXISTS (
+		                SELECT 1
+		                  FROM payment_events e
+		                  JOIN payment_resolutions pr
+		                    ON pr.target_kind = 'payment_event' AND pr.target_id = e.id
+		                 WHERE e.payment_attempt_id = a.id
+		                   AND e.order_id = a.order_id
+		                   AND e.provider = a.provider
+		                   AND e.event_kind = 'captured'
+		                   AND e.external_id = a.external_id
+		                   AND e.amount_minor = a.amount_minor
+		                   AND e.currency = a.currency
+		                   AND e.scale = a.scale
+		                   AND pr.order_id = a.order_id
+		                   AND pr.provider = a.provider
+		                   AND pr.decision = 'compensated'))
+		 ), refund_values AS (
+		     SELECT r.provider, r.amount_minor,
+		            CASE WHEN r.provider = 'crypto' THEN r.amount_minor / 100.0
+		                 WHEN c.amount_minor > 0 THEN c.gross_usd * r.amount_minor / c.amount_minor
+		                 ELSE 0 END AS refund_usd
+		       FROM refunds r
+		       JOIN captures c ON c.provider = r.provider AND c.external_id = r.payment_external_id
+		      WHERE r.status = 'succeeded'
+		 )
+		 SELECT (SELECT COUNT(*) FROM orders),
+		        COUNT(DISTINCT order_id),
+		        COALESCE(SUM(gross_usd), 0),
+		        COALESCE((SELECT SUM(refund_usd) FROM refund_values), 0),
+		        COALESCE(SUM(gross_usd), 0) - COALESCE((SELECT SUM(refund_usd) FROM refund_values), 0),
+		        COALESCE(SUM(CASE WHEN provider = 'stars' THEN amount_minor ELSE 0 END), 0),
+		        COALESCE((SELECT SUM(CASE WHEN provider = 'stars' THEN amount_minor ELSE 0 END) FROM refund_values), 0),
+		        COALESCE(SUM(CASE WHEN provider = 'stars' THEN amount_minor ELSE 0 END), 0)
+		          - COALESCE((SELECT SUM(CASE WHEN provider = 'stars' THEN amount_minor ELSE 0 END) FROM refund_values), 0)
+		   FROM captures`,
+	).Scan(&r.TotalOrders, &r.PaidOrders,
+		&r.GrossUSD, &r.RefundUSD, &r.TotalUSD,
+		&r.GrossStars, &r.RefundStars, &r.TotalStars)
 	if err != nil {
 		return nil, fmt.Errorf("analytics: get revenue summary: %w", err)
 	}
@@ -85,15 +149,56 @@ func (s *SQLAnalyticsStore) GetRevenueSummary(ctx context.Context) (*RevenueSumm
 // GetRevenueByDays returns per-day revenue for the last N days.
 func (s *SQLAnalyticsStore) GetRevenueByDays(ctx context.Context, days int) ([]DailyRevenue, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT DATE(created_at),
-		        COALESCE(SUM(total_usd), 0),
-		        COALESCE(SUM(total_stars), 0),
-		        COUNT(*)
-		 FROM orders
-		 WHERE status = 'paid'
-		   AND created_at >= DATE('now', '-'||?||' days')
-		 GROUP BY DATE(created_at)
-		 ORDER BY DATE(created_at) DESC`, days)
+		`WITH captures AS (
+		     SELECT DATE(a.created_at) AS day, a.provider, a.order_id, a.external_id,
+		            a.amount_minor, CASE WHEN a.provider = 'crypto' THEN a.amount_minor / 100.0
+		                                 ELSE o.total_usd END AS gross_usd
+		       FROM payment_attempts a
+		       JOIN orders o ON o.id = a.order_id
+		      WHERE a.status = 'succeeded'
+		         OR (a.status = 'needs_review' AND EXISTS (
+		                SELECT 1
+		                  FROM payment_events e
+		                  JOIN payment_resolutions pr
+		                    ON pr.target_kind = 'payment_event' AND pr.target_id = e.id
+		                 WHERE e.payment_attempt_id = a.id
+		                   AND e.order_id = a.order_id
+		                   AND e.provider = a.provider
+		                   AND e.event_kind = 'captured'
+		                   AND e.external_id = a.external_id
+		                   AND e.amount_minor = a.amount_minor
+		                   AND e.currency = a.currency
+		                   AND e.scale = a.scale
+		                   AND pr.order_id = a.order_id
+		                   AND pr.provider = a.provider
+		                   AND pr.decision = 'compensated'))
+		 ), cashflow AS (
+		     SELECT day, provider, order_id, amount_minor AS gross_minor,
+		            0 AS refund_minor, gross_usd, 0.0 AS refund_usd, 1 AS is_capture
+		       FROM captures
+		     UNION ALL
+		     SELECT DATE(COALESCE(r.completed_at, r.created_at)), r.provider, r.order_id,
+		            0, r.amount_minor, 0.0,
+		            CASE WHEN r.provider = 'crypto' THEN r.amount_minor / 100.0
+		                 WHEN c.amount_minor > 0 THEN c.gross_usd * r.amount_minor / c.amount_minor
+		                 ELSE 0 END,
+		            0
+		       FROM refunds r
+		       JOIN captures c ON c.provider = r.provider AND c.external_id = r.payment_external_id
+		      WHERE r.status = 'succeeded'
+		 )
+		 SELECT day,
+		        COALESCE(SUM(gross_usd), 0),
+		        COALESCE(SUM(refund_usd), 0),
+		        COALESCE(SUM(gross_usd - refund_usd), 0),
+		        COALESCE(SUM(CASE WHEN provider = 'stars' THEN gross_minor ELSE 0 END), 0),
+		        COALESCE(SUM(CASE WHEN provider = 'stars' THEN refund_minor ELSE 0 END), 0),
+		        COALESCE(SUM(CASE WHEN provider = 'stars' THEN gross_minor - refund_minor ELSE 0 END), 0),
+		        COUNT(DISTINCT CASE WHEN is_capture = 1 THEN order_id END)
+		   FROM cashflow
+		  WHERE day >= DATE('now', '-'||?||' days')
+		  GROUP BY day
+		  ORDER BY day DESC`, days)
 	if err != nil {
 		return nil, fmt.Errorf("analytics: get revenue by days: %w", err)
 	}
@@ -102,7 +207,10 @@ func (s *SQLAnalyticsStore) GetRevenueByDays(ctx context.Context, days int) ([]D
 	var result []DailyRevenue
 	for rows.Next() {
 		var d DailyRevenue
-		if err := rows.Scan(&d.Date, &d.TotalUSD, &d.TotalStars, &d.OrderCount); err != nil {
+		if err := rows.Scan(&d.Date,
+			&d.GrossUSD, &d.RefundUSD, &d.TotalUSD,
+			&d.GrossStars, &d.RefundStars, &d.TotalStars,
+			&d.OrderCount); err != nil {
 			return nil, fmt.Errorf("analytics: scan daily revenue: %w", err)
 		}
 		result = append(result, d)
@@ -143,10 +251,54 @@ func (s *SQLAnalyticsStore) GetTopProducts(ctx context.Context, limit int) ([]Pr
 // GetPaymentMethodStats returns aggregate figures grouped by payment method.
 func (s *SQLAnalyticsStore) GetPaymentMethodStats(ctx context.Context) ([]PaymentMethodStat, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT COALESCE(payment_method, 'unknown'), COUNT(*), COALESCE(SUM(total_usd), 0)
-		 FROM orders
-		 WHERE status = 'paid'
-		 GROUP BY payment_method`)
+		`WITH captures AS (
+		     SELECT a.provider, a.order_id, a.external_id, a.amount_minor,
+		            CASE WHEN a.provider = 'crypto' THEN a.amount_minor / 100.0
+		                 ELSE o.total_usd END AS gross_usd
+		       FROM payment_attempts a
+		       JOIN orders o ON o.id = a.order_id
+		      WHERE a.status = 'succeeded'
+		         OR (a.status = 'needs_review' AND EXISTS (
+		                SELECT 1
+		                  FROM payment_events e
+		                  JOIN payment_resolutions pr
+		                    ON pr.target_kind = 'payment_event' AND pr.target_id = e.id
+		                 WHERE e.payment_attempt_id = a.id
+		                   AND e.order_id = a.order_id
+		                   AND e.provider = a.provider
+		                   AND e.event_kind = 'captured'
+		                   AND e.external_id = a.external_id
+		                   AND e.amount_minor = a.amount_minor
+		                   AND e.currency = a.currency
+		                   AND e.scale = a.scale
+		                   AND pr.order_id = a.order_id
+		                   AND pr.provider = a.provider
+		                   AND pr.decision = 'compensated'))
+		 ), cashflow AS (
+		     SELECT provider, order_id, amount_minor AS gross_minor,
+		            0 AS refund_minor, gross_usd, 0.0 AS refund_usd, 1 AS is_capture
+		       FROM captures
+		     UNION ALL
+		     SELECT r.provider, r.order_id, 0, r.amount_minor, 0.0,
+		            CASE WHEN r.provider = 'crypto' THEN r.amount_minor / 100.0
+		                 WHEN c.amount_minor > 0 THEN c.gross_usd * r.amount_minor / c.amount_minor
+		                 ELSE 0 END,
+		            0
+		       FROM refunds r
+		       JOIN captures c ON c.provider = r.provider AND c.external_id = r.payment_external_id
+		      WHERE r.status = 'succeeded'
+		 )
+		 SELECT provider,
+		        COUNT(DISTINCT CASE WHEN is_capture = 1 THEN order_id END),
+		        COALESCE(SUM(gross_usd), 0),
+		        COALESCE(SUM(refund_usd), 0),
+		        COALESCE(SUM(gross_usd - refund_usd), 0),
+		        COALESCE(SUM(CASE WHEN provider = 'stars' THEN gross_minor ELSE 0 END), 0),
+		        COALESCE(SUM(CASE WHEN provider = 'stars' THEN refund_minor ELSE 0 END), 0),
+		        COALESCE(SUM(CASE WHEN provider = 'stars' THEN gross_minor - refund_minor ELSE 0 END), 0)
+		   FROM cashflow
+		  GROUP BY provider
+		  ORDER BY provider`)
 	if err != nil {
 		return nil, fmt.Errorf("analytics: get payment method stats: %w", err)
 	}
@@ -155,7 +307,9 @@ func (s *SQLAnalyticsStore) GetPaymentMethodStats(ctx context.Context) ([]Paymen
 	var result []PaymentMethodStat
 	for rows.Next() {
 		var ps PaymentMethodStat
-		if err := rows.Scan(&ps.Method, &ps.OrderCount, &ps.TotalUSD); err != nil {
+		if err := rows.Scan(&ps.Method, &ps.OrderCount,
+			&ps.GrossUSD, &ps.RefundUSD, &ps.TotalUSD,
+			&ps.GrossStars, &ps.RefundStars, &ps.TotalStars); err != nil {
 			return nil, fmt.Errorf("analytics: scan payment method stat: %w", err)
 		}
 		result = append(result, ps)
@@ -167,12 +321,51 @@ func (s *SQLAnalyticsStore) GetPaymentMethodStats(ctx context.Context) ([]Paymen
 // count. Paid and delivered orders both count as revenue.
 func (s *SQLAnalyticsStore) TopBuyers(ctx context.Context, limit int) ([]TopBuyer, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT user_id, COUNT(*), COALESCE(SUM(total_usd), 0)
-		 FROM orders
-		 WHERE status = 'paid'
-		 GROUP BY user_id
-		 ORDER BY SUM(total_usd) DESC, user_id
-		 LIMIT ?`, limit)
+		`WITH refunds_by_capture AS (
+		     SELECT provider, payment_external_id, SUM(amount_minor) AS refund_minor
+		       FROM refunds
+		      WHERE status = 'succeeded'
+		      GROUP BY provider, payment_external_id
+		 ), capture_cashflow AS (
+		     SELECT a.order_id, o.user_id,
+		            CASE WHEN a.provider = 'crypto'
+		                 THEN a.amount_minor / 100.0
+		                 ELSE o.total_usd END AS gross_usd,
+		            CASE WHEN a.provider = 'crypto'
+		                 THEN COALESCE(r.refund_minor, 0) / 100.0
+		                 WHEN a.amount_minor > 0
+		                 THEN o.total_usd * COALESCE(r.refund_minor, 0) / a.amount_minor
+		                 ELSE 0 END AS refund_usd
+		       FROM payment_attempts a
+		       JOIN orders o ON o.id = a.order_id
+		       LEFT JOIN refunds_by_capture r
+		         ON r.provider = a.provider AND r.payment_external_id = a.external_id
+		      WHERE a.status = 'succeeded'
+		         OR (a.status = 'needs_review' AND EXISTS (
+		                SELECT 1
+		                  FROM payment_events e
+		                  JOIN payment_resolutions pr
+		                    ON pr.target_kind = 'payment_event' AND pr.target_id = e.id
+		                 WHERE e.payment_attempt_id = a.id
+		                   AND e.order_id = a.order_id
+		                   AND e.provider = a.provider
+		                   AND e.event_kind = 'captured'
+		                   AND e.external_id = a.external_id
+		                   AND e.amount_minor = a.amount_minor
+		                   AND e.currency = a.currency
+		                   AND e.scale = a.scale
+		                   AND pr.order_id = a.order_id
+		                   AND pr.provider = a.provider
+		                   AND pr.decision = 'compensated'))
+		 )
+		 SELECT user_id, COUNT(DISTINCT order_id),
+		        COALESCE(SUM(gross_usd), 0),
+		        COALESCE(SUM(refund_usd), 0),
+		        COALESCE(SUM(gross_usd - refund_usd), 0)
+		   FROM capture_cashflow
+		  GROUP BY user_id
+		  ORDER BY 5 DESC, user_id
+		  LIMIT ?`, limit)
 	if err != nil {
 		return nil, fmt.Errorf("analytics: top buyers: %w", err)
 	}
@@ -181,7 +374,7 @@ func (s *SQLAnalyticsStore) TopBuyers(ctx context.Context, limit int) ([]TopBuye
 	var result []TopBuyer
 	for rows.Next() {
 		var b TopBuyer
-		if err := rows.Scan(&b.UserID, &b.Orders, &b.TotalUSD); err != nil {
+		if err := rows.Scan(&b.UserID, &b.Orders, &b.GrossUSD, &b.RefundUSD, &b.TotalUSD); err != nil {
 			return nil, fmt.Errorf("analytics: scan top buyer: %w", err)
 		}
 		result = append(result, b)

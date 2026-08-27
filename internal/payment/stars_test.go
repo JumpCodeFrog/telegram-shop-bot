@@ -66,6 +66,16 @@ type mockOrderGetter struct {
 	err   error
 }
 
+type guardedOrderGetter struct {
+	mockOrderGetter
+	conflict bool
+	err      error
+}
+
+func (g guardedOrderGetter) HasSubscriptionEntitlementConflict(context.Context, int64, int64) (bool, error) {
+	return g.conflict, g.err
+}
+
 func (m mockOrderGetter) GetOrder(_ context.Context, _ int64) (*storage.Order, error) {
 	return m.order, m.err
 }
@@ -137,6 +147,19 @@ func TestHandlePreCheckout_HappyPath(t *testing.T) {
 	assertPreCheckoutAnswer(t, capture, true, "")
 }
 
+func TestHandlePreCheckoutRejectsSubscriptionEntitlementConflict(t *testing.T) {
+	order := pendingOrder()
+	order.SubscriptionProductID = 9
+	order.SubscriptionPeriodDays = 30
+	stars, capture := newTestStarsPayment(t, guardedOrderGetter{
+		mockOrderGetter: mockOrderGetter{order: order}, conflict: true,
+	})
+	if err := stars.HandlePreCheckout(context.Background(), preCheckoutQuery("7", 42, 100)); err != nil {
+		t.Fatal(err)
+	}
+	assertPreCheckoutAnswer(t, capture, false, PreCheckoutKeyNotPending)
+}
+
 func TestHandlePreCheckout_RejectsUnknownOrder(t *testing.T) {
 	stars, capture := newTestStarsPayment(t, mockOrderGetter{err: storage.ErrNotFound})
 
@@ -158,6 +181,17 @@ func TestHandlePreCheckout_RejectsForeignOrder(t *testing.T) {
 func TestHandlePreCheckout_RejectsNonPendingOrder(t *testing.T) {
 	order := pendingOrder()
 	order.Status = storage.OrderStatusPaid
+	stars, capture := newTestStarsPayment(t, mockOrderGetter{order: order})
+
+	if err := stars.HandlePreCheckout(context.Background(), preCheckoutQuery("7", 42, 100)); err != nil {
+		t.Fatalf("HandlePreCheckout: %v", err)
+	}
+	assertPreCheckoutAnswer(t, capture, false, PreCheckoutKeyNotPending)
+}
+
+func TestHandlePreCheckout_RejectsNeedsReviewOrder(t *testing.T) {
+	order := pendingOrder()
+	order.PaymentState = storage.PaymentStateNeedsReview
 	stars, capture := newTestStarsPayment(t, mockOrderGetter{order: order})
 
 	if err := stars.HandlePreCheckout(context.Background(), preCheckoutQuery("7", 42, 100)); err != nil {

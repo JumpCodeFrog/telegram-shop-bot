@@ -4,17 +4,17 @@
 
 ### Can I run this without Redis?
 
-Yes. If Redis is unreachable at startup, the bot falls back to an in-memory FSM store and disables the Redis-dependent loyalty notification worker — everything else works. Redis is still recommended in production for persistent dialog state and product caching.  
+Yes. If Redis is unreachable at startup, the bot falls back to an in-memory FSM store and disables the Redis-dependent loyalty notification worker — everything else works. Redis is still recommended in production for persistent dialog state and product caching.
 The easiest way to get Redis locally: `docker run -d -p 6379:6379 redis:7-alpine`
 
 ### What database does it use?
 
-SQLite. The database file is created automatically at `data/shop.db` on first run.  
+SQLite. The database file is created automatically at `data/shop.db` on first run.
 Migrations run automatically at startup — no manual steps needed.
 
 ### Does it support webhooks?
 
-Yes. Set `WEBHOOK_URL` in `.env` to your public HTTPS URL. In production, also set `TELEGRAM_WEBHOOK_SECRET`.  
+Yes. Set `WEBHOOK_URL` in `.env` to your public HTTPS URL and always set a strong `TELEGRAM_WEBHOOK_SECRET` (`openssl rand -hex 32`).
 Leave `WEBHOOK_URL` empty to use long polling (recommended for local development).
 
 ---
@@ -23,7 +23,7 @@ Leave `WEBHOOK_URL` empty to use long polling (recommended for local development
 
 ### How do I enable Telegram Stars payments?
 
-Stars payments are enabled by default — no extra configuration needed.  
+Stars payments are enabled by default — no extra configuration needed.
 Just set `USD_TO_STARS_RATE` to control the price conversion (default: 50 Stars = $1).
 
 ### How do I enable CryptoBot (USDT) payments?
@@ -42,7 +42,7 @@ Leave `CRYPTOBOT_TOKEN` empty. The "Pay with Crypto" button is hidden automatica
 
 ### How do I add products?
 
-As admin, send `/addproduct` — the bot guides you through a step-by-step dialog:  
+As admin, send `/addproduct` — the bot guides you through a step-by-step dialog:
 name → description → price (USD) → stock → photos (send photos as messages or a URL, up to 10; `/done` or `/skip`) → category → type (regular product or 30-day Stars subscription).
 
 ### How do I add categories?
@@ -51,8 +51,8 @@ As admin, send `/addcategory <name>`.
 
 ### Can I edit an existing product?
 
-Yes: `/editproduct <id> <field> <value>`  
-Fields: `name`, `description`, `price`, `stock`, `category`, `active`  
+Yes: `/editproduct <id> <field> <value>`
+Fields: `name`, `description`, `price`, `stock`, `category`, `active`
 Example: `/editproduct 5 price 14.99`
 
 ### What does "digital product" mean?
@@ -69,14 +69,14 @@ If a product is marked as digital (`is_digital = true`), the bot sends the `digi
 2. Translate all the values.
 3. Restart the bot — it picks up new files automatically.
 
-The bot selects the language based on the user's Telegram language setting (`LanguageCode`).  
+The bot selects the language based on the user's Telegram language setting (`LanguageCode`).
 Falls back to `en` if the user's language file is not found.
 
 See [`CONTRIBUTING.md`](../CONTRIBUTING.md) for details on submitting translations.
 
 ### What language codes are supported?
 
-The bot ships with 5 locales: `ru`, `en`, `es`, `de`, `zh`.  
+The bot ships with 5 locales: `ru`, `en`, `es`, `de`, `zh`.
 Any IETF language tag that Telegram sends is normalized to its primary subtag (`ru-RU` → `ru`, `zh-hans-CN` → `zh`); as long as a matching `.json` file exists in `LOCALES_DIR`, it will be used. Anything else falls back to `en`.
 
 ---

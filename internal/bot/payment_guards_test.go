@@ -30,6 +30,14 @@ func TestEnsureOrderPayableForUser_BlocksNonPendingOrder(t *testing.T) {
 	}
 }
 
+func TestEnsureOrderPayableForUser_BlocksNeedsReviewOrder(t *testing.T) {
+	order := &storage.Order{ID: 1, UserID: 42, Status: storage.OrderStatusPending, PaymentState: storage.PaymentStateNeedsReview}
+	err := ensureOrderPayableForUser(order, 42)
+	if !errors.Is(err, storage.ErrPaymentNeedsReview) {
+		t.Fatalf("expected ErrPaymentNeedsReview, got %v", err)
+	}
+}
+
 func TestEnsureOrderPayableForUser_BlocksNilOrder(t *testing.T) {
 	err := ensureOrderPayableForUser(nil, 42)
 	if !errors.Is(err, storage.ErrNotFound) {

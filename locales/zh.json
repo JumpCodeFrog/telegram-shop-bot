@@ -229,6 +229,8 @@
   "precheckout_amount_mismatch": "账单金额与订单总额不符",
   "precheckout_validation_error": "无法校验订单，请稍后重试",
   "sub_stars_only": "⭐ 这是订阅商品，只能使用 Telegram Stars 支付。",
+  "sub_already_active": "📅 此订阅已生效。再次购买前，请先在 /mysubs 中取消。",
+  "sub_alone": "📅 订阅必须是购物车中唯一的商品，数量必须为 1。",
   "sub_none": "📅 您没有有效的订阅。",
   "sub_list_title": "📅 <b>您的订阅</b>\n\n",
   "sub_list_item": "• <b>%s</b> — 有效期至 %s\n",
@@ -288,5 +290,6 @@
   "webapp_err_crypto_disabled": "加密货币支付不可用。",
   "webapp_err_sub_stars_only": "订阅只能使用 Telegram Stars 支付。",
   "webapp_err_sub_alone": "请将订阅与其他商品分开下单。",
+  "webapp_err_sub_active": "此订阅已激活或正在等待付款。",
   "btn_menu": "🏠 主菜单"
 }

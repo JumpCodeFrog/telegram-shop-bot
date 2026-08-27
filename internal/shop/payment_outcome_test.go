@@ -177,21 +177,22 @@ func TestProperty_ConcurrentDoubleConfirmPayment(t *testing.T) {
 		}
 		wg.Wait()
 
-		// Exactly one confirmation wins; the loser sees the idempotency guard.
+		// Exactly one confirmation wins; the low-level compatibility API keeps
+		// its CAS conflict contract. Receipt ingestion handles distinct facts.
 		var winner *PaymentOutcome
-		var conflicts int
+		var nonWinners int
 		for i := range 2 {
 			switch {
 			case errs[i] == nil:
 				winner = outcomes[i]
 			case errors.Is(errs[i], storage.ErrOrderStatusConflict):
-				conflicts++
+				nonWinners++
 			default:
 				rt.Fatalf("unexpected error from ConfirmPayment[%d]: %v", i, errs[i])
 			}
 		}
-		if winner == nil || conflicts != 1 {
-			rt.Fatalf("expected exactly one winner and one conflict, got outcomes=%v errs=%v", outcomes, errs)
+		if winner == nil || nonWinners != 1 {
+			rt.Fatalf("expected exactly one winner and one non-winner, got outcomes=%v errs=%v", outcomes, errs)
 		}
 
 		// Stock decremented exactly once.
