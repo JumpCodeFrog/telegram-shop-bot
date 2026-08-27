@@ -296,7 +296,7 @@ func (s *SQLOrderStore) UpdateOrderStatusWithSubscriptionFact(ctx context.Contex
 
 func (s *SQLOrderStore) updateOrderStatus(ctx context.Context, id int64, fromStatus, status, paymentMethod, paymentID string, sub *Subscription, fact *PaymentFact) error {
 	var lastErr error
-	for attempt := 0; attempt < 4; attempt++ {
+	for attempt := 0; attempt < 8; attempt++ {
 		lastErr = s.updateOrderStatusOnce(ctx, id, fromStatus, status, paymentMethod, paymentID, sub, fact)
 		if errors.Is(lastErr, ErrPaymentIdentityConflict) {
 			// The state transition transaction deliberately rolls back on a
@@ -348,7 +348,7 @@ func (s *SQLOrderStore) updateOrderStatus(ctx context.Context, id int64, fromSta
 			!strings.Contains(lastErr.Error(), "database is locked") {
 			return lastErr
 		}
-		timer := time.NewTimer(time.Duration(attempt+1) * 15 * time.Millisecond)
+		timer := time.NewTimer(time.Duration(attempt+1) * 25 * time.Millisecond)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
