@@ -591,25 +591,6 @@ func boolInt(value bool) int {
 	return 0
 }
 
-func countUnresolvedOrderReviews(ctx context.Context, q reviewQueryer, orderID int64) (int, error) {
-	var count int
-	err := q.QueryRowContext(ctx, `
-		SELECT
-		  (SELECT COUNT(*) FROM payment_events e
-		   WHERE e.order_id = ? AND e.disposition = 'needs_review'
-		     AND NOT EXISTS (SELECT 1 FROM payment_resolutions r
-		                     WHERE r.target_kind = 'payment_event' AND r.target_id = e.id))
-		+ (SELECT COUNT(*) FROM payment_anomalies a
-		   WHERE a.proposed_order_id = ?
-		     AND NOT EXISTS (SELECT 1 FROM payment_resolutions r
-		                     WHERE r.target_kind = 'payment_anomaly' AND r.target_id = a.id))`,
-		orderID, orderID).Scan(&count)
-	if err != nil {
-		return 0, fmt.Errorf("ledger: count unresolved order reviews: %w", err)
-	}
-	return count, nil
-}
-
 func countUnresolvedOtherProvider(ctx context.Context, q reviewQueryer, orderID int64, provider string) (int, error) {
 	var count int
 	err := q.QueryRowContext(ctx, `

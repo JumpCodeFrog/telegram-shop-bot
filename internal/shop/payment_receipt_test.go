@@ -449,7 +449,7 @@ func TestMismatchedRenewalReceiptIsDurablyQuarantined(t *testing.T) {
 	defer db.Close()
 	ctx := context.Background()
 	store := storage.NewSQLOrderStore(db)
-	orderID, err := store.CreateOrder(ctx, &storage.Order{
+	_, err = store.CreateOrder(ctx, &storage.Order{
 		UserID: 42, TotalStars: 100, Status: storage.OrderStatusPaid,
 		SubscriptionProductID: 3, SubscriptionPeriodDays: 30,
 	}, nil)
@@ -464,7 +464,7 @@ func TestMismatchedRenewalReceiptIsDurablyQuarantined(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	orderID, _ = res.LastInsertId()
+	orderID, _ := res.LastInsertId()
 	svc := NewOrderService(store, storage.NewCartStore(db.Conn()), storage.NewSQLProductStore(db), PaymentDeps{}, slog.Default())
 	_, err = svc.RecordSubscriptionRenewal(ctx, PaymentReceipt{
 		OrderID: orderID, Provider: "stars", ExternalID: "bad-renewal", PayerID: 42,

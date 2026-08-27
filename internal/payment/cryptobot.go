@@ -300,7 +300,7 @@ func normalizeAnomalyAmount(raw string) (int64, int, error) {
 	}
 
 	exponentAt := strings.IndexAny(raw, "eE")
-	if exponentAt <= 0 || strings.IndexAny(raw[exponentAt+1:], "eE") >= 0 {
+	if exponentAt <= 0 || strings.ContainsAny(raw[exponentAt+1:], "eE") {
 		return 0, 0, ErrInvalidCryptoReceipt
 	}
 	mantissa := raw[:exponentAt]

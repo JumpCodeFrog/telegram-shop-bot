@@ -194,6 +194,9 @@ func TestProperty_ConcurrentDoubleConfirmPayment(t *testing.T) {
 		if winner == nil || nonWinners != 1 {
 			rt.Fatalf("expected exactly one winner and one non-winner, got outcomes=%v errs=%v", outcomes, errs)
 		}
+		if winner == nil {
+			return
+		}
 
 		// Stock decremented exactly once.
 		if got := env.countRow(rt, `SELECT stock FROM products WHERE id = ?`, env.productID); got != int64(stock-qty) {
