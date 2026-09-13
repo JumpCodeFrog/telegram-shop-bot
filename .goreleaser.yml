@@ -36,6 +36,7 @@ archives:
       - README.md
       - docs/**
       - CONTRIBUTING.md
+      - SECURITY.md
       - CHANGELOG.md
       - LICENSE
 

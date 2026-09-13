@@ -176,6 +176,14 @@ func NewOrderService(os storage.OrderStore, cs storage.CartStore, ps storage.Pro
 	return &OrderService{orders: os, cart: cs, products: ps, payments: deps, logger: logger}
 }
 
+// CreatedOrder contains the ID and totals committed when creating an order.
+// It lets checkout render a payment summary without another database read.
+type CreatedOrder struct {
+	ID         int64
+	TotalUSD   float64
+	TotalStars int
+}
+
 // CreateFromCart creates a new order from the given CartView. If promo is
 // non-nil, the discount is applied to the totals. The order is created with
 // status "pending" and the user's cart is cleared afterwards.
@@ -183,21 +191,32 @@ func NewOrderService(os storage.OrderStore, cs storage.CartStore, ps storage.Pro
 // Returns *ErrInsufficientStock (wrapping ErrProductOutOfStock) if any item
 // cannot be covered by the current stock.
 func (s *OrderService) CreateFromCart(ctx context.Context, userID int64, cartView *CartView, promo *storage.PromoCode) (int64, error) {
+	created, err := s.CreateFromCartWithSummary(ctx, userID, cartView, promo)
+	if err != nil {
+		return 0, err
+	}
+	return created.ID, nil
+}
+
+// CreateFromCartWithSummary creates an order and returns its committed ID and
+// totals. Once creation succeeds, checkout does not depend on a follow-up read
+// that could fail after the cart is cleared and a subscription is reserved.
+func (s *OrderService) CreateFromCartWithSummary(ctx context.Context, userID int64, cartView *CartView, promo *storage.PromoCode) (*CreatedOrder, error) {
 	if len(cartView.Items) == 0 {
-		return 0, storage.ErrEmptyCart
+		return nil, storage.ErrEmptyCart
 	}
 	if err := ValidateSubscriptionCart(cartView); err != nil {
-		return 0, err
+		return nil, err
 	}
 
 	// Re-check stock status for all cart items at order creation time.
 	for _, ci := range cartView.Items {
 		p, err := s.products.GetProduct(ctx, ci.Product.ID)
 		if err != nil {
-			return 0, fmt.Errorf("order service: get product %d: %w", ci.Product.ID, err)
+			return nil, fmt.Errorf("order service: get product %d: %w", ci.Product.ID, err)
 		}
 		if !p.IsActive || p.Stock < ci.Quantity {
-			return 0, fmt.Errorf("order service: %w", &ErrInsufficientStock{ProductName: p.Name, Have: p.Stock, Want: ci.Quantity})
+			return nil, fmt.Errorf("order service: %w", &ErrInsufficientStock{ProductName: p.Name, Have: p.Stock, Want: ci.Quantity})
 		}
 	}
 
@@ -238,7 +257,7 @@ func (s *OrderService) CreateFromCart(ctx context.Context, userID int64, cartVie
 
 	orderID, err := s.orders.CreateOrder(ctx, order, items)
 	if err != nil {
-		return 0, fmt.Errorf("order service: create order: %w", err)
+		return nil, fmt.Errorf("order service: create order: %w", err)
 	}
 
 	if s.payments.Metrics != nil {
@@ -253,7 +272,7 @@ func (s *OrderService) CreateFromCart(ctx context.Context, userID int64, cartVie
 		s.logger.Warn("clear cart for user after order", "user_id", userID, "order_id", orderID, "error", err)
 	}
 
-	return orderID, nil
+	return &CreatedOrder{ID: orderID, TotalUSD: order.TotalUSD, TotalStars: order.TotalStars}, nil
 }
 
 // ConfirmPayment transitions the order from "pending" to "paid" and applies

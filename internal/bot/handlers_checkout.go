@@ -221,7 +221,7 @@ func (b *Bot) onOrderConfirm(chatID, userID int64, msgID int, data, lang string)
 		}
 	}
 
-	orderID, err := b.order.CreateFromCart(ctx, userID, view, promo)
+	createdOrder, err := b.order.CreateFromCartWithSummary(ctx, userID, view, promo)
 	if err != nil {
 		var stockErr *shop.ErrInsufficientStock
 		if errors.Is(err, storage.ErrSubscriptionOrderConflict) {
@@ -238,14 +238,7 @@ func (b *Bot) onOrderConfirm(chatID, userID int64, msgID int, data, lang string)
 		return
 	}
 
-	createdOrder, err := b.order.GetOrder(ctx, orderID)
-	if err != nil {
-		b.logger.Error("load created order for payment summary", "order_id", orderID, "error", err)
-		b.sendOrEditStyled(chatID, msgID, b.t(lang, "error_short"), "", StyledKeyboard{
-			{Btn(b.t(lang, "btn_orders"), "back:orders"), Btn(b.t(lang, "btn_menu"), "back:menu")},
-		})
-		return
-	}
+	orderID := createdOrder.ID
 	// The committed order includes promo discounts and Stars rounding.
 	view.TotalUSD = createdOrder.TotalUSD
 	view.TotalStars = createdOrder.TotalStars

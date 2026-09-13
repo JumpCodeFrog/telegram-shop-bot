@@ -6,6 +6,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- **Checkout after order creation** — payment buttons and discounted totals now use the result of the successful order write, without a second database read. A transient read failure could previously hide payment and cancellation actions after clearing the cart, leaving a pending subscription order that blocked another checkout.
+- **Release documentation** — include `SECURITY.md` in all Linux and Windows archives so the security-policy links in the bundled READMEs work offline.
+
+### Tests
+
+- Added a regression with a failing order read after subscription checkout, covering promo totals, Stars invoice creation, cancellation, and a new checkout after cancellation.
+
 ## [3.0.1] — 2026-09-13
 
 ### Added
