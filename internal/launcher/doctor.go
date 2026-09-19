@@ -94,10 +94,11 @@ func RunDoctor(ctx context.Context, opts DoctorOptions) DoctorReport {
 		add(CheckWarn, "Configuration file", "not found; checking process environment")
 	}
 
-	// YooKassa credentials are diagnosed from the raw values so a partial or
-	// non-HTTPS configuration still gets a labeled, actionable line even though
-	// configuration loading rejects it outright below.
+	// YooKassa and Stripe credentials are diagnosed from the raw values so a
+	// partial or non-HTTPS configuration still gets a labeled, actionable line
+	// even though configuration loading rejects it outright below.
 	checkYooKassaPayments(values, add)
+	checkStripePayments(values, add)
 
 	cfg, err := config.LoadFromMap(values)
 	if err != nil {
@@ -218,6 +219,7 @@ var knownEnvironmentKeys = []string{
 	"LOCALES_DIR", "WEBAPP_URL", "OUTBOUND_WEBHOOK_URL", "OUTBOUND_WEBHOOK_SECRET",
 	"ADMIN_GROUP_ID", "TOPIC_ORDERS_NEW", "TOPIC_ORDERS_PAID", "TOPIC_ORDERS_DELIVERED",
 	"YOOKASSA_SHOP_ID", "YOOKASSA_SECRET_KEY", "YOOKASSA_RETURN_URL", "USD_TO_RUB_RATE",
+	"STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET", "STRIPE_RETURN_URL",
 }
 
 // checkYooKassaPayments reports the YooKassa RUB rail state: not configured,
@@ -248,6 +250,26 @@ func checkYooKassaPayments(values map[string]string, add func(CheckStatus, strin
 		return
 	}
 	add(CheckOK, "YooKassa payments", "configured")
+}
+
+// checkStripePayments reports the Stripe USD card rail state: not configured,
+// configured, or partially/invalidly configured. It reuses the shared
+// configuration validation so the doctor and the bot can never disagree, and
+// it never prints credential values. Stripe is USD-native, so unlike YooKassa
+// there is no exchange rate gating the checkout button.
+func checkStripePayments(values map[string]string, add func(CheckStatus, string, string)) {
+	secretKey := strings.TrimSpace(values["STRIPE_SECRET_KEY"])
+	webhookSecret := strings.TrimSpace(values["STRIPE_WEBHOOK_SECRET"])
+	returnURL := strings.TrimSpace(values["STRIPE_RETURN_URL"])
+	if err := config.ValidateStripeConfig(secretKey, webhookSecret, returnURL); err != nil {
+		add(CheckFail, "Stripe payments", err.Error())
+		return
+	}
+	if secretKey == "" {
+		add(CheckOK, "Stripe payments", "not configured")
+		return
+	}
+	add(CheckOK, "Stripe payments", "configured")
 }
 
 func checkEnvPermissions(path string, add func(CheckStatus, string, string)) {
