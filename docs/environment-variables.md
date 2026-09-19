@@ -65,6 +65,10 @@ When available, Redis is used for:
 |----------|---------|-------------|
 | `USD_TO_STARS_RATE` | `50` | How many Telegram Stars equal $1.00. Telegram's official rate is ~50 Stars / $1. |
 | `CRYPTOBOT_TOKEN` | _(empty)_ | Token from [@CryptoBot](https://t.me/CryptoBot) → My Apps. Leave empty to disable crypto payments. |
+| `YOOKASSA_SHOP_ID` | _(empty)_ | YooKassa merchant shop ID for RUB card payments. Must be set together with `YOOKASSA_SECRET_KEY` and `YOOKASSA_RETURN_URL`; leave all three empty to disable card payments. |
+| `YOOKASSA_SECRET_KEY` | _(empty)_ | YooKassa secret API key. Set only together with `YOOKASSA_SHOP_ID` and `YOOKASSA_RETURN_URL`. |
+| `YOOKASSA_RETURN_URL` | _(empty)_ | Public **HTTPS** page the buyer returns to after paying on the YooKassa checkout page. Set only together with the other YooKassa variables. |
+| `USD_TO_RUB_RATE` | `0` | RUB per 1 USD used to price RUB card payments, e.g. `92.5`. The USD price converts at this rate and the RUB total is snapshotted on the order at checkout. With the default `0` (or missing YooKassa credentials) the "Pay by card" button stays hidden. |
 
 ---
 
@@ -77,7 +81,7 @@ When available, Redis is used for:
 
 > When `WEBHOOK_URL` is empty the bot uses **long polling** — recommended for local development.
 
-If CryptoBot is enabled, configure its callback as `<WEBHOOK_URL>/cryptobot-webhook`.
+If CryptoBot is enabled, configure its callback as `<WEBHOOK_URL>/cryptobot-webhook`. If YooKassa is enabled, register `<WEBHOOK_URL>/yookassa-webhook` as the notification URL in the YooKassa merchant cabinet.
 
 ---
 

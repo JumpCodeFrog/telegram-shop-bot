@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"time"
 
@@ -171,6 +172,84 @@ func (b *Bot) onPayCrypto(cbID string, chatID, userID int64, msgID int, data, la
 	)
 
 	text := fmt.Sprintf(b.t(lang, "crypto_pay_title"), orderID, target.TotalUSD)
+	reply := tgbotapi.NewMessage(chatID, text)
+	reply.ParseMode = "HTML"
+	reply.ReplyMarkup = keyboard
+	b.send(reply)
+}
+
+func (b *Bot) onPayYooKassa(cbID string, chatID, userID int64, msgID int, data, lang string) {
+	if !b.yooKassaPaymentsEnabled() {
+		b.alert(cbID, b.t(lang, "yookassa_unavailable"))
+		return
+	}
+
+	orderID, err := parseIDFromCallback(data, "pay:yookassa:")
+	if err != nil {
+		b.logger.Error("parse pay:yookassa callback", "error", err)
+		b.ack(cbID)
+		return
+	}
+
+	ctx := context.Background()
+	target, err := b.loadPayableOrder(ctx, userID, orderID)
+	if err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			b.alert(cbID, b.t(lang, "order_not_found"))
+			return
+		}
+		if errors.Is(err, storage.ErrOrderStatusConflict) {
+			b.alert(cbID, b.t(lang, "order_already_paid"))
+			return
+		}
+		b.logger.Error("load payable order for card payment", "order_id", orderID, "error", err)
+		b.alert(cbID, b.t(lang, "error_short"))
+		return
+	}
+
+	// Subscription products are payable with Telegram Stars only.
+	if _, subDays, subErr := b.orderSubscriptionProduct(ctx, target); subErr != nil {
+		b.logger.Error("detect subscription product for card payment", "order_id", orderID, "error", subErr)
+		b.alert(cbID, b.t(lang, "error_short"))
+		return
+	} else if subDays > 0 {
+		b.alert(cbID, b.t(lang, "sub_stars_only"))
+		return
+	}
+
+	// The RUB snapshot is taken at checkout; an order created while RUB was
+	// disabled (or a stale conversion) cannot be charged.
+	amountMinor := int64(math.Round(target.TotalRUB * 100))
+	if amountMinor <= 0 {
+		b.alert(cbID, b.t(lang, "yookassa_unavailable"))
+		return
+	}
+
+	// Show skeleton state while generating the payment.
+	skeletonKeyboard := tgbotapi.NewInlineKeyboardMarkup(
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData(b.t(lang, "btn_generating_invoice"), "noop"),
+		),
+	)
+	editSkeleton := tgbotapi.NewEditMessageReplyMarkup(chatID, msgID, skeletonKeyboard)
+	b.send(editSkeleton)
+	b.ack(cbID)
+
+	desc := fmt.Sprintf(b.t(lang, "yookassa_invoice_desc"), orderID)
+	invoice, err := b.yookassa.CreatePayment(ctx, orderID, amountMinor, desc)
+	if err != nil {
+		b.logger.Error("create yookassa payment", "error", err)
+		b.send(tgbotapi.NewMessage(chatID, b.t(lang, "payment_error")))
+		return
+	}
+
+	keyboard := tgbotapi.NewInlineKeyboardMarkup(
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonURL(b.t(lang, "btn_pay_rub"), invoice.PayURL),
+		),
+	)
+
+	text := fmt.Sprintf(b.t(lang, "yookassa_pay_title"), orderID, target.TotalRUB)
 	reply := tgbotapi.NewMessage(chatID, text)
 	reply.ParseMode = "HTML"
 	reply.ReplyMarkup = keyboard

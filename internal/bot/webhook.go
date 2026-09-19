@@ -143,6 +143,124 @@ func (b *Bot) CryptoBotWebhookHandler() http.HandlerFunc {
 	}
 }
 
+// YooKassaWebhookHandler processes YooKassa payment notifications. YooKassa
+// webhooks are unsigned: the body is used ONLY to learn which payment changed;
+// the authoritative state is refetched from the API before any settlement.
+func (b *Bot) YooKassaWebhookHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if b.yookassa == nil || !b.yookassa.Configured() {
+			http.Error(w, "service unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1 MB
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			b.logger.Error("yookassa webhook: read body", "error", err)
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		defer r.Body.Close()
+
+		notification, err := b.yookassa.ParseWebhook(body)
+		if err != nil || notification.PaymentID == "" {
+			// Unparseable or factless body: quarantine a digest, ACK so YooKassa
+			// does not retry garbage forever (mirrors the crypto parse path).
+			digest := sha256.Sum256(body)
+			recordErr := b.order.RecordPaymentAnomaly(r.Context(), storage.PaymentAnomaly{
+				Provider: storage.PaymentMethodYooKassa, RawPayload: fmt.Sprintf("sha256:%x", digest),
+				Reason: "webhook_parse_failure",
+			})
+			if err == nil && notification != nil && notification.PaymentID == "" {
+				w.WriteHeader(http.StatusOK) // valid envelope, no payment id: nothing to do
+				return
+			}
+			if recordErr == nil || errors.Is(recordErr, storage.ErrPaymentNeedsReview) {
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+			b.logger.Error("yookassa webhook: malformed body was not quarantined", "error", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+
+		if notification.Event != "payment.succeeded" {
+			// payment.canceled / refund.* / etc: acknowledge, no auto-settlement.
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		ctx := r.Context()
+		// Authoritative refetch — the unsigned body is never trusted for money.
+		p, err := b.yookassa.GetPayment(ctx, notification.PaymentID)
+		if err != nil {
+			b.logger.Error("yookassa webhook: refetch payment", "payment_id", notification.PaymentID, "error", err)
+			http.Error(w, "internal error", http.StatusInternalServerError) // retryable by YooKassa
+			return
+		}
+		if !p.Paid || p.Status != "succeeded" {
+			b.logger.Info("yookassa webhook: refetched payment is not terminal",
+				"payment_id", p.ID, "status", p.Status)
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		receipt, receiptErr := p.PaymentReceipt()
+		if receiptErr != nil {
+			anomaly, _ := p.PaymentAnomaly("webhook_invalid_receipt")
+			recordErr := b.order.RecordPaymentAnomaly(ctx, anomaly)
+			if recordErr == nil || errors.Is(recordErr, storage.ErrPaymentNeedsReview) {
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+			b.logger.Error("yookassa webhook: invalid receipt was not quarantined", "payment_id", p.ID)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+
+		outcome, err := b.order.ConfirmPaymentReceipt(ctx, receipt)
+		if err != nil {
+			// Same idempotent-ACK error classes as the crypto webhook:
+			if errors.Is(err, storage.ErrOrderStatusConflict) || errors.Is(err, storage.ErrNotFound) ||
+				errors.Is(err, storage.ErrPaymentNeedsReview) || errors.Is(err, storage.ErrPaymentIdentityConflict) ||
+				errors.Is(err, storage.ErrPaymentReceiptMismatch) {
+				b.logger.Info("yookassa webhook ignored (idempotent)", "payment_id", p.ID, "reason", err)
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+			if errors.Is(err, storage.ErrProductOutOfStock) {
+				anomaly, _ := p.PaymentAnomaly("out_of_stock_after_charge")
+				if recordErr := b.order.RecordPaymentAnomaly(ctx, anomaly); recordErr == nil ||
+					errors.Is(recordErr, storage.ErrPaymentNeedsReview) {
+					w.WriteHeader(http.StatusOK)
+					return
+				}
+			}
+			b.logger.Error("yookassa webhook: confirm payment", "payment_id", p.ID, "error", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+
+		if b.metrics != nil {
+			b.metrics.SuccessfulPayments.WithLabelValues("yookassa").Inc()
+		}
+		order := outcome.Order
+		lang := b.userLang(ctx, order.UserID)
+		b.send(tgbotapi.NewMessage(order.UserID, fmt.Sprintf(b.t(lang, "payment_success"), order.ID)))
+		b.NotifyPaymentOutcome(ctx, outcome)
+		b.notifyAdmins(ctx, AdminEventOrderPaid, fmt.Sprintf(b.t("en", "admin_order_paid_yookassa"),
+			order.ID, order.UserID, order.TotalRUB))
+		b.outWebhook.Send(service.OutboundWebhookEvent{
+			Event: "order.paid", OrderID: order.ID, UserID: order.UserID,
+			TotalUSD: order.TotalUSD, TotalStars: order.TotalStars,
+			Method: "yookassa", PaymentID: p.ID,
+		})
+		w.WriteHeader(http.StatusOK)
+	}
+}
+
 // TelegramWebhookHandler returns an http.HandlerFunc that processes incoming
 // Telegram updates delivered via webhook.
 func (b *Bot) TelegramWebhookHandler() http.HandlerFunc {

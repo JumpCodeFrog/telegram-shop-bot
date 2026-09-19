@@ -212,11 +212,16 @@ func (s *OrderService) CreateFromCart(ctx context.Context, userID int64, cartVie
 		totalUSD = totalUSD * float64(100-discountPct) / 100
 		totalStars = totalStars * (100 - discountPct) / 100
 	}
+	totalRUB := cartView.TotalRUB
+	if promo != nil {
+		totalRUB = math.Round(totalRUB*float64(100-discountPct)) / 100
+	}
 
 	order := &storage.Order{
 		UserID:      userID,
 		TotalUSD:    totalUSD,
 		TotalStars:  totalStars,
+		TotalRUB:    totalRUB,
 		Status:      storage.OrderStatusPending,
 		DiscountPct: discountPct,
 		PromoCode:   promoCode,
@@ -308,6 +313,13 @@ func (s *OrderService) ConfirmPaymentReceipt(ctx context.Context, receipt Paymen
 			return nil, s.receiptMismatch(ctx, receipt)
 		}
 		provider = storage.PaymentMethodCrypto
+	case storage.PaymentMethodYooKassa:
+		// No payer check: yookassa receipts carry PayerID 0 like crypto.
+		if receipt.Currency != "RUB" || receipt.AmountMinor <= 0 ||
+			receipt.AmountMinor != int64(math.Round(order.TotalRUB*100)) ||
+			receipt.Scale != 2 || receipt.ExternalID == "" {
+			return nil, s.receiptMismatch(ctx, receipt)
+		}
 	default:
 		return nil, storage.ErrPaymentReceiptMismatch
 	}

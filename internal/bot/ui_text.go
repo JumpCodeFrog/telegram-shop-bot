@@ -143,7 +143,7 @@ func (b *Bot) formatCheckoutText(lang string, view *shop.CartView) string {
 	return sb.String()
 }
 
-func (b *Bot) formatPaymentMethodsText(lang string, orderID int64, view *shop.CartView, cryptoEnabled bool) string {
+func (b *Bot) formatPaymentMethodsText(lang string, orderID int64, view *shop.CartView, cryptoEnabled, yookassaOK bool) string {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf(b.t(lang, "payment_methods_title"), orderID))
 	sb.WriteString(b.t(lang, "payment_methods_items_header"))
@@ -158,7 +158,12 @@ func (b *Bot) formatPaymentMethodsText(lang string, orderID int64, view *shop.Ca
 	}
 	sb.WriteString(fmt.Sprintf(b.t(lang, "payment_methods_total"), view.TotalUSD, view.TotalStars))
 	sb.WriteString(b.t(lang, "payment_methods_hint"))
-	if !cryptoEnabled {
+	// Mirror of the crypto availability note: the RUB card total is only
+	// advertised when the YooKassa row is actually offered.
+	if yookassaOK {
+		sb.WriteString(fmt.Sprintf(b.t(lang, "payment_methods_rub_total"), view.TotalRUB))
+	}
+	if !cryptoEnabled && !yookassaOK {
 		sb.WriteString(b.t(lang, "order_created_no_crypto"))
 	}
 	return sb.String()

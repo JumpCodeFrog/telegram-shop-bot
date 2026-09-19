@@ -68,6 +68,7 @@ type Bot struct {
 	referralService *service.ReferralService
 	stars           *payment.StarsPayment
 	crypto          *payment.CryptoBotPayment
+	yookassa        *payment.YooKassaPayment
 	logger          *slog.Logger
 	metrics         *service.MetricsService
 	fsm             storage.FSMStore
@@ -133,7 +134,7 @@ func NewWithAPI(cfg *config.Config, api *tgbotapi.BotAPI, db *storage.DB, metric
 	analyticsStore := storage.NewSQLAnalyticsStore(db)
 	referralStore := storage.NewReferralStore(db.Conn())
 	referralSvc := service.NewReferralService(2.0, 1.0, 100, redisClient)
-	exchangeSvc := service.NewExchangeService(cfg.USDToStarsRate)
+	exchangeSvc := service.NewExchangeService(cfg.USDToStarsRate, cfg.USDToRUBRate)
 	loyaltyStore := storage.NewLoyaltyStore(db.Conn())
 	loyaltySvc := service.NewLoyaltyService(loyaltyStore, 1)
 
@@ -172,6 +173,7 @@ func NewWithAPI(cfg *config.Config, api *tgbotapi.BotAPI, db *storage.DB, metric
 		referralService: referralSvc,
 		stars:           payment.NewStarsPayment(api, os, translate),
 		crypto:          payment.NewCryptoBotPayment(cfg.CryptoBotToken),
+		yookassa:        payment.NewYooKassaPayment(cfg.YooKassaShopID, cfg.YooKassaSecretKey, cfg.YooKassaReturnURL),
 		logger:          logger,
 		metrics:         metrics,
 		fsm:             fsm,
@@ -223,6 +225,13 @@ func (b *Bot) API() *tgbotapi.BotAPI {
 
 func (b *Bot) cryptoPaymentsEnabled() bool {
 	return b.crypto != nil && b.crypto.Configured()
+}
+
+// yooKassaPaymentsEnabled reports whether RUB card payments can be offered:
+// credentials configured AND a positive RUB exchange rate AND the order has a
+// positive RUB snapshot (checked per-order at button build time).
+func (b *Bot) yooKassaPaymentsEnabled() bool {
+	return b.yookassa != nil && b.yookassa.Configured() && b.cfg != nil && b.cfg.USDToRUBRate > 0
 }
 
 // registerCommands registers the bot command list with Telegram so the "/" menu shows up.

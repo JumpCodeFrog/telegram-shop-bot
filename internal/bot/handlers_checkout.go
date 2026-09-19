@@ -249,6 +249,7 @@ func (b *Bot) onOrderConfirm(chatID, userID int64, msgID int, data, lang string)
 	// The committed order includes promo discounts and Stars rounding.
 	view.TotalUSD = createdOrder.TotalUSD
 	view.TotalStars = createdOrder.TotalStars
+	view.TotalRUB = createdOrder.TotalRUB
 
 	b.notifyAdmins(ctx, AdminEventOrderNew, fmt.Sprintf(
 		b.t("en", "admin_order_new"),
@@ -257,15 +258,17 @@ func (b *Bot) onOrderConfirm(chatID, userID int64, msgID int, data, lang string)
 
 	// Subscription products are payable with Stars only — hide crypto.
 	cryptoOK := b.cryptoPaymentsEnabled() && !cartHasSubscription(view)
-	text := b.formatPaymentMethodsText(lang, orderID, view, cryptoOK)
-	kb := paymentMethodKeyboard(orderID, cryptoOK, view.TotalStars, view.TotalUSD, lang, b)
+	yookassaOK := b.yooKassaPaymentsEnabled() && !cartHasSubscription(view) && view.TotalRUB > 0
+	text := b.formatPaymentMethodsText(lang, orderID, view, cryptoOK, yookassaOK)
+	kb := paymentMethodKeyboard(orderID, cryptoOK, yookassaOK, view.TotalRUB, view.TotalStars, view.TotalUSD, lang, b)
 
 	b.sendOrEditStyled(chatID, msgID, text, "HTML", kb)
 }
 
-func paymentMethodKeyboard(orderID int64, cryptoEnabled bool, totalStars int, totalUSD float64, lang string, b *Bot) StyledKeyboard {
+func paymentMethodKeyboard(orderID int64, cryptoEnabled, yookassaOK bool, totalRUB float64, totalStars int, totalUSD float64, lang string, b *Bot) StyledKeyboard {
 	starsLabel := fmt.Sprintf("⭐ Pay %d Stars", totalStars)
 	cryptoLabel := fmt.Sprintf("💎 Pay $%.2f USDT", totalUSD)
+	rubLabel := fmt.Sprintf("💳 Pay %.2f ₽", totalRUB)
 	termsLabel := "📄 Terms"
 	paySupportLabel := "🆘 Payment support"
 	cancelLabel := "❌ Cancel order"
@@ -274,6 +277,7 @@ func paymentMethodKeyboard(orderID int64, cryptoEnabled bool, totalStars int, to
 	if b != nil {
 		cryptoLabel = fmt.Sprintf("💎 %s ($%.2f)", b.t(lang, "btn_pay_crypto"), totalUSD)
 		starsLabel = fmt.Sprintf("⭐ %s (%d ⭐)", b.t(lang, "btn_pay_stars"), totalStars)
+		rubLabel = fmt.Sprintf("💳 %s (%.2f ₽)", b.t(lang, "btn_pay_rub"), totalRUB)
 		termsLabel = b.t(lang, "btn_terms")
 		paySupportLabel = b.t(lang, "btn_paysupport")
 		cancelLabel = b.t(lang, "btn_cancel_order")
@@ -285,6 +289,11 @@ func paymentMethodKeyboard(orderID int64, cryptoEnabled bool, totalStars int, to
 	}
 	if cryptoEnabled {
 		kb = append(kb, []StyledButton{b.styledBtn(BtnKeyPayCrypto, cryptoLabel, fmt.Sprintf("pay:crypto:%d", orderID), StyleSuccess)})
+	}
+	// RUB card payments are offered after crypto, only when the adapter is
+	// configured and the order has a positive RUB snapshot.
+	if yookassaOK {
+		kb = append(kb, []StyledButton{b.styledBtn(BtnKeyPayYooKassa, rubLabel, fmt.Sprintf("pay:yookassa:%d", orderID), StylePrimary)})
 	}
 	kb = append(kb,
 		[]StyledButton{Btn(termsLabel, "terms"), Btn(paySupportLabel, "paysupport")},

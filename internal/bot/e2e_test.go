@@ -146,6 +146,15 @@ type e2eEnv struct {
 
 func newE2EEnv(t *testing.T) *e2eEnv {
 	t.Helper()
+	return newE2EEnvWithConfig(t, nil)
+}
+
+// newE2EEnvWithConfig builds an e2eEnv, letting mutate finalize the config
+// before the bot and its services are constructed. RUB checkout tests use it
+// to enable the USD→RUB rate and YooKassa credentials, which are captured by
+// the exchange service and payment adapters at construction time.
+func newE2EEnvWithConfig(t *testing.T, mutate func(*config.Config)) *e2eEnv {
+	t.Helper()
 
 	tg := &fakeTelegram{nextMsgID: 100}
 	srv := httptest.NewServer(http.HandlerFunc(tg.serveHTTP))
@@ -170,6 +179,9 @@ func newE2EEnv(t *testing.T) *e2eEnv {
 		DBPath:         dbPath,
 		USDToStarsRate: 50,
 		LocalesDir:     filepath.Join("..", "..", "locales"),
+	}
+	if mutate != nil {
+		mutate(cfg)
 	}
 
 	logWriter := io.Writer(io.Discard)
@@ -870,4 +882,249 @@ func cryptoSign(body string) string {
 	mac := hmac.New(sha256.New, secret[:])
 	mac.Write([]byte(body))
 	return hex.EncodeToString(mac.Sum(nil))
+}
+
+// --- YooKassa RUB journey ---
+
+// yookassaE2EConfirmationURL is the redirect checkout page the fake YooKassa
+// API hands back for created payments.
+const yookassaE2EConfirmationURL = "https://checkout.example/pay/e2e"
+
+// yookassaE2EAPIMock is a fake YooKassa API covering both routes of the full
+// purchase journey: POST /payments (payment creation from the RUB pay button)
+// and GET /payments/{id} (the authoritative refetch triggered by a webhook).
+// Hits are counted per route; the refetch body is seeded after checkout so
+// the response can carry the REAL order id in metadata.
+type yookassaE2EAPIMock struct {
+	mu          sync.Mutex
+	srv         *httptest.Server
+	refetchBody string
+	createHits  int
+	refetchHits int
+	lastAmount  string
+}
+
+func newYookassaE2EAPIMock(t *testing.T) *yookassaE2EAPIMock {
+	t.Helper()
+	m := &yookassaE2EAPIMock{}
+	m.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodPost && r.URL.Path == "/payments" {
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			m.mu.Lock()
+			m.createHits++
+			if amount, ok := body["amount"].(map[string]any); ok {
+				m.lastAmount, _ = amount["value"].(string)
+			}
+			m.mu.Unlock()
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id":     "pay_e2e",
+				"status": "pending",
+				"paid":   false,
+				"amount": body["amount"],
+				"confirmation": map[string]any{
+					"type":             "redirect",
+					"confirmation_url": yookassaE2EConfirmationURL,
+				},
+				"metadata":   body["metadata"],
+				"created_at": "2026-09-19T10:00:00Z",
+			})
+			return
+		}
+		m.mu.Lock()
+		m.refetchHits++
+		refetch, ready := m.refetchBody, m.refetchBody != ""
+		m.mu.Unlock()
+		if !ready {
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"type":"error","id":"err-1","code":"not_found","description":"unknown payment"}`))
+			return
+		}
+		_, _ = w.Write([]byte(refetch))
+	}))
+	t.Cleanup(m.srv.Close)
+	return m
+}
+
+func (m *yookassaE2EAPIMock) setRefetch(body string) {
+	m.mu.Lock()
+	m.refetchBody = body
+	m.mu.Unlock()
+}
+
+func (m *yookassaE2EAPIMock) stats() (create, refetch int, amount string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.createHits, m.refetchHits, m.lastAmount
+}
+
+// TestE2EYooKassaPurchase walks the full RUB card-payment journey: /start →
+// catalog → product card → cart → checkout → confirm (the RUB button is
+// offered because the rate is configured) → pay:yookassa → redirect URL
+// button → YooKassa payment notification → settlement strictly after the
+// authoritative API refetch (order paid via yookassa, stock decremented once,
+// loyalty points awarded once, buyer and admin notified, outbound webhook
+// fired) → an identical webhook replay settles nothing new.
+func TestE2EYooKassaPurchase(t *testing.T) {
+	out := newOutboundCapture(t)
+	api := newYookassaE2EAPIMock(t)
+	e := newE2EEnvWithConfig(t, func(c *config.Config) {
+		enableYooKassa(c)
+		c.OutboundWebhookURL = out.srv.URL
+	})
+	e.bot.yookassa.SetBaseURL(api.srv.URL)
+	const buyer = int64(5001)
+
+	// $19.99 at the 92.5 rate → 1849.075 → 1849.08 RUB (half-kopeck rounds up).
+	if _, err := e.db.Conn().Exec(`UPDATE products SET price_usd = 19.99 WHERE id = ?`, e.prodReg); err != nil {
+		t.Fatal(err)
+	}
+
+	// /start registers the user; the catalog journey fills the cart.
+	calls := e.cmd(buyer, "/start", "en")
+	requireRender(t, calls, "back:catalog")
+	e.cb(buyer, "back:catalog", "en")
+	e.cb(buyer, fmt.Sprintf("category:%d", e.catID), "en")
+	e.cb(buyer, fmt.Sprintf("product:%d", e.prodReg), "en")
+	e.cb(buyer, fmt.Sprintf("cart:add:%d", e.prodReg), "en")
+	if got := e.qInt(`SELECT quantity FROM cart_items WHERE user_id = ? AND product_id = ?`, buyer, e.prodReg); got != 1 {
+		t.Fatalf("cart quantity = %d, want 1", got)
+	}
+
+	// Checkout and confirm: the RUB button is offered because the rate is set.
+	e.cb(buyer, "cart:checkout", "en")
+	calls = e.cb(buyer, "order:confirm", "en")
+	orderID := e.qInt(`SELECT MAX(id) FROM orders WHERE user_id = ?`, buyer)
+	payScreen := requireRender(t, calls, fmt.Sprintf("pay:stars:%d", orderID))
+	if !strings.Contains(payScreen.markup(), fmt.Sprintf("pay:yookassa:%d", orderID)) {
+		t.Fatalf("RUB pay button missing from the checkout screen: %s", payScreen.markup())
+	}
+	if got := e.qStr(`SELECT printf('%.2f', total_rub) FROM orders WHERE id = ?`, orderID); got != "1849.08" {
+		t.Fatalf("order total_rub = %q, want 1849.08", got)
+	}
+
+	// The refetch response can now carry the real order id in metadata.
+	api.setRefetch(yookassaRefetchJSON("pay_e2e", "succeeded", "1849.08", true, orderID))
+
+	// pay:yookassa → the API creates the payment and the buyer gets a URL
+	// button leading to the YooKassa confirmation page.
+	calls = e.cb(buyer, fmt.Sprintf("pay:yookassa:%d", orderID), "en")
+	render := requireRender(t, calls, yookassaE2EConfirmationURL)
+	var markup tgbotapi.InlineKeyboardMarkup
+	if err := json.Unmarshal([]byte(render.markup()), &markup); err != nil {
+		t.Fatalf("parse payment keyboard: %v", err)
+	}
+	if len(markup.InlineKeyboard) != 1 || len(markup.InlineKeyboard[0]) != 1 ||
+		markup.InlineKeyboard[0][0].URL == nil || *markup.InlineKeyboard[0][0].URL != yookassaE2EConfirmationURL {
+		t.Fatalf("payment keyboard = %s, want a single URL button to %s", render.markup(), yookassaE2EConfirmationURL)
+	}
+	if create, refetch, amount := api.stats(); create != 1 || refetch != 0 || amount != "1849.08" {
+		t.Fatalf("after pay button: create=%d refetch=%d amount=%q, want 1/0/1849.08", create, refetch, amount)
+	}
+
+	// The payment notification arrives; settlement happens after the refetch.
+	handler := e.bot.YooKassaWebhookHandler()
+	body := yookassaNotificationBody("payment.succeeded", "pay_e2e")
+	post := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/yookassa-webhook", strings.NewReader(body))
+		rec := httptest.NewRecorder()
+		handler(rec, req)
+		return rec
+	}
+
+	before := e.tg.count()
+	if rec := post(); rec.Code != http.StatusOK {
+		t.Fatalf("webhook status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+
+	// Order paid via yookassa with the refetched payment id.
+	if got := e.qStr(`SELECT status FROM orders WHERE id = ?`, orderID); got != storage.OrderStatusPaid {
+		t.Fatalf("order status = %q, want paid", got)
+	}
+	if got := e.qStr(`SELECT payment_method FROM orders WHERE id = ?`, orderID); got != storage.PaymentMethodYooKassa {
+		t.Fatalf("payment_method = %q, want yookassa", got)
+	}
+	if got := e.qStr(`SELECT payment_id FROM orders WHERE id = ?`, orderID); got != "pay_e2e" {
+		t.Fatalf("payment_id = %q, want pay_e2e", got)
+	}
+	if got := e.qInt(`SELECT COUNT(*) FROM payment_attempts
+		WHERE provider='yookassa' AND external_id='pay_e2e' AND status='succeeded'`); got != 1 {
+		t.Fatalf("settled payment attempts = %d, want 1", got)
+	}
+	// Stock decremented exactly once: 5 → 4.
+	if got := e.qInt(`SELECT stock FROM products WHERE id = ?`, e.prodReg); got != 4 {
+		t.Fatalf("stock = %d, want 4", got)
+	}
+	// Loyalty: $19.99 at 1% bronze cashback → 20 points (rounded), one accrual.
+	if got := e.qInt(`SELECT loyalty_pts FROM users WHERE telegram_id = ?`, buyer); got != 20 {
+		t.Fatalf("loyalty_pts = %d, want 20", got)
+	}
+	if got := e.qInt(`SELECT COUNT(*) FROM loyalty_txs WHERE user_id = ? AND reason = 'purchase'`, e.userDBID(buyer)); got != 1 {
+		t.Fatalf("purchase loyalty_txs = %d, want 1", got)
+	}
+	// The buyer got the localized payment_success message.
+	lang := e.qStr(`SELECT COALESCE(language_code, '') FROM users WHERE telegram_id = ?`, buyer)
+	wantText := fmt.Sprintf(e.bot.t(lang, "payment_success"), orderID)
+	if !findMessage(e.tg.since(before), buyer, wantText) {
+		t.Fatalf("no payment_success message to buyer %d (lang %q):\n%s", buyer, lang, dumpCalls(e.tg.since(before)))
+	}
+	// The admin got the yookassa card notification with the RUB total.
+	adminNotified := false
+	for _, c := range e.tg.since(before) {
+		if c.Method == "sendMessage" && c.Params.Get("chat_id") == strconv.FormatInt(e2eAdminID, 10) {
+			if strings.Contains(c.Params.Get("text"), "YooKassa") &&
+				strings.Contains(c.Params.Get("text"), "1849.08") &&
+				strings.Contains(c.Params.Get("text"), fmt.Sprintf("#%d", orderID)) {
+				adminNotified = true
+			}
+		}
+	}
+	if !adminNotified {
+		t.Fatalf("no admin_order_paid_yookassa message to admin %d:\n%s", e2eAdminID, dumpCalls(e.tg.since(before)))
+	}
+	// Exactly one refetch served the settlement; no extra payment creation.
+	if create, refetch, _ := api.stats(); create != 1 || refetch != 1 {
+		t.Fatalf("API calls after webhook: create=%d refetch=%d, want 1/1", create, refetch)
+	}
+	// Outbound webhook fired with method yookassa.
+	ev := out.wait(t)
+	if ev.Event != "order.paid" || ev.OrderID != orderID || ev.UserID != buyer ||
+		ev.Method != "yookassa" || ev.PaymentID != "pay_e2e" {
+		t.Fatalf("outbound webhook event = %+v, want order.paid for order %d via yookassa pay_e2e", ev, orderID)
+	}
+
+	// Webhook replay: the identical POST is re-verified through the API, ACKed
+	// with 200, and settles nothing new.
+	beforeReplay := e.tg.count()
+	if rec := post(); rec.Code != http.StatusOK {
+		t.Fatalf("replayed webhook status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+	if create, refetch, _ := api.stats(); create != 1 || refetch != 2 {
+		t.Fatalf("API calls after replay: create=%d refetch=%d, want 1/2 (every notification is re-verified)", create, refetch)
+	}
+	if got := e.qStr(`SELECT status FROM orders WHERE id = ?`, orderID); got != storage.OrderStatusPaid {
+		t.Fatalf("order status after replay = %q, want still paid", got)
+	}
+	if got := e.qStr(`SELECT payment_id FROM orders WHERE id = ?`, orderID); got != "pay_e2e" {
+		t.Fatalf("payment_id after replay = %q, want still pay_e2e", got)
+	}
+	if got := e.qInt(`SELECT stock FROM products WHERE id = ?`, e.prodReg); got != 4 {
+		t.Fatalf("stock after replay = %d, want still 4", got)
+	}
+	if got := e.qInt(`SELECT loyalty_pts FROM users WHERE telegram_id = ?`, buyer); got != 20 {
+		t.Fatalf("loyalty_pts after replay = %d, want still 20", got)
+	}
+	if got := e.qInt(`SELECT COUNT(*) FROM loyalty_txs WHERE user_id = ? AND reason = 'purchase'`, e.userDBID(buyer)); got != 1 {
+		t.Fatalf("purchase loyalty_txs after replay = %d, want still 1", got)
+	}
+	if got := e.qInt(`SELECT COUNT(*) FROM payment_attempts WHERE provider='yookassa' AND external_id='pay_e2e'`); got != 1 {
+		t.Fatalf("payment_attempts after replay = %d, want still 1", got)
+	}
+	if got := e.tg.count() - beforeReplay; got != 0 {
+		t.Fatalf("replay sent %d messages, want 0:\n%s", got, dumpCalls(e.tg.since(beforeReplay)))
+	}
+	if !out.drained() {
+		t.Fatal("replay fired another outbound webhook event")
+	}
 }

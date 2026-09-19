@@ -13,6 +13,10 @@ type CartView struct {
 	Items      []CartItemView
 	TotalUSD   float64
 	TotalStars int
+	// TotalRUB is the RUB price of TotalUSD at the current rate, rounded to
+	// kopecks. It stays 0 while RUB payments are disabled (rate 0 or no
+	// exchange service).
+	TotalRUB float64
 }
 
 // CartItemView pairs a product with its quantity in the cart.
@@ -51,7 +55,7 @@ func (s *CartService) Add(ctx context.Context, userID, productID int64) error {
 }
 
 // Get returns an aggregated view of the user's cart including product details
-// and computed totals (TotalUSD and TotalStars).
+// and computed totals (TotalUSD, TotalStars and TotalRUB).
 func (s *CartService) Get(ctx context.Context, userID int64) (*CartView, error) {
 	items, err := s.cart.GetItems(ctx, userID)
 	if err != nil {
@@ -78,6 +82,12 @@ func (s *CartService) Get(ctx context.Context, userID int64) (*CartView, error) 
 		})
 		view.TotalUSD += p.PriceUSD * float64(ci.Quantity)
 		view.TotalStars += p.PriceStars * ci.Quantity
+	}
+
+	// Convert once from the accumulated TotalUSD: per-item conversion would
+	// drift the total through repeated kopeck rounding.
+	if s.exchange != nil {
+		view.TotalRUB = s.exchange.ConvertUSDToRUB(view.TotalUSD)
 	}
 
 	return view, nil

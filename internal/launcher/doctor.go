@@ -4,10 +4,13 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -90,6 +93,11 @@ func RunDoctor(ctx context.Context, opts DoctorOptions) DoctorReport {
 	default:
 		add(CheckWarn, "Configuration file", "not found; checking process environment")
 	}
+
+	// YooKassa credentials are diagnosed from the raw values so a partial or
+	// non-HTTPS configuration still gets a labeled, actionable line even though
+	// configuration loading rejects it outright below.
+	checkYooKassaPayments(values, add)
 
 	cfg, err := config.LoadFromMap(values)
 	if err != nil {
@@ -209,6 +217,37 @@ var knownEnvironmentKeys = []string{
 	"TELEGRAM_WEBHOOK_SECRET", "APP_ENV", "LOG_LEVEL", "USD_TO_STARS_RATE",
 	"LOCALES_DIR", "WEBAPP_URL", "OUTBOUND_WEBHOOK_URL", "OUTBOUND_WEBHOOK_SECRET",
 	"ADMIN_GROUP_ID", "TOPIC_ORDERS_NEW", "TOPIC_ORDERS_PAID", "TOPIC_ORDERS_DELIVERED",
+	"YOOKASSA_SHOP_ID", "YOOKASSA_SECRET_KEY", "YOOKASSA_RETURN_URL", "USD_TO_RUB_RATE",
+}
+
+// checkYooKassaPayments reports the YooKassa RUB rail state: not configured,
+// configured, partially configured, or configured without the USD_TO_RUB rate
+// that gates the checkout button. It reuses the shared configuration
+// validation so the doctor and the bot can never disagree, and it never prints
+// credential values.
+func checkYooKassaPayments(values map[string]string, add func(CheckStatus, string, string)) {
+	shopID := strings.TrimSpace(values["YOOKASSA_SHOP_ID"])
+	secretKey := strings.TrimSpace(values["YOOKASSA_SECRET_KEY"])
+	returnURL := strings.TrimSpace(values["YOOKASSA_RETURN_URL"])
+	if err := config.ValidateYooKassaConfig(shopID, secretKey, returnURL); err != nil {
+		add(CheckFail, "YooKassa payments", err.Error())
+		return
+	}
+	if shopID == "" {
+		add(CheckOK, "YooKassa payments", "not configured")
+		return
+	}
+	rate := strings.TrimSpace(values["USD_TO_RUB_RATE"])
+	if rate == "" {
+		add(CheckWarn, "YooKassa payments", "USD_TO_RUB_RATE is not set; the RUB payment button stays hidden")
+		return
+	}
+	parsed, err := strconv.ParseFloat(rate, 64)
+	if err != nil || parsed <= 0 || math.IsNaN(parsed) || math.IsInf(parsed, 0) {
+		add(CheckWarn, "YooKassa payments", "USD_TO_RUB_RATE is not a positive number; the RUB payment button stays hidden")
+		return
+	}
+	add(CheckOK, "YooKassa payments", "configured")
 }
 
 func checkEnvPermissions(path string, add func(CheckStatus, string, string)) {

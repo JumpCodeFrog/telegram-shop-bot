@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"testing"
 	"time"
 
@@ -541,5 +542,53 @@ func TestCreateFromCart_ClearCartFails_OrderStillReturned(t *testing.T) {
 	}
 	if orderID <= 0 {
 		t.Fatalf("expected valid orderID, got %d", orderID)
+	}
+}
+
+// TestCreateFromCartSnapshotsTotalRUB verifies CreateFromCart snapshots the
+// cart's converted RUB total onto the order, applying the promo discount with
+// kopeck rounding: 1849.08 with 10% -> math.Round(1849.08*90)/100 = 1664.17,
+// while the TotalUSD promo math stays untouched (19.99 -> 17.991).
+func TestCreateFromCartSnapshotsTotalRUB(t *testing.T) {
+	os := newMockOrderStore()
+	cs := &mockClearCartStore{}
+	svc := NewOrderService(os, cs, isActiveProductStore{}, PaymentDeps{}, slog.Default())
+
+	view := &CartView{
+		Items: []CartItemView{
+			{Product: storage.Product{ID: 1, PriceUSD: 10.0, PriceStars: 500}, Quantity: 1},
+			{Product: storage.Product{ID: 2, PriceUSD: 4.995, PriceStars: 249}, Quantity: 2},
+		},
+		TotalUSD:   19.99,
+		TotalStars: 998,
+		TotalRUB:   1849.08,
+	}
+
+	orderID, err := svc.CreateFromCart(context.Background(), 42, view, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	plain := os.orders[orderID]
+	if math.Abs(plain.TotalRUB-1849.08) > 1e-9 {
+		t.Fatalf("plain TotalRUB=%f, want 1849.08", plain.TotalRUB)
+	}
+	if math.Abs(plain.TotalUSD-19.99) > 1e-9 {
+		t.Fatalf("plain TotalUSD=%f, want 19.99", plain.TotalUSD)
+	}
+
+	promo := &storage.PromoCode{Code: "RUB10", Discount: 10}
+	orderID, err = svc.CreateFromCart(context.Background(), 42, view, promo)
+	if err != nil {
+		t.Fatalf("unexpected error with promo: %v", err)
+	}
+	discounted := os.orders[orderID]
+	if math.Abs(discounted.TotalRUB-1664.17) > 1e-9 {
+		t.Fatalf("discounted TotalRUB=%f, want 1664.17", discounted.TotalRUB)
+	}
+	if math.Abs(discounted.TotalUSD-17.991) > 1e-9 {
+		t.Fatalf("discounted TotalUSD=%f, want 17.991", discounted.TotalUSD)
+	}
+	if discounted.DiscountPct != 10 || discounted.PromoCode != "RUB10" {
+		t.Fatalf("discount fields: %+v", discounted)
 	}
 }

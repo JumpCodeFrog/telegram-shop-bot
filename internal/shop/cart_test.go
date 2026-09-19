@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"shop_bot/internal/service"
 	"shop_bot/internal/storage"
 
 	"pgregory.net/rapid"
@@ -204,5 +205,82 @@ func TestChangeQuantity_RejectsOutOfStockIncrease(t *testing.T) {
 	err := svc.ChangeQuantity(context.Background(), 42, 7, 1)
 	if err != storage.ErrProductOutOfStock {
 		t.Fatalf("expected ErrProductOutOfStock, got %v", err)
+	}
+}
+
+// TestCartViewTotalRUB verifies TotalRUB is computed once from TotalUSD at the
+// end of Get() (not summed per item, where per-item rounding drifts): 1x$10.00
+// + 2x$4.995 => TotalUSD 19.99, and 19.99 at rate 92.5 -> 1849.08 RUB (the
+// half-kopeck 1849.075 rounds up). A drifting multi-item cart (3x$6.663) pins
+// the same rule where the two strategies disagree: once-at-end 1848.98 RUB vs
+// per-item 3x616.33 = 1848.99 RUB. Without an exchange service or with a zero
+// RUB rate (RUB disabled) TotalRUB stays 0.
+func TestCartViewTotalRUB(t *testing.T) {
+	cartMock := &mockCartStore{items: []storage.CartItem{
+		{UserID: 42, ProductID: 1, Quantity: 1},
+		{UserID: 42, ProductID: 2, Quantity: 2},
+	}}
+	productMock := &mockProductStore{byID: map[int64]*storage.Product{
+		1: {ID: 1, CategoryID: 1, Name: "gadget", PriceUSD: 10.0, PriceStars: 500, IsActive: true, Stock: 10},
+		2: {ID: 2, CategoryID: 1, Name: "cable", PriceUSD: 4.995, PriceStars: 249, IsActive: true, Stock: 10},
+	}}
+
+	svc := NewCartService(cartMock, productMock, service.NewExchangeService(50, 92.5))
+	view, err := svc.Get(context.Background(), 42)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if math.Abs(view.TotalUSD-19.99) > 1e-9 {
+		t.Fatalf("TotalUSD=%f, want 19.99", view.TotalUSD)
+	}
+	if math.Abs(view.TotalRUB-1849.08) > 1e-9 {
+		t.Fatalf("TotalRUB=%f, want 1849.08", view.TotalRUB)
+	}
+
+	// Drifting multi-item cart: 3 x $6.663 at rate 92.5. Converting once at
+	// the end of Get() (see the drift comment in cart.go) gives
+	// ConvertUSDToRUB(19.989) = 1848.98, while per-item conversion would give
+	// 3 x ConvertUSDToRUB(6.663) = 3 x 616.33 = 1848.99. The leg pins the
+	// once-at-end rule: a single-item cart cannot distinguish the two.
+	driftCartMock := &mockCartStore{items: []storage.CartItem{
+		{UserID: 42, ProductID: 3, Quantity: 1},
+		{UserID: 42, ProductID: 4, Quantity: 1},
+		{UserID: 42, ProductID: 5, Quantity: 1},
+	}}
+	driftProductMock := &mockProductStore{byID: map[int64]*storage.Product{
+		3: {ID: 3, CategoryID: 1, Name: "widget", PriceUSD: 6.663, PriceStars: 333, IsActive: true, Stock: 10},
+		4: {ID: 4, CategoryID: 1, Name: "bolt", PriceUSD: 6.663, PriceStars: 333, IsActive: true, Stock: 10},
+		5: {ID: 5, CategoryID: 1, Name: "gizmo", PriceUSD: 6.663, PriceStars: 333, IsActive: true, Stock: 10},
+	}}
+
+	driftView, err := NewCartService(driftCartMock, driftProductMock, service.NewExchangeService(50, 92.5)).Get(context.Background(), 42)
+	if err != nil {
+		t.Fatalf("unexpected error for drifting cart: %v", err)
+	}
+	if math.Abs(driftView.TotalUSD-19.989) > 1e-9 {
+		t.Fatalf("drifting TotalUSD=%f, want 19.989", driftView.TotalUSD)
+	}
+	if math.Abs(driftView.TotalRUB-1848.98) > 1e-9 {
+		t.Fatalf("drifting TotalRUB=%f, want 1848.98 (once-at-end), not 1848.99 (per item)", driftView.TotalRUB)
+	}
+
+	// No exchange service wired: TotalRUB stays 0.
+	bare := NewCartService(cartMock, productMock)
+	view, err = bare.Get(context.Background(), 42)
+	if err != nil {
+		t.Fatalf("unexpected error without exchange: %v", err)
+	}
+	if view.TotalRUB != 0 {
+		t.Fatalf("TotalRUB without exchange service=%f, want 0", view.TotalRUB)
+	}
+
+	// RUB rate 0 (RUB payments disabled): TotalRUB stays 0.
+	zeroRate := NewCartService(cartMock, productMock, service.NewExchangeService(50, 0))
+	view, err = zeroRate.Get(context.Background(), 42)
+	if err != nil {
+		t.Fatalf("unexpected error with zero rate: %v", err)
+	}
+	if view.TotalRUB != 0 {
+		t.Fatalf("TotalRUB with zero rate=%f, want 0", view.TotalRUB)
 	}
 }

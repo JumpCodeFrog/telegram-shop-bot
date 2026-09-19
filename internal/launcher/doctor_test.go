@@ -229,3 +229,163 @@ func TestRunDoctorPassesRedisPasswordToProtocolCheck(t *testing.T) {
 		t.Fatal("doctor output leaked Redis password")
 	}
 }
+
+func TestRunDoctorFailsOnPartialYooKassaCredentials(t *testing.T) {
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, ".env")
+	dbPath := filepath.Join(dir, "shop.db")
+	content := "BOT_TOKEN=" + testToken + "\nADMIN_IDS=42\nDB_PATH=" + dbPath + "\nYOOKASSA_SHOP_ID=123456\n"
+	if err := os.WriteFile(envPath, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	report := RunDoctor(context.Background(), DoctorOptions{
+		EnvPath:    envPath,
+		Out:        &output,
+		Inspector:  &fakeInspector{},
+		LookupEnv:  func(string) (string, bool) { return "", false },
+		CheckRedis: refusedRedis,
+	})
+	if report.ExitCode() != 1 {
+		t.Fatalf("ExitCode() = %d, want 1", report.ExitCode())
+	}
+	if !strings.Contains(output.String(), "[FAIL] YooKassa payments") ||
+		!strings.Contains(output.String(), "must be set together") {
+		t.Fatalf("missing partial credential failure:\n%s", output.String())
+	}
+
+	// Partial credentials supplied only through the process environment are
+	// still diagnosed: the environment overlay must know the YooKassa keys.
+	missingEnv := filepath.Join(dir, "missing.env")
+	var overlayOut bytes.Buffer
+	report = RunDoctor(context.Background(), DoctorOptions{
+		EnvPath:   missingEnv,
+		Out:       &overlayOut,
+		Inspector: &fakeInspector{},
+		LookupEnv: func(key string) (string, bool) {
+			switch key {
+			case "BOT_TOKEN":
+				return testToken, true
+			case "ADMIN_IDS":
+				return "42", true
+			case "DB_PATH":
+				return dbPath, true
+			case "YOOKASSA_SHOP_ID":
+				return "123456", true
+			}
+			return "", false
+		},
+		CheckRedis: refusedRedis,
+	})
+	if report.ExitCode() != 1 || !strings.Contains(overlayOut.String(), "[FAIL] YooKassa payments") {
+		t.Fatalf("overlay report = %+v, output:\n%s", report, overlayOut.String())
+	}
+}
+
+func TestRunDoctorWarnsWhenYooKassaRateMissing(t *testing.T) {
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, ".env")
+	dbPath := filepath.Join(dir, "shop.db")
+	content := "BOT_TOKEN=" + testToken + "\nADMIN_IDS=42\nDB_PATH=" + dbPath +
+		"\nYOOKASSA_SHOP_ID=123456\nYOOKASSA_SECRET_KEY=live_secret_do_not_print\nYOOKASSA_RETURN_URL=https://shop.example.com/return\n"
+	if err := os.WriteFile(envPath, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	report := RunDoctor(context.Background(), DoctorOptions{
+		EnvPath:    envPath,
+		Out:        &output,
+		Inspector:  &fakeInspector{state: TelegramState{Identity: BotIdentity{ID: 7, Username: "shop_bot"}}},
+		LookupEnv:  func(string) (string, bool) { return "", false },
+		CheckRedis: refusedRedis,
+	})
+	if report.ExitCode() != 0 || !report.HasWarnings() {
+		t.Fatalf("report = %+v", report)
+	}
+	if !strings.Contains(output.String(), "[WARN] YooKassa payments") ||
+		!strings.Contains(output.String(), "USD_TO_RUB_RATE") ||
+		!strings.Contains(output.String(), "RUB payment button stays hidden") {
+		t.Fatalf("missing rate warning:\n%s", output.String())
+	}
+	if strings.Contains(output.String(), "live_secret_do_not_print") {
+		t.Fatal("doctor output leaked YooKassa secret key")
+	}
+
+	// An explicitly non-positive rate fails configuration on top of the warning.
+	zeroRatePath := filepath.Join(dir, "zero.env")
+	content = content + "USD_TO_RUB_RATE=0\n"
+	if err := os.WriteFile(zeroRatePath, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var zeroOut bytes.Buffer
+	report = RunDoctor(context.Background(), DoctorOptions{
+		EnvPath:    zeroRatePath,
+		Out:        &zeroOut,
+		Inspector:  &fakeInspector{},
+		LookupEnv:  func(string) (string, bool) { return "", false },
+		CheckRedis: refusedRedis,
+	})
+	if report.ExitCode() != 1 {
+		t.Fatalf("zero rate ExitCode() = %d, want 1", report.ExitCode())
+	}
+	if !strings.Contains(zeroOut.String(), "USD_TO_RUB_RATE") {
+		t.Fatalf("zero rate report lacks actionable detail:\n%s", zeroOut.String())
+	}
+}
+
+func TestRunDoctorFailsOnNonHTTPSYooKassaReturnURL(t *testing.T) {
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, ".env")
+	dbPath := filepath.Join(dir, "shop.db")
+	content := "BOT_TOKEN=" + testToken + "\nADMIN_IDS=42\nDB_PATH=" + dbPath +
+		"\nYOOKASSA_SHOP_ID=123456\nYOOKASSA_SECRET_KEY=live_secret_do_not_print\nYOOKASSA_RETURN_URL=http://shop.example.com/return\n"
+	if err := os.WriteFile(envPath, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	report := RunDoctor(context.Background(), DoctorOptions{
+		EnvPath:    envPath,
+		Out:        &output,
+		Inspector:  &fakeInspector{},
+		LookupEnv:  func(string) (string, bool) { return "", false },
+		CheckRedis: refusedRedis,
+	})
+	if report.ExitCode() != 1 {
+		t.Fatalf("ExitCode() = %d, want 1", report.ExitCode())
+	}
+	if !strings.Contains(output.String(), "[FAIL] YooKassa payments") ||
+		!strings.Contains(output.String(), "YOOKASSA_RETURN_URL must be a public https:// URL") {
+		t.Fatalf("missing https failure:\n%s", output.String())
+	}
+	if strings.Contains(output.String(), "live_secret_do_not_print") {
+		t.Fatal("doctor output leaked YooKassa secret key")
+	}
+}
+
+func TestRunDoctorPassesConfiguredYooKassa(t *testing.T) {
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, ".env")
+	dbPath := filepath.Join(dir, "shop.db")
+	content := "BOT_TOKEN=" + testToken + "\nADMIN_IDS=42\nDB_PATH=" + dbPath +
+		"\nYOOKASSA_SHOP_ID=123456\nYOOKASSA_SECRET_KEY=live_secret_do_not_print\nYOOKASSA_RETURN_URL=https://shop.example.com/return\nUSD_TO_RUB_RATE=92.5\n"
+	if err := os.WriteFile(envPath, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	report := RunDoctor(context.Background(), DoctorOptions{
+		EnvPath:    envPath,
+		Out:        &output,
+		Inspector:  &fakeInspector{state: TelegramState{Identity: BotIdentity{ID: 7, Username: "shop_bot", SupportsInlineQueries: true}}},
+		LookupEnv:  func(string) (string, bool) { return "", false },
+		CheckRedis: func(context.Context, string, string) error { return nil },
+	})
+	if report.ExitCode() != 0 {
+		t.Fatalf("ExitCode() = %d, want 0:\n%s", report.ExitCode(), output.String())
+	}
+	if !strings.Contains(output.String(), "[OK] YooKassa payments: configured") {
+		t.Fatalf("missing configured line:\n%s", output.String())
+	}
+	if strings.Contains(output.String(), "live_secret_do_not_print") {
+		t.Fatal("doctor output leaked YooKassa secret key")
+	}
+}

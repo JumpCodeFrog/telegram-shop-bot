@@ -14,12 +14,24 @@ const (
 	PaymentIngressApply      = "apply"
 )
 
+// invalidProviderCapturePayer enforces payer equality only for providers that
+// supply a Telegram payer identity. YooKassa facts carry PayerID 0 because the
+// provider has no Telegram payer identity, so a payerless fact is accepted
+// exactly for that rail; a positive PayerID that disagrees with the order user
+// still rejects for every provider.
+func invalidProviderCapturePayer(fact PaymentFact, orderUserID int64) bool {
+	if fact.PayerID > 0 {
+		return fact.PayerID != orderUserID
+	}
+	return normalizePaymentProvider(fact.Provider) != PaymentMethodYooKassa
+}
+
 func (s *SQLOrderStore) PreviewProviderCaptureIngress(ctx context.Context, orderID int64, fact PaymentFact) (string, error) {
 	order, err := s.loadPaymentOrder(ctx, orderID)
 	if err != nil {
 		return "", err
 	}
-	if fact.PayerID <= 0 || fact.PayerID != order.UserID || fact.OccurredAt.IsZero() {
+	if fact.OccurredAt.IsZero() || invalidProviderCapturePayer(fact, order.UserID) {
 		return "", ErrPaymentReceiptMismatch
 	}
 	fact, err = validatePaymentFact(*order, fact)
@@ -51,7 +63,7 @@ func (s *SQLOrderStore) PreviewProviderCaptureIngress(ctx context.Context, order
 func (s *SQLPaymentLedgerStore) PreviewProviderRefundIngress(ctx context.Context, refund Refund) (string, error) {
 	provider := normalizePaymentProvider(refund.Provider)
 	if refund.OrderID <= 0 || refund.AmountMinor <= 0 || refund.ExternalID == "" ||
-		refund.PaymentExternalID == "" || (provider != PaymentMethodStars && provider != PaymentMethodCrypto) ||
+		refund.PaymentExternalID == "" || (provider != PaymentMethodStars && provider != PaymentMethodCrypto && provider != PaymentMethodYooKassa) ||
 		refund.Scale < 0 || refund.Scale > 9 || refund.Currency == "" || refund.PayerID <= 0 ||
 		refund.OccurredAt.IsZero() || (provider == PaymentMethodStars && refund.ExternalID != refund.PaymentExternalID) {
 		return "", ErrPaymentReceiptMismatch
@@ -78,7 +90,11 @@ func (s *SQLPaymentLedgerStore) PreviewProviderRefundIngress(ctx context.Context
 	if err != nil {
 		return "", fmt.Errorf("ledger: preview provider refund parent: %w", err)
 	}
-	if parentOrder != refund.OrderID || capturePayerID != refund.PayerID || currency != refund.Currency || scale != refund.Scale {
+	// Payer corroboration mirrors the ingest rule in recordRefundOnce: payer
+	// equality is enforced only when the capture itself carries a positive
+	// payer id. YooKassa (and payerless crypto) captures store payer 0, so
+	// their refunds preview truthfully instead of quarantining forever.
+	if parentOrder != refund.OrderID || (capturePayerID > 0 && capturePayerID != refund.PayerID) || currency != refund.Currency || scale != refund.Scale {
 		return PaymentIngressQuarantine, nil
 	}
 	var existing Refund
@@ -123,7 +139,7 @@ func (s *SQLOrderStore) IngestProviderCapture(ctx context.Context, orderID int64
 	if err != nil {
 		return err
 	}
-	if fact.PayerID <= 0 || fact.PayerID != order.UserID || fact.OccurredAt.IsZero() {
+	if fact.OccurredAt.IsZero() || invalidProviderCapturePayer(fact, order.UserID) {
 		return ErrPaymentReceiptMismatch
 	}
 	fact, err = validatePaymentFact(*order, fact)

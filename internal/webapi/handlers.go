@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -84,6 +85,12 @@ type CryptoInvoicer interface {
 	CreateInvoice(ctx context.Context, orderID int64, amountUSD float64, description string) (*payment.Invoice, error)
 }
 
+// YooKassaInvoicer creates YooKassa card payments (payment.YooKassaPayment).
+type YooKassaInvoicer interface {
+	Configured() bool
+	CreatePayment(ctx context.Context, orderID int64, amountRUBMinor int64, description string) (*payment.Invoice, error)
+}
+
 // FileURLResolver resolves a Telegram file_id to a direct download URL
 // (tgbotapi.BotAPI.GetFileDirectURL).
 type FileURLResolver interface {
@@ -99,18 +106,19 @@ type Localizer interface {
 
 // Deps carries every dependency of the Mini App API server.
 type Deps struct {
-	Auth    *Authenticator
-	Catalog CatalogService
-	Cart    CartService
-	Orders  OrderService
-	Users   storage.UserStore
-	Promos  PromoStore
-	Reviews RatingStore
-	Photos  PhotoStore
-	I18n    Localizer
-	Tg      TelegramAPI
-	Crypto  CryptoInvoicer
-	Files   FileURLResolver
+	Auth     *Authenticator
+	Catalog  CatalogService
+	Cart     CartService
+	Orders   OrderService
+	Users    storage.UserStore
+	Promos   PromoStore
+	Reviews  RatingStore
+	Photos   PhotoStore
+	I18n     Localizer
+	Tg       TelegramAPI
+	Crypto   CryptoInvoicer
+	YooKassa YooKassaInvoicer
+	Files    FileURLResolver
 }
 
 type cachedFileURL struct {
@@ -463,10 +471,10 @@ func (s *Server) decodeBody(w http.ResponseWriter, r *http.Request, v any) bool 
 	return true
 }
 
-// POST /api/checkout {"method":"stars"|"crypto","promo":""} → {"order_id","invoice_link"}.
+// POST /api/checkout {"method":"stars"|"crypto"|"yookassa","promo":""} → {"order_id","invoice_link"}.
 // The order is created through the same OrderService.CreateFromCart as the bot
 // flow; payment confirmation then arrives via the existing successful_payment /
-// CryptoBot webhook pipeline.
+// CryptoBot / YooKassa webhook pipeline.
 func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request, auth *AuthResult) {
 	var req struct {
 		Method string `json:"method"`
@@ -475,12 +483,16 @@ func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request, auth *Au
 	if !s.decodeBody(w, r, &req) {
 		return
 	}
-	if req.Method != storage.PaymentMethodStars && req.Method != storage.PaymentMethodCrypto {
+	if req.Method != storage.PaymentMethodStars && req.Method != storage.PaymentMethodCrypto && req.Method != storage.PaymentMethodYooKassa {
 		s.writeError(w, http.StatusBadRequest, "webapp_err_method")
 		return
 	}
 	if req.Method == storage.PaymentMethodCrypto && (s.deps.Crypto == nil || !s.deps.Crypto.Configured()) {
 		s.writeError(w, http.StatusBadRequest, "webapp_err_crypto_disabled")
+		return
+	}
+	if req.Method == storage.PaymentMethodYooKassa && (s.deps.YooKassa == nil || !s.deps.YooKassa.Configured()) {
+		s.writeError(w, http.StatusBadRequest, "webapp_err_yookassa_disabled")
 		return
 	}
 
@@ -554,6 +566,19 @@ func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request, auth *Au
 	case storage.PaymentMethodCrypto:
 		var inv *payment.Invoice
 		inv, err = s.deps.Crypto.CreateInvoice(ctx, order.ID, order.TotalUSD, orderDescription(order.Items))
+		if err == nil {
+			link = inv.PayURL
+		}
+	case storage.PaymentMethodYooKassa:
+		// Kopecks from the order's RUB snapshot. TotalRUB is 0 when the
+		// exchange rate is unset (RUB disabled): refuse rather than charge 0.
+		amountMinor := int64(math.Round(order.TotalRUB * 100))
+		if amountMinor <= 0 {
+			s.writeError(w, http.StatusBadRequest, "webapp_err_yookassa_disabled")
+			return
+		}
+		var inv *payment.Invoice
+		inv, err = s.deps.YooKassa.CreatePayment(ctx, order.ID, amountMinor, orderDescription(order.Items))
 		if err == nil {
 			link = inv.PayURL
 		}

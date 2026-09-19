@@ -11,8 +11,9 @@ const (
 	OrderStatusDelivered = "delivered"
 	OrderStatusCancelled = "cancelled"
 
-	PaymentMethodStars  = "stars"
-	PaymentMethodCrypto = "crypto"
+	PaymentMethodStars    = "stars"
+	PaymentMethodCrypto   = "crypto"
+	PaymentMethodYooKassa = "yookassa"
 	// PaymentReviewProviderUnknown is a provider-neutral operator inbox for
 	// legacy paid rows whose original payment rail cannot be established.
 	PaymentReviewProviderUnknown = "unknown"
@@ -144,6 +145,7 @@ type Order struct {
 	FulfillmentState       string    `db:"fulfillment_state"`
 	TotalUSD               float64   `db:"total_usd"`
 	TotalStars             int       `db:"total_stars"`
+	TotalRUB               float64   `db:"total_rub"`
 	PaymentMethod          string    `db:"payment_method"`
 	PaymentID              string    `db:"payment_id"`
 	DiscountPct            int       `db:"discount_pct"`

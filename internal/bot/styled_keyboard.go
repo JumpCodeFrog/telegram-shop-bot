@@ -41,6 +41,7 @@ const (
 	BtnKeyCartRemove      = "cart_remove"
 	BtnKeyPayStars        = "pay_stars"
 	BtnKeyPayCrypto       = "pay_crypto"
+	BtnKeyPayYooKassa     = "pay_yookassa"
 	BtnKeyPayCancel       = "pay_cancel"
 )
 
@@ -63,6 +64,7 @@ var AllButtonKeys = []string{
 	BtnKeyCartRemove,
 	BtnKeyPayStars,
 	BtnKeyPayCrypto,
+	BtnKeyPayYooKassa,
 	BtnKeyPayCancel,
 }
 
@@ -103,6 +105,8 @@ func ButtonKeyLabel(key string) string {
 		return "⭐ Telegram Stars"
 	case BtnKeyPayCrypto:
 		return "💎 Crypto"
+	case BtnKeyPayYooKassa:
+		return "💳 Карта"
 	case BtnKeyPayCancel:
 		return "❌ Отмена"
 	default:

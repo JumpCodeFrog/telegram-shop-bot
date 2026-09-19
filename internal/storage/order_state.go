@@ -56,6 +56,11 @@ func orderMoney(order Order, provider string) (amount int64, currency string, sc
 			return 0, "", 0, ErrInvalidMoney
 		}
 		return int64(math.Round(order.TotalUSD * 100)), "USD", 2, nil
+	case PaymentMethodYooKassa:
+		if order.TotalRUB <= 0 || math.IsNaN(order.TotalRUB) || math.IsInf(order.TotalRUB, 0) {
+			return 0, "", 0, ErrInvalidMoney
+		}
+		return int64(math.Round(order.TotalRUB * 100)), "RUB", 2, nil
 	default:
 		return 0, "", 0, fmt.Errorf("order store: unsupported payment provider %q", provider)
 	}
@@ -77,6 +82,10 @@ func validatePaymentFact(order Order, fact PaymentFact) (PaymentFact, error) {
 		}
 	case PaymentMethodCrypto:
 		if fact.Currency != "USD" && fact.Currency != "USDT" {
+			return PaymentFact{}, ErrPaymentReceiptMismatch
+		}
+	case PaymentMethodYooKassa:
+		if fact.Currency != "RUB" {
 			return PaymentFact{}, ErrPaymentReceiptMismatch
 		}
 	default:

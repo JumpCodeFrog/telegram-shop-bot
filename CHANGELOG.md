@@ -6,6 +6,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **YooKassa (RUB) card payments** — an optional third payment provider next to Stars and CryptoBot: the checkout keyboard and the Mini App grow a "Pay by card" button for non-subscription carts, the buyer is redirected to the YooKassa checkout page, and the order settles when YooKassa notifies the bot. USD prices convert at the new `USD_TO_RUB_RATE` (configured together with `YOOKASSA_SHOP_ID`, `YOOKASSA_SECRET_KEY` and `YOOKASSA_RETURN_URL`; rate `0` keeps the button hidden), and the RUB total is snapshotted on the order at checkout so a mid-flight rate change cannot desync the button from the ledger. YooKassa notifications are unsigned: the webhook body is used only to identify the payment, and settlement happens strictly after an authoritative `GetPayment` refetch validates the provider, amount, currency, and order binding — mismatched or malformed facts are quarantined for `payment-review` (`--provider yookassa`), and idempotent webhook replays re-verify and settle nothing new. Register `<WEBHOOK_URL>/yookassa-webhook` as the notification URL in the YooKassa merchant cabinet. Migrations: `019_orders_total_rub.sql` adds the order RUB snapshot; `020_ledger_provider_yookassa.sql` rebuilds the ledger provider CHECK constraints to accept `yookassa` (and `stripe`). Subscriptions remain Stars-only.
+
+### Tests
+
+- Added a full E2E regression for the YooKassa purchase journey: RUB button visibility at checkout, redirect payment creation, settlement after the authoritative refetch (order paid, stock, loyalty, buyer and admin notifications, outbound webhook), and idempotent webhook replay.
+
+---
+
 ## [3.0.1] — 2026-09-13
 
 ### Added
