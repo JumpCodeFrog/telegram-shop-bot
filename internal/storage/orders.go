@@ -66,11 +66,11 @@ func (s *SQLOrderStore) createOrderOnce(ctx context.Context, order *Order, items
 	}
 	res, err := tx.ExecContext(ctx,
 		`INSERT INTO orders
-		 (user_id, total_usd, total_stars, payment_method, payment_id, status,
+		 (user_id, total_usd, total_stars, total_rub, payment_method, payment_id, status,
 		  order_state, payment_state, fulfillment_state, discount_pct, promo_code,
 		  subscription_product_id, subscription_period_days)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULLIF(?, 0), ?)`,
-		order.UserID, order.TotalUSD, order.TotalStars,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULLIF(?, 0), ?)`,
+		order.UserID, order.TotalUSD, order.TotalStars, order.TotalRUB,
 		order.PaymentMethod, order.PaymentID, order.Status,
 		state.order, state.payment, state.fulfillment,
 		order.DiscountPct, order.PromoCode,
@@ -112,14 +112,14 @@ func (s *SQLOrderStore) createOrderOnce(ctx context.Context, order *Order, items
 func (s *SQLOrderStore) GetOrder(ctx context.Context, id int64) (*Order, error) {
 	var o Order
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, user_id, COALESCE(total_usd, 0), COALESCE(total_stars, 0),
+		`SELECT id, user_id, COALESCE(total_usd, 0), COALESCE(total_stars, 0), COALESCE(total_rub, 0),
 		        COALESCE(payment_method, ''), COALESCE(payment_id, ''),
 		        COALESCE(status, 'pending'), order_state, payment_state, fulfillment_state,
 		        COALESCE(discount_pct, 0), COALESCE(promo_code, ''),
 		        COALESCE(subscription_product_id, 0), subscription_period_days,
 		        created_at, updated_at
 		 FROM orders WHERE id = ?`, id).
-		Scan(&o.ID, &o.UserID, &o.TotalUSD, &o.TotalStars,
+		Scan(&o.ID, &o.UserID, &o.TotalUSD, &o.TotalStars, &o.TotalRUB,
 			&o.PaymentMethod, &o.PaymentID, &o.Status,
 			&o.OrderState, &o.PaymentState, &o.FulfillmentState,
 			&o.DiscountPct, &o.PromoCode,
@@ -166,7 +166,7 @@ func (s *SQLOrderStore) HasSubscriptionEntitlementConflict(ctx context.Context, 
 // descending, each with its items loaded.
 func (s *SQLOrderStore) GetUserOrders(ctx context.Context, userID int64) ([]Order, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, user_id, COALESCE(total_usd, 0), COALESCE(total_stars, 0),
+		`SELECT id, user_id, COALESCE(total_usd, 0), COALESCE(total_stars, 0), COALESCE(total_rub, 0),
 		        COALESCE(payment_method, ''), COALESCE(payment_id, ''),
 		        COALESCE(status, 'pending'), order_state, payment_state, fulfillment_state,
 		        COALESCE(discount_pct, 0), COALESCE(promo_code, ''),
@@ -182,7 +182,7 @@ func (s *SQLOrderStore) GetUserOrders(ctx context.Context, userID int64) ([]Orde
 	var orders []Order
 	for rows.Next() {
 		var o Order
-		if err := rows.Scan(&o.ID, &o.UserID, &o.TotalUSD, &o.TotalStars,
+		if err := rows.Scan(&o.ID, &o.UserID, &o.TotalUSD, &o.TotalStars, &o.TotalRUB,
 			&o.PaymentMethod, &o.PaymentID, &o.Status,
 			&o.OrderState, &o.PaymentState, &o.FulfillmentState,
 			&o.DiscountPct, &o.PromoCode,
@@ -217,7 +217,7 @@ func (s *SQLOrderStore) GetAllOrders(ctx context.Context, statusFilter string) (
 
 	if statusFilter != "" {
 		rows, err = s.db.QueryContext(ctx,
-			`SELECT id, user_id, COALESCE(total_usd, 0), COALESCE(total_stars, 0),
+			`SELECT id, user_id, COALESCE(total_usd, 0), COALESCE(total_stars, 0), COALESCE(total_rub, 0),
 			        COALESCE(payment_method, ''), COALESCE(payment_id, ''),
 			        COALESCE(status, 'pending'), order_state, payment_state, fulfillment_state,
 			        COALESCE(discount_pct, 0), COALESCE(promo_code, ''),
@@ -227,7 +227,7 @@ func (s *SQLOrderStore) GetAllOrders(ctx context.Context, statusFilter string) (
 			 ORDER BY created_at DESC`, statusFilter)
 	} else {
 		rows, err = s.db.QueryContext(ctx,
-			`SELECT id, user_id, COALESCE(total_usd, 0), COALESCE(total_stars, 0),
+			`SELECT id, user_id, COALESCE(total_usd, 0), COALESCE(total_stars, 0), COALESCE(total_rub, 0),
 			        COALESCE(payment_method, ''), COALESCE(payment_id, ''),
 			        COALESCE(status, 'pending'), order_state, payment_state, fulfillment_state,
 			        COALESCE(discount_pct, 0), COALESCE(promo_code, ''),
@@ -243,7 +243,7 @@ func (s *SQLOrderStore) GetAllOrders(ctx context.Context, statusFilter string) (
 	var orders []Order
 	for rows.Next() {
 		var o Order
-		if err := rows.Scan(&o.ID, &o.UserID, &o.TotalUSD, &o.TotalStars,
+		if err := rows.Scan(&o.ID, &o.UserID, &o.TotalUSD, &o.TotalStars, &o.TotalRUB,
 			&o.PaymentMethod, &o.PaymentID, &o.Status,
 			&o.OrderState, &o.PaymentState, &o.FulfillmentState,
 			&o.DiscountPct, &o.PromoCode,
@@ -368,12 +368,12 @@ func (s *SQLOrderStore) updateOrderStatusOnce(ctx context.Context, id int64, fro
 
 	var current Order
 	if err := tx.QueryRowContext(ctx,
-		`SELECT id, user_id, COALESCE(total_usd, 0), COALESCE(total_stars, 0),
+		`SELECT id, user_id, COALESCE(total_usd, 0), COALESCE(total_stars, 0), COALESCE(total_rub, 0),
 		        COALESCE(payment_method, ''), COALESCE(payment_id, ''),
 		        COALESCE(status, 'pending'), payment_state,
 		        COALESCE(subscription_product_id, 0), subscription_period_days
 		 FROM orders WHERE id = ?`, id).Scan(
-		&current.ID, &current.UserID, &current.TotalUSD, &current.TotalStars,
+		&current.ID, &current.UserID, &current.TotalUSD, &current.TotalStars, &current.TotalRUB,
 		&current.PaymentMethod, &current.PaymentID, &current.Status, &current.PaymentState,
 		&current.SubscriptionProductID, &current.SubscriptionPeriodDays,
 	); err == sql.ErrNoRows {

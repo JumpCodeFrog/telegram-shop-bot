@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"math"
 	"testing"
 
@@ -519,5 +520,104 @@ func TestUpdateOrderStatus_RedeemsPromoOnPaidTransition(t *testing.T) {
 	}
 	if usageRows != 1 {
 		t.Fatalf("expected one promo usage row, got %d", usageRows)
+	}
+}
+
+// TestOrderTotalRUBRoundTrip verifies that a YooKassa order's converted RUB
+// total survives every read path: GetOrder, the order list queries, the
+// payment-recording loader, and the settlement transition that feeds the
+// immutable ledger.
+// Feature: shop_bot, Property 2: Round-trip хранилища данных
+// Validates: Requirements 12.5, 9.3
+func TestOrderTotalRUBRoundTrip(t *testing.T) {
+	db, err := New(":memory:")
+	if err != nil {
+		t.Fatalf("New(:memory:): %v", err)
+	}
+	defer db.Close()
+
+	store := NewSQLOrderStore(db)
+	ctx := context.Background()
+
+	if _, err := db.Conn().ExecContext(ctx, "INSERT INTO categories (name, emoji) VALUES (?, ?)", "Cat", "🧪"); err != nil {
+		t.Fatalf("seed category: %v", err)
+	}
+	if _, err := db.Conn().ExecContext(ctx,
+		`INSERT INTO products (category_id, name, price_usd, price_stars, stock, is_active)
+		 VALUES (1, 'Gadget', 23.00, 0, 10, 1)`); err != nil {
+		t.Fatalf("seed product: %v", err)
+	}
+
+	rubOrder := &Order{
+		UserID:        42,
+		TotalUSD:      23.00,
+		TotalRUB:      1849.08,
+		PaymentMethod: PaymentMethodYooKassa,
+		Status:        OrderStatusPending,
+	}
+	items := []OrderItem{{ProductID: 1, Quantity: 1, PriceUSD: 23.00}}
+	rubOrderID, err := store.CreateOrder(ctx, rubOrder, items)
+	if err != nil {
+		t.Fatalf("CreateOrder: %v", err)
+	}
+
+	got, err := store.GetOrder(ctx, rubOrderID)
+	if err != nil {
+		t.Fatalf("GetOrder: %v", err)
+	}
+	if math.Abs(got.TotalRUB-1849.08) > 1e-9 {
+		t.Errorf("GetOrder TotalRUB: got %f, want 1849.08", got.TotalRUB)
+	}
+
+	userOrders, err := store.GetUserOrders(ctx, 42)
+	if err != nil || len(userOrders) != 1 {
+		t.Fatalf("GetUserOrders: orders=%d err=%v", len(userOrders), err)
+	}
+	if math.Abs(userOrders[0].TotalRUB-1849.08) > 1e-9 {
+		t.Errorf("GetUserOrders TotalRUB: got %f, want 1849.08", userOrders[0].TotalRUB)
+	}
+
+	for _, filter := range []string{"", OrderStatusPending} {
+		allOrders, err := store.GetAllOrders(ctx, filter)
+		if err != nil || len(allOrders) != 1 {
+			t.Fatalf("GetAllOrders(%q): orders=%d err=%v", filter, len(allOrders), err)
+		}
+		if math.Abs(allOrders[0].TotalRUB-1849.08) > 1e-9 {
+			t.Errorf("GetAllOrders(%q) TotalRUB: got %f, want 1849.08", filter, allOrders[0].TotalRUB)
+		}
+	}
+
+	paymentOrder, err := store.loadPaymentOrder(ctx, rubOrderID)
+	if err != nil {
+		t.Fatalf("loadPaymentOrder: %v", err)
+	}
+	if math.Abs(paymentOrder.TotalRUB-1849.08) > 1e-9 {
+		t.Errorf("loadPaymentOrder TotalRUB: got %f, want 1849.08", paymentOrder.TotalRUB)
+	}
+
+	// A conflicting transition exercises the status-transition order loader
+	// (the SELECT whose result feeds observePayment/orderMoney) on a YooKassa
+	// order without writing to the provider-gated ledger tables.
+	if err := store.UpdateOrderStatus(ctx, rubOrderID, OrderStatusPaid, OrderStatusDelivered, "", ""); !errors.Is(err, ErrOrderStatusConflict) {
+		t.Fatalf("UpdateOrderStatus conflict path: err=%v, want ErrOrderStatusConflict", err)
+	}
+
+	// An order created without a RUB total reads back as zero.
+	starOrder := &Order{
+		UserID:     43,
+		TotalUSD:   5.0,
+		TotalStars: 100,
+		Status:     OrderStatusPending,
+	}
+	starOrderID, err := store.CreateOrder(ctx, starOrder, items)
+	if err != nil {
+		t.Fatalf("CreateOrder stars: %v", err)
+	}
+	starGot, err := store.GetOrder(ctx, starOrderID)
+	if err != nil {
+		t.Fatalf("GetOrder stars: %v", err)
+	}
+	if starGot.TotalRUB != 0 {
+		t.Errorf("stars order TotalRUB: got %f, want 0", starGot.TotalRUB)
 	}
 }

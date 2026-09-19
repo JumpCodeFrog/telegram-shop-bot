@@ -119,14 +119,30 @@ func TestMigration017QuarantinesPendingOrderAgainstUnexpiredEntitlement(t *testi
 	}
 }
 
+// applyCommerceLedgerMigration applies 017 and every later migration so the
+// pre-017 legacy data is backfilled and the schema matches what current store
+// code expects, exactly like the production migrator would.
 func applyCommerceLedgerMigration(t *testing.T, db *DB) {
 	t.Helper()
-	statements, err := migrationsFS.ReadFile("migrations/017_commerce_ledger.sql")
+	entries, err := migrationsFS.ReadDir("migrations")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.applyMigration("017_commerce_ledger.sql", string(statements)); err != nil {
-		t.Fatal(err)
+	reachedCommerceLedger := false
+	for _, entry := range entries {
+		if !reachedCommerceLedger {
+			if entry.Name() != "017_commerce_ledger.sql" {
+				continue
+			}
+			reachedCommerceLedger = true
+		}
+		statements, err := migrationsFS.ReadFile("migrations/" + entry.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := db.applyMigration(entry.Name(), string(statements)); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
