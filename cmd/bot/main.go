@@ -243,9 +243,14 @@ func runBot() {
 	// webhook-driven, so there is no polling worker.
 	yookassaPayments := payment.NewYooKassaPayment(cfg.YooKassaShopID, cfg.YooKassaSecretKey, cfg.YooKassaReturnURL)
 
+	// USD card payments for the Mini App checkout. Separate instance from the
+	// bot's own (main owns the webapi deps, mirroring yookassa); settlement
+	// is webhook-driven, so there is no polling worker.
+	stripePayments := payment.NewStripePayment(cfg.StripeSecretKey, cfg.StripeWebhookSecret, cfg.StripeReturnURL)
+
 	// Mini App REST API: reuses the bot's OrderService so web checkouts are
-	// confirmed by the same successful_payment / CryptoBot / YooKassa webhook
-	// pipeline.
+	// confirmed by the same successful_payment / CryptoBot / YooKassa /
+	// Stripe webhook pipeline.
 	var apiServer *webapi.Server
 	if cfg.WebAppURL != "" {
 		exchangeSvc := service.NewExchangeService(cfg.USDToStarsRate, cfg.USDToRUBRate)
@@ -263,6 +268,7 @@ func runBot() {
 			Tg:       b.API(),
 			Crypto:   cryptoPayments,
 			YooKassa: yookassaPayments,
+			Stripe:   stripePayments,
 			Files:    b.API(),
 		}, logger)
 	}

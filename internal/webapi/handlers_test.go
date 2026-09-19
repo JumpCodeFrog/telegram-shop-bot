@@ -274,6 +274,27 @@ func (f *fakeYooKassa) CreatePayment(_ context.Context, orderID int64, amountRUB
 	return &payment.Invoice{PayURL: f.payURL, InvoiceID: fmt.Sprintf("yoo-%d", orderID)}, nil
 }
 
+// fakeStripe mirrors fakeYooKassa for USD card payments and captures the
+// CreateCheckoutSession arguments for assertions.
+type fakeStripe struct {
+	configured bool
+	payURL     string
+	called     bool
+	gotOrderID int64
+	gotAmount  int64
+	gotDesc    string
+}
+
+func (f *fakeStripe) Configured() bool { return f.configured }
+
+func (f *fakeStripe) CreateCheckoutSession(_ context.Context, orderID int64, amountCents int64, description string) (*payment.Invoice, error) {
+	f.called = true
+	f.gotOrderID = orderID
+	f.gotAmount = amountCents
+	f.gotDesc = description
+	return &payment.Invoice{PayURL: f.payURL, InvoiceID: fmt.Sprintf("str-%d", orderID)}, nil
+}
+
 type fakeFiles struct{}
 
 func (fakeFiles) GetFileDirectURL(fileID string) (string, error) {
@@ -287,6 +308,7 @@ type fixture struct {
 	tg       *fakeTg
 	crypto   *fakeCrypto
 	yookassa *fakeYooKassa
+	stripe   *fakeStripe
 	orders   *fakeOrders
 	cart     *fakeCart
 }
@@ -303,6 +325,7 @@ func newFixture(t *testing.T) *fixture {
 	tg := &fakeTg{link: "https://t.me/$invoice_link"}
 	crypto := &fakeCrypto{configured: true, payURL: "https://pay.crypt.bot/inv"}
 	yookassa := &fakeYooKassa{configured: true, payURL: "https://yookassa.example/pay"}
+	stripe := &fakeStripe{configured: true, payURL: "https://checkout.stripe.com/pay"}
 	srv := New(Deps{
 		Auth: NewAuthenticator(testBotToken, DefaultAuthTTL),
 		Catalog: &fakeCatalog{
@@ -319,9 +342,10 @@ func newFixture(t *testing.T) *fixture {
 		Tg:       tg,
 		Crypto:   crypto,
 		YooKassa: yookassa,
+		Stripe:   stripe,
 		Files:    fakeFiles{},
 	}, nil)
-	return &fixture{server: srv, tg: tg, crypto: crypto, yookassa: yookassa, orders: orders, cart: cart}
+	return &fixture{server: srv, tg: tg, crypto: crypto, yookassa: yookassa, stripe: stripe, orders: orders, cart: cart}
 }
 
 func (f *fixture) request(t *testing.T, method, target, body string, authed bool) *httptest.ResponseRecorder {
@@ -678,6 +702,98 @@ func TestCheckoutYooKassaGuards(t *testing.T) {
 	// Subscription products are Stars-only, yookassa is rejected like crypto.
 	f.request(t, http.MethodPost, "/api/cart", `{"product_id":3}`, true)
 	rec := f.request(t, http.MethodPost, "/api/checkout", `{"method":"yookassa"}`, true)
+	if rec.Code != http.StatusBadRequest || decodeJSON(t, rec)["error"] != "webapp_err_sub_stars_only" {
+		t.Errorf("sub cart: status/error = %d/%v, want 400/webapp_err_sub_stars_only", rec.Code, decodeJSON(t, rec)["error"])
+	}
+
+	// Unknown methods stay rejected.
+	rec = f.request(t, http.MethodPost, "/api/checkout", `{"method":"paypal"}`, true)
+	if rec.Code != http.StatusBadRequest || decodeJSON(t, rec)["error"] != "webapp_err_method" {
+		t.Errorf("bad method: status/error = %d/%v, want 400/webapp_err_method", rec.Code, decodeJSON(t, rec)["error"])
+	}
+}
+
+func TestCheckoutStripe(t *testing.T) {
+	f := newFixture(t)
+	f.request(t, http.MethodPost, "/api/cart", `{"product_id":1,"delta":2}`, true) // 2 × $5 = $10
+
+	rec := f.request(t, http.MethodPost, "/api/checkout", `{"method":"stripe"}`, true)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	got := decodeJSON(t, rec)
+	if got["invoice_link"] != "https://checkout.stripe.com/pay" {
+		t.Errorf("invoice_link = %v, want Stripe checkout URL", got["invoice_link"])
+	}
+	if got["order_id"] != float64(1) {
+		t.Errorf("order_id = %v, want 1", got["order_id"])
+	}
+
+	order, err := f.orders.GetOrder(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("get order: %v", err)
+	}
+
+	if !f.stripe.called {
+		t.Fatal("CreateCheckoutSession was not called")
+	}
+	if f.stripe.gotOrderID != 1 {
+		t.Errorf("CreateCheckoutSession orderID = %d, want 1", f.stripe.gotOrderID)
+	}
+	if want := int64(math.Round(order.TotalUSD * 100)); f.stripe.gotAmount != want {
+		t.Errorf("CreateCheckoutSession amountCents = %d, want %d", f.stripe.gotAmount, want)
+	}
+	if f.stripe.gotDesc != "Mug × 2" {
+		t.Errorf("CreateCheckoutSession description = %q, want %q", f.stripe.gotDesc, "Mug × 2")
+	}
+}
+
+func TestCheckoutStripeDisabled(t *testing.T) {
+	f := newFixture(t)
+	f.request(t, http.MethodPost, "/api/cart", `{"product_id":1}`, true)
+
+	// Unconfigured adapter.
+	f.stripe.configured = false
+	rec := f.request(t, http.MethodPost, "/api/checkout", `{"method":"stripe"}`, true)
+	if rec.Code != http.StatusBadRequest || decodeJSON(t, rec)["error"] != "webapp_err_stripe_disabled" {
+		t.Errorf("unconfigured: status/error = %d/%v, want 400/webapp_err_stripe_disabled", rec.Code, decodeJSON(t, rec)["error"])
+	}
+	f.stripe.configured = true
+
+	// Missing dependency.
+	f.server.deps.Stripe = nil
+	rec = f.request(t, http.MethodPost, "/api/checkout", `{"method":"stripe"}`, true)
+	if rec.Code != http.StatusBadRequest || decodeJSON(t, rec)["error"] != "webapp_err_stripe_disabled" {
+		t.Errorf("nil dep: status/error = %d/%v, want 400/webapp_err_stripe_disabled", rec.Code, decodeJSON(t, rec)["error"])
+	}
+	f.server.deps.Stripe = f.stripe
+
+	// The guard runs before CreateFromCart: no order may exist.
+	if n := len(f.orders.created); n != 0 {
+		t.Errorf("created %d orders, want 0 (guard must precede CreateFromCart)", n)
+	}
+
+	// Stripe refuses charges under $0.50: the handler must refuse with 400,
+	// never call the adapter, and never fall into the generic 502
+	// invoice-failure path.
+	f.cart.products[9] = storage.Product{ID: 9, CategoryID: 10, Name: "Sticker", PriceUSD: 0.49, PriceStars: 1, Stock: 5, IsActive: true}
+	f.request(t, http.MethodDelete, "/api/cart", "", true) // drop the $5 Mug
+	f.request(t, http.MethodPost, "/api/cart", `{"product_id":9}`, true)
+	rec = f.request(t, http.MethodPost, "/api/checkout", `{"method":"stripe"}`, true)
+	if rec.Code != http.StatusBadRequest || decodeJSON(t, rec)["error"] != "webapp_err_stripe_disabled" {
+		t.Errorf("below minimum: status/error = %d/%v, want 400/webapp_err_stripe_disabled", rec.Code, decodeJSON(t, rec)["error"])
+	}
+	if f.stripe.called {
+		t.Error("CreateCheckoutSession called below the $0.50 minimum, want refusal before the adapter")
+	}
+}
+
+func TestCheckoutStripeGuards(t *testing.T) {
+	f := newFixture(t)
+
+	// Subscription products are Stars-only, stripe is rejected like crypto.
+	f.request(t, http.MethodPost, "/api/cart", `{"product_id":3}`, true)
+	rec := f.request(t, http.MethodPost, "/api/checkout", `{"method":"stripe"}`, true)
 	if rec.Code != http.StatusBadRequest || decodeJSON(t, rec)["error"] != "webapp_err_sub_stars_only" {
 		t.Errorf("sub cart: status/error = %d/%v, want 400/webapp_err_sub_stars_only", rec.Code, decodeJSON(t, rec)["error"])
 	}
