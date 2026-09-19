@@ -146,6 +146,15 @@ type e2eEnv struct {
 
 func newE2EEnv(t *testing.T) *e2eEnv {
 	t.Helper()
+	return newE2EEnvWithConfig(t, nil)
+}
+
+// newE2EEnvWithConfig builds an e2eEnv, letting mutate finalize the config
+// before the bot and its services are constructed. RUB checkout tests use it
+// to enable the USD→RUB rate and YooKassa credentials, which are captured by
+// the exchange service and payment adapters at construction time.
+func newE2EEnvWithConfig(t *testing.T, mutate func(*config.Config)) *e2eEnv {
+	t.Helper()
 
 	tg := &fakeTelegram{nextMsgID: 100}
 	srv := httptest.NewServer(http.HandlerFunc(tg.serveHTTP))
@@ -170,6 +179,9 @@ func newE2EEnv(t *testing.T) *e2eEnv {
 		DBPath:         dbPath,
 		USDToStarsRate: 50,
 		LocalesDir:     filepath.Join("..", "..", "locales"),
+	}
+	if mutate != nil {
+		mutate(cfg)
 	}
 
 	logWriter := io.Writer(io.Discard)

@@ -66,7 +66,7 @@ func TestHasPendingOrderWithPromo_IgnoresNonPendingOrOtherPromo(t *testing.T) {
 }
 
 func TestPaymentMethodKeyboard_HidesCryptoWhenDisabled(t *testing.T) {
-	keyboard := paymentMethodKeyboard(15, false, 100, 1.50, "", nil)
+	keyboard := paymentMethodKeyboard(15, false, false, 0, 100, 1.50, "", nil)
 
 	// Stars row + terms/support row + cancel/orders row + menu row
 	if len(keyboard) != 4 {
@@ -80,7 +80,7 @@ func TestPaymentMethodKeyboard_HidesCryptoWhenDisabled(t *testing.T) {
 }
 
 func TestPaymentMethodKeyboard_ShowsCryptoWhenEnabled(t *testing.T) {
-	keyboard := paymentMethodKeyboard(15, true, 100, 1.50, "", nil)
+	keyboard := paymentMethodKeyboard(15, true, false, 0, 100, 1.50, "", nil)
 
 	// Stars row + crypto row + terms/support row + cancel/orders row + menu row
 	if len(keyboard) != 5 {

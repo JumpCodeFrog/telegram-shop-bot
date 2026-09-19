@@ -55,6 +55,10 @@ func (y *YooKassaPayment) Configured() bool {
 	return y.shopID != "" && y.secretKey != "" && y.returnURL != ""
 }
 
+// SetBaseURL overrides the YooKassa API base URL. Test seam only: bot/webapi/e2e
+// tests live in other packages and cannot touch the unexported baseURL field.
+func (y *YooKassaPayment) SetBaseURL(url string) { y.baseURL = url }
+
 type yookassaAmount struct {
 	Value    string `json:"value"`
 	Currency string `json:"currency"`
