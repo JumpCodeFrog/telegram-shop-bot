@@ -238,25 +238,32 @@ func runBot() {
 		slog.Warn("CryptoBot disabled, skipping polling worker")
 	}
 
+	// RUB card payments for the Mini App checkout. Separate instance from the
+	// bot's own (main owns the webapi deps, mirroring crypto); settlement is
+	// webhook-driven, so there is no polling worker.
+	yookassaPayments := payment.NewYooKassaPayment(cfg.YooKassaShopID, cfg.YooKassaSecretKey, cfg.YooKassaReturnURL)
+
 	// Mini App REST API: reuses the bot's OrderService so web checkouts are
-	// confirmed by the same successful_payment / CryptoBot webhook pipeline.
+	// confirmed by the same successful_payment / CryptoBot / YooKassa webhook
+	// pipeline.
 	var apiServer *webapi.Server
 	if cfg.WebAppURL != "" {
 		exchangeSvc := service.NewExchangeService(cfg.USDToStarsRate, cfg.USDToRUBRate)
 		productStore := storage.NewSQLProductStore(db)
 		apiServer = webapi.New(webapi.Deps{
-			Auth:    webapi.NewAuthenticator(cfg.BotToken, webapi.DefaultAuthTTL),
-			Catalog: shop.NewCatalogService(productStore, exchangeSvc),
-			Cart:    shop.NewCartService(cartStore, productStore, exchangeSvc),
-			Orders:  b.OrderService(),
-			Users:   userStore,
-			Promos:  promoStore,
-			Reviews: storage.NewSQLReviewStore(db),
-			Photos:  storage.NewSQLProductPhotoStore(db),
-			I18n:    i18n,
-			Tg:      b.API(),
-			Crypto:  cryptoPayments,
-			Files:   b.API(),
+			Auth:     webapi.NewAuthenticator(cfg.BotToken, webapi.DefaultAuthTTL),
+			Catalog:  shop.NewCatalogService(productStore, exchangeSvc),
+			Cart:     shop.NewCartService(cartStore, productStore, exchangeSvc),
+			Orders:   b.OrderService(),
+			Users:    userStore,
+			Promos:   promoStore,
+			Reviews:  storage.NewSQLReviewStore(db),
+			Photos:   storage.NewSQLProductPhotoStore(db),
+			I18n:     i18n,
+			Tg:       b.API(),
+			Crypto:   cryptoPayments,
+			YooKassa: yookassaPayments,
+			Files:    b.API(),
 		}, logger)
 	}
 

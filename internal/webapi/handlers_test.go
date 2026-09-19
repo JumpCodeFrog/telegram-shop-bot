@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -60,6 +61,10 @@ func (f *fakeCatalog) GetProduct(_ context.Context, id int64) (*storage.Product,
 type fakeCart struct {
 	products map[int64]storage.Product
 	items    map[int64]map[int64]int // userID → productID → qty
+	// rubRate converts TotalUSD into TotalRUB exactly like
+	// service.ExchangeService.ConvertUSDToRUB; 0 leaves TotalRUB at 0
+	// (RUB payments disabled).
+	rubRate float64
 }
 
 func (f *fakeCart) userItems(userID int64) map[int64]int {
@@ -79,6 +84,9 @@ func (f *fakeCart) Get(_ context.Context, userID int64) (*shop.CartView, error) 
 		view.Items = append(view.Items, shop.CartItemView{Product: p, Quantity: qty})
 		view.TotalUSD += p.PriceUSD * float64(qty)
 		view.TotalStars += p.PriceStars * qty
+	}
+	if f.rubRate > 0 {
+		view.TotalRUB = math.Round(view.TotalUSD*(f.rubRate*100)) / 100
 	}
 	return view, nil
 }
@@ -122,11 +130,12 @@ func (f *fakeOrders) CreateFromCart(_ context.Context, userID int64, view *shop.
 		return 0, storage.ErrEmptyCart
 	}
 	f.nextID++
-	totalUSD, totalStars := view.TotalUSD, view.TotalStars
+	totalUSD, totalStars, totalRUB := view.TotalUSD, view.TotalStars, view.TotalRUB
 	promoCode := ""
 	if promo != nil {
 		totalUSD = totalUSD * float64(100-promo.Discount) / 100
 		totalStars = totalStars * (100 - promo.Discount) / 100
+		totalRUB = math.Round(totalRUB*float64(100-promo.Discount)) / 100
 		promoCode = promo.Code
 	}
 	var items []storage.OrderItem
@@ -140,7 +149,7 @@ func (f *fakeOrders) CreateFromCart(_ context.Context, userID int64, view *shop.
 	}
 	f.orders[f.nextID] = &storage.Order{
 		ID: f.nextID, UserID: userID, Status: storage.OrderStatusPending,
-		TotalUSD: totalUSD, TotalStars: totalStars, PromoCode: promoCode, Items: items,
+		TotalUSD: totalUSD, TotalStars: totalStars, TotalRUB: totalRUB, PromoCode: promoCode, Items: items,
 	}
 	f.created = append(f.created, f.nextID)
 	return f.nextID, nil
@@ -244,6 +253,27 @@ func (f *fakeCrypto) CreateInvoice(_ context.Context, orderID int64, _ float64, 
 	return &payment.Invoice{PayURL: f.payURL, InvoiceID: fmt.Sprintf("inv-%d", orderID)}, nil
 }
 
+// fakeYooKassa mirrors fakeCrypto for card payments and captures the
+// CreatePayment arguments for assertions.
+type fakeYooKassa struct {
+	configured bool
+	payURL     string
+	called     bool
+	gotOrderID int64
+	gotAmount  int64
+	gotDesc    string
+}
+
+func (f *fakeYooKassa) Configured() bool { return f.configured }
+
+func (f *fakeYooKassa) CreatePayment(_ context.Context, orderID int64, amountRUBMinor int64, description string) (*payment.Invoice, error) {
+	f.called = true
+	f.gotOrderID = orderID
+	f.gotAmount = amountRUBMinor
+	f.gotDesc = description
+	return &payment.Invoice{PayURL: f.payURL, InvoiceID: fmt.Sprintf("yoo-%d", orderID)}, nil
+}
+
 type fakeFiles struct{}
 
 func (fakeFiles) GetFileDirectURL(fileID string) (string, error) {
@@ -253,11 +283,12 @@ func (fakeFiles) GetFileDirectURL(fileID string) (string, error) {
 // ---- harness --------------------------------------------------------------
 
 type fixture struct {
-	server *Server
-	tg     *fakeTg
-	crypto *fakeCrypto
-	orders *fakeOrders
-	cart   *fakeCart
+	server   *Server
+	tg       *fakeTg
+	crypto   *fakeCrypto
+	yookassa *fakeYooKassa
+	orders   *fakeOrders
+	cart     *fakeCart
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -271,24 +302,26 @@ func newFixture(t *testing.T) *fixture {
 	orders := &fakeOrders{}
 	tg := &fakeTg{link: "https://t.me/$invoice_link"}
 	crypto := &fakeCrypto{configured: true, payURL: "https://pay.crypt.bot/inv"}
+	yookassa := &fakeYooKassa{configured: true, payURL: "https://yookassa.example/pay"}
 	srv := New(Deps{
 		Auth: NewAuthenticator(testBotToken, DefaultAuthTTL),
 		Catalog: &fakeCatalog{
 			categories: []storage.Category{{ID: 10, Name: "Merch", Emoji: "🎁"}},
 			products:   products,
 		},
-		Cart:    cart,
-		Orders:  orders,
-		Users:   &fakeUsers{},
-		Promos:  &fakePromos{promos: map[string]*storage.PromoCode{"SALE10": {ID: 1, Code: "SALE10", Discount: 10}}},
-		Reviews: &fakeReviews{avg: 4.5, count: 12},
-		Photos:  &fakePhotos{photos: []storage.ProductPhoto{{ID: 1, ProductID: 2, FileID: "extra-photo"}}},
-		I18n:    fakeI18n{},
-		Tg:      tg,
-		Crypto:  crypto,
-		Files:   fakeFiles{},
+		Cart:     cart,
+		Orders:   orders,
+		Users:    &fakeUsers{},
+		Promos:   &fakePromos{promos: map[string]*storage.PromoCode{"SALE10": {ID: 1, Code: "SALE10", Discount: 10}}},
+		Reviews:  &fakeReviews{avg: 4.5, count: 12},
+		Photos:   &fakePhotos{photos: []storage.ProductPhoto{{ID: 1, ProductID: 2, FileID: "extra-photo"}}},
+		I18n:     fakeI18n{},
+		Tg:       tg,
+		Crypto:   crypto,
+		YooKassa: yookassa,
+		Files:    fakeFiles{},
 	}, nil)
-	return &fixture{server: srv, tg: tg, crypto: crypto, orders: orders, cart: cart}
+	return &fixture{server: srv, tg: tg, crypto: crypto, yookassa: yookassa, orders: orders, cart: cart}
 }
 
 func (f *fixture) request(t *testing.T, method, target, body string, authed bool) *httptest.ResponseRecorder {
@@ -560,6 +593,99 @@ func TestCheckoutCrypto(t *testing.T) {
 	}
 	if got := decodeJSON(t, rec)["invoice_link"]; got != "https://pay.crypt.bot/inv" {
 		t.Errorf("invoice_link = %v, want CryptoBot pay URL", got)
+	}
+}
+
+func TestCheckoutYooKassa(t *testing.T) {
+	f := newFixture(t)
+	f.cart.rubRate = 92.5 // $5 × 2 → $10 → 925.00 RUB
+	f.request(t, http.MethodPost, "/api/cart", `{"product_id":1,"delta":2}`, true)
+
+	rec := f.request(t, http.MethodPost, "/api/checkout", `{"method":"yookassa"}`, true)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	got := decodeJSON(t, rec)
+	if got["invoice_link"] != "https://yookassa.example/pay" {
+		t.Errorf("invoice_link = %v, want YooKassa pay URL", got["invoice_link"])
+	}
+	if got["order_id"] != float64(1) {
+		t.Errorf("order_id = %v, want 1", got["order_id"])
+	}
+
+	order, err := f.orders.GetOrder(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("get order: %v", err)
+	}
+	if order.TotalRUB != 925 {
+		t.Errorf("persisted TotalRUB = %f, want 925 snapshot", order.TotalRUB)
+	}
+
+	if !f.yookassa.called {
+		t.Fatal("CreatePayment was not called")
+	}
+	if f.yookassa.gotOrderID != 1 {
+		t.Errorf("CreatePayment orderID = %d, want 1", f.yookassa.gotOrderID)
+	}
+	if want := int64(math.Round(order.TotalRUB * 100)); f.yookassa.gotAmount != want {
+		t.Errorf("CreatePayment amountMinor = %d, want %d", f.yookassa.gotAmount, want)
+	}
+	if f.yookassa.gotDesc != "Mug × 2" {
+		t.Errorf("CreatePayment description = %q, want %q", f.yookassa.gotDesc, "Mug × 2")
+	}
+}
+
+func TestCheckoutYooKassaDisabled(t *testing.T) {
+	f := newFixture(t)
+	f.request(t, http.MethodPost, "/api/cart", `{"product_id":1}`, true)
+
+	// Unconfigured adapter.
+	f.yookassa.configured = false
+	rec := f.request(t, http.MethodPost, "/api/checkout", `{"method":"yookassa"}`, true)
+	if rec.Code != http.StatusBadRequest || decodeJSON(t, rec)["error"] != "webapp_err_yookassa_disabled" {
+		t.Errorf("unconfigured: status/error = %d/%v, want 400/webapp_err_yookassa_disabled", rec.Code, decodeJSON(t, rec)["error"])
+	}
+	f.yookassa.configured = true
+
+	// Missing dependency.
+	f.server.deps.YooKassa = nil
+	rec = f.request(t, http.MethodPost, "/api/checkout", `{"method":"yookassa"}`, true)
+	if rec.Code != http.StatusBadRequest || decodeJSON(t, rec)["error"] != "webapp_err_yookassa_disabled" {
+		t.Errorf("nil dep: status/error = %d/%v, want 400/webapp_err_yookassa_disabled", rec.Code, decodeJSON(t, rec)["error"])
+	}
+	f.server.deps.YooKassa = f.yookassa
+
+	// The guard runs before CreateFromCart: no order may exist.
+	if n := len(f.orders.created); n != 0 {
+		t.Errorf("created %d orders, want 0 (guard must precede CreateFromCart)", n)
+	}
+
+	// Configured adapter but a cart with TotalRUB 0 (RUB rate unset): the
+	// handler must refuse with 400, never call the adapter, and never fall
+	// into the generic 502 invoice-failure path.
+	rec = f.request(t, http.MethodPost, "/api/checkout", `{"method":"yookassa"}`, true)
+	if rec.Code != http.StatusBadRequest || decodeJSON(t, rec)["error"] != "webapp_err_yookassa_disabled" {
+		t.Errorf("zero TotalRUB: status/error = %d/%v, want 400/webapp_err_yookassa_disabled", rec.Code, decodeJSON(t, rec)["error"])
+	}
+	if f.yookassa.called {
+		t.Error("CreatePayment called with a zero amount, want refusal before the adapter")
+	}
+}
+
+func TestCheckoutYooKassaGuards(t *testing.T) {
+	f := newFixture(t)
+
+	// Subscription products are Stars-only, yookassa is rejected like crypto.
+	f.request(t, http.MethodPost, "/api/cart", `{"product_id":3}`, true)
+	rec := f.request(t, http.MethodPost, "/api/checkout", `{"method":"yookassa"}`, true)
+	if rec.Code != http.StatusBadRequest || decodeJSON(t, rec)["error"] != "webapp_err_sub_stars_only" {
+		t.Errorf("sub cart: status/error = %d/%v, want 400/webapp_err_sub_stars_only", rec.Code, decodeJSON(t, rec)["error"])
+	}
+
+	// Unknown methods stay rejected.
+	rec = f.request(t, http.MethodPost, "/api/checkout", `{"method":"paypal"}`, true)
+	if rec.Code != http.StatusBadRequest || decodeJSON(t, rec)["error"] != "webapp_err_method" {
+		t.Errorf("bad method: status/error = %d/%v, want 400/webapp_err_method", rec.Code, decodeJSON(t, rec)["error"])
 	}
 }
 

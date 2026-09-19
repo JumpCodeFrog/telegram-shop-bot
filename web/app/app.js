@@ -313,6 +313,11 @@
       payCrypto.type = 'button';
       payCrypto.onclick = function () { checkout('crypto', promo.value, payCrypto); };
       screenEl.appendChild(payCrypto);
+
+      var payRub = el('button', 'btn secondary', t('webapp_pay_rub'));
+      payRub.type = 'button';
+      payRub.onclick = function () { checkout('yookassa', promo.value, payRub); };
+      screenEl.appendChild(payRub);
     }).catch(showError);
   }
 
