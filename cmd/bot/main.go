@@ -242,7 +242,7 @@ func runBot() {
 	// confirmed by the same successful_payment / CryptoBot webhook pipeline.
 	var apiServer *webapi.Server
 	if cfg.WebAppURL != "" {
-		exchangeSvc := service.NewExchangeService(cfg.USDToStarsRate)
+		exchangeSvc := service.NewExchangeService(cfg.USDToStarsRate, cfg.USDToRUBRate)
 		productStore := storage.NewSQLProductStore(db)
 		apiServer = webapi.New(webapi.Deps{
 			Auth:    webapi.NewAuthenticator(cfg.BotToken, webapi.DefaultAuthTTL),

@@ -32,6 +32,12 @@ type Config struct {
 	// WebAppURL is the public HTTPS URL of the Mini App (mounted at /app/).
 	// Empty disables the Mini App and its REST API entirely.
 	WebAppURL string
+	// YooKassa RUB card payments. All three must be set together or none.
+	YooKassaShopID    string
+	YooKassaSecretKey string
+	YooKassaReturnURL string
+	// USDToRUBRate converts USD order totals to RUB (0 = RUB payments disabled).
+	USDToRUBRate float64
 }
 
 // Load reads configuration from environment variables.
@@ -97,6 +103,22 @@ func load(lookup lookupFunc) (*Config, error) {
 		}
 	}
 
+	yooShopID := strings.TrimSpace(value(lookup, "YOOKASSA_SHOP_ID"))
+	yooSecret := strings.TrimSpace(value(lookup, "YOOKASSA_SECRET_KEY"))
+	yooReturn := strings.TrimSpace(value(lookup, "YOOKASSA_RETURN_URL"))
+	if err := ValidateYooKassaConfig(yooShopID, yooSecret, yooReturn); err != nil {
+		return nil, err
+	}
+
+	usdToRUB := 0.0
+	if raw := strings.TrimSpace(value(lookup, "USD_TO_RUB_RATE")); raw != "" {
+		rate, err := strconv.ParseFloat(raw, 64)
+		if err != nil || rate <= 0 {
+			return nil, fmt.Errorf("USD_TO_RUB_RATE: must be a positive number, got %q", raw)
+		}
+		usdToRUB = rate
+	}
+
 	return &Config{
 		BotToken:              botToken,
 		BotUsername:           value(lookup, "BOT_USERNAME"),
@@ -118,6 +140,10 @@ func load(lookup lookupFunc) (*Config, error) {
 		OutboundWebhookURL:    value(lookup, "OUTBOUND_WEBHOOK_URL"),
 		OutboundWebhookSecret: value(lookup, "OUTBOUND_WEBHOOK_SECRET"),
 		WebAppURL:             value(lookup, "WEBAPP_URL"),
+		YooKassaShopID:        yooShopID,
+		YooKassaSecretKey:     yooSecret,
+		YooKassaReturnURL:     yooReturn,
+		USDToRUBRate:          usdToRUB,
 	}, nil
 }
 

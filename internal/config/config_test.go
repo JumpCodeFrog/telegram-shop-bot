@@ -322,3 +322,130 @@ func TestLoad_InvalidAdminGroupID(t *testing.T) {
 		t.Errorf("error should mention ADMIN_GROUP_ID, got: %v", err)
 	}
 }
+
+// YooKassa RUB card payments.
+
+func TestYooKassaConfigLoadsWhenComplete(t *testing.T) {
+	values := map[string]string{
+		"BOT_TOKEN":           "123456789:abcdefghijklmnopqrstuvwxyz_ABCD",
+		"YOOKASSA_SHOP_ID":    "123",
+		"YOOKASSA_SECRET_KEY": "live_abc",
+		"YOOKASSA_RETURN_URL": "https://shop.example.com/return",
+	}
+
+	cfg, err := LoadFromMap(values)
+	if err != nil {
+		t.Fatalf("LoadFromMap() error = %v", err)
+	}
+	if cfg.YooKassaShopID != "123" {
+		t.Errorf("YooKassaShopID = %q, want %q", cfg.YooKassaShopID, "123")
+	}
+	if cfg.YooKassaSecretKey != "live_abc" {
+		t.Errorf("YooKassaSecretKey = %q, want %q", cfg.YooKassaSecretKey, "live_abc")
+	}
+	if cfg.YooKassaReturnURL != "https://shop.example.com/return" {
+		t.Errorf("YooKassaReturnURL = %q, want %q", cfg.YooKassaReturnURL, "https://shop.example.com/return")
+	}
+}
+
+func TestYooKassaConfigPartialCredentialsRejected(t *testing.T) {
+	complete := map[string]string{
+		"YOOKASSA_SHOP_ID":    "123",
+		"YOOKASSA_SECRET_KEY": "live_abc",
+		"YOOKASSA_RETURN_URL": "https://shop.example.com/return",
+	}
+	const botToken = "123456789:abcdefghijklmnopqrstuvwxyz_ABCD"
+
+	// Any subset of the three (but not all) must fail: half-configured
+	// credentials must never silently disable the provider.
+	cases := map[string]map[string]string{}
+	for drop := range complete {
+		values := map[string]string{"BOT_TOKEN": botToken}
+		for key, val := range complete {
+			if key != drop {
+				values[key] = val
+			}
+		}
+		cases["missing_"+drop] = values
+	}
+	for only := range complete {
+		values := map[string]string{"BOT_TOKEN": botToken, only: complete[only]}
+		cases["only_"+only] = values
+	}
+	for name, values := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, err := LoadFromMap(values)
+			if err == nil {
+				t.Fatal("expected error for partial YOOKASSA credentials, got nil")
+			}
+			if !strings.Contains(err.Error(), "YOOKASSA") {
+				t.Errorf("error should mention YOOKASSA, got: %v", err)
+			}
+		})
+	}
+}
+
+func TestYooKassaReturnURLMustBeHTTPS(t *testing.T) {
+	values := map[string]string{
+		"BOT_TOKEN":           "123456789:abcdefghijklmnopqrstuvwxyz_ABCD",
+		"YOOKASSA_SHOP_ID":    "123",
+		"YOOKASSA_SECRET_KEY": "live_abc",
+		"YOOKASSA_RETURN_URL": "http://shop.example.com/return",
+	}
+
+	_, err := LoadFromMap(values)
+	if err == nil {
+		t.Fatal("expected error for non-HTTPS YOOKASSA_RETURN_URL, got nil")
+	}
+	if !strings.Contains(err.Error(), "YOOKASSA_RETURN_URL") {
+		t.Errorf("error should mention YOOKASSA_RETURN_URL, got: %v", err)
+	}
+}
+
+func TestUSDToRUBRateDefaultsToZeroAndParsesFloat(t *testing.T) {
+	values := map[string]string{
+		"BOT_TOKEN": "123456789:abcdefghijklmnopqrstuvwxyz_ABCD",
+	}
+
+	// Unset -> 0 (RUB payments disabled).
+	cfg, err := LoadFromMap(values)
+	if err != nil {
+		t.Fatalf("LoadFromMap() error = %v", err)
+	}
+	if cfg.USDToRUBRate != 0 {
+		t.Errorf("USDToRUBRate = %v, want 0 when unset", cfg.USDToRUBRate)
+	}
+
+	// Valid float.
+	values["USD_TO_RUB_RATE"] = "92.5"
+	cfg, err = LoadFromMap(values)
+	if err != nil {
+		t.Fatalf("LoadFromMap() error = %v", err)
+	}
+	if cfg.USDToRUBRate != 92.5 {
+		t.Errorf("USDToRUBRate = %v, want 92.5", cfg.USDToRUBRate)
+	}
+
+	// Invalid values must be rejected when set explicitly.
+	for _, raw := range []string{"abc", "-5", "0"} {
+		values["USD_TO_RUB_RATE"] = raw
+		if _, err := LoadFromMap(values); err == nil {
+			t.Errorf("USD_TO_RUB_RATE = %q: expected error, got nil", raw)
+		}
+	}
+}
+
+func TestYooKassaWebhookURLDerivesFromBase(t *testing.T) {
+	tests := map[string]string{
+		"":                              "",
+		"   ":                           "",
+		"https://shop.example.com":      "https://shop.example.com/yookassa-webhook",
+		"https://shop.example.com/":     "https://shop.example.com/yookassa-webhook",
+		" https://shop.example.com/// ": "https://shop.example.com/yookassa-webhook",
+	}
+	for input, want := range tests {
+		if got := YooKassaWebhookURL(input); got != want {
+			t.Errorf("YooKassaWebhookURL(%q) = %q, want %q", input, got, want)
+		}
+	}
+}

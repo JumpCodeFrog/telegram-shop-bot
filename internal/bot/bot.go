@@ -133,7 +133,7 @@ func NewWithAPI(cfg *config.Config, api *tgbotapi.BotAPI, db *storage.DB, metric
 	analyticsStore := storage.NewSQLAnalyticsStore(db)
 	referralStore := storage.NewReferralStore(db.Conn())
 	referralSvc := service.NewReferralService(2.0, 1.0, 100, redisClient)
-	exchangeSvc := service.NewExchangeService(cfg.USDToStarsRate)
+	exchangeSvc := service.NewExchangeService(cfg.USDToStarsRate, cfg.USDToRUBRate)
 	loyaltyStore := storage.NewLoyaltyStore(db.Conn())
 	loyaltySvc := service.NewLoyaltyService(loyaltyStore, 1)
 

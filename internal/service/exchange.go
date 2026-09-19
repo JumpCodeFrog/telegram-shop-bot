@@ -1,6 +1,7 @@
 package service
 
 import (
+	"math"
 	"sync"
 )
 
@@ -10,12 +11,14 @@ import (
 type ExchangeService struct {
 	mu         sync.RWMutex
 	usdToStars int
+	usdToRUB   float64
 }
 
-// NewExchangeService creates the service with the given initial rate.
-// Pass config.USDToStarsRate (loaded from USD_TO_STARS_RATE env, default 50).
-func NewExchangeService(usdToStarsRate int) *ExchangeService {
-	return &ExchangeService{usdToStars: usdToStarsRate}
+// NewExchangeService creates the service with the given initial rates.
+// Pass config.USDToStarsRate (loaded from USD_TO_STARS_RATE env, default 50)
+// and config.USDToRUBRate (loaded from USD_TO_RUB_RATE env, 0 = RUB disabled).
+func NewExchangeService(usdToStarsRate int, usdToRUBRate float64) *ExchangeService {
+	return &ExchangeService{usdToStars: usdToStarsRate, usdToRUB: usdToRUBRate}
 }
 
 // GetUSDToStarsRate returns the current exchange rate.
@@ -44,4 +47,20 @@ func (s *ExchangeService) ConvertUSDToStars(amountUSD float64) int {
 		return 1
 	}
 	return stars
+}
+
+// ConvertUSDToRUB converts a USD amount to RUB rounded to 2 decimal places.
+// Returns 0 when the RUB rate is not configured (RUB payments disabled).
+// The rate is scaled to kopecks first (rate*100, exact in float64 for
+// realistic rates) so exact half-kopeck products such as 19.99 × 92.5 =
+// 1849.075 round up to 1849.08 instead of dipping below the midpoint from
+// intermediate rounding; math.Round(x)/100, never FormatFloat chains.
+func (s *ExchangeService) ConvertUSDToRUB(amountUSD float64) float64 {
+	s.mu.RLock()
+	rate := s.usdToRUB
+	s.mu.RUnlock()
+	if rate <= 0 || amountUSD <= 0 {
+		return 0
+	}
+	return math.Round(amountUSD*(rate*100)) / 100
 }

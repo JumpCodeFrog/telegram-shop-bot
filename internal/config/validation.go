@@ -76,3 +76,33 @@ func TelegramWebhookURL(raw string) string {
 	}
 	return base + "/telegram-webhook"
 }
+
+// ValidateYooKassaConfig enforces all-or-none credentials and an HTTPS return URL.
+func ValidateYooKassaConfig(shopID, secretKey, returnURL string) error {
+	set := 0
+	for _, v := range []string{shopID, secretKey, returnURL} {
+		if v != "" {
+			set++
+		}
+	}
+	if set == 0 {
+		return nil
+	}
+	if set != 3 {
+		return errors.New("YOOKASSA_SHOP_ID, YOOKASSA_SECRET_KEY and YOOKASSA_RETURN_URL must be set together")
+	}
+	if !strings.HasPrefix(returnURL, "https://") {
+		return errors.New("YOOKASSA_RETURN_URL must be a public https:// URL")
+	}
+	return nil
+}
+
+// YooKassaWebhookURL turns the configured public base URL into the YooKassa
+// notification endpoint, mirroring TelegramWebhookURL.
+func YooKassaWebhookURL(raw string) string {
+	base := strings.TrimRight(strings.TrimSpace(raw), "/")
+	if base == "" {
+		return ""
+	}
+	return base + "/yookassa-webhook"
+}
