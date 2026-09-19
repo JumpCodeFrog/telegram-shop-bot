@@ -479,3 +479,158 @@ func TestMismatchedRenewalReceiptIsDurablyQuarantined(t *testing.T) {
 		t.Fatalf("anomalies=%d", anomalies)
 	}
 }
+
+// TestConfirmPaymentReceiptYooKassa pins the yookassa receipt contract:
+// provider "yookassa", currency RUB, scale 2, kopecks equal to
+// round(order.TotalRUB*100) and a non-empty external id (no payer check:
+// yookassa receipts carry PayerID 0 like crypto). Mismatched receipts are
+// rejected with the mismatch class without mutating the order (mock harness,
+// the shape TestConfirmPaymentReceiptRejectsStarsMismatchWithoutMutation
+// uses) and durably quarantined with the order left pending in needs review
+// (SQL harness, the shape TestMismatchedProviderReceiptIsDurablyQuarantined-
+// WithActualFacts uses). An exact replay of the settled receipt is an
+// idempotent status conflict like the crypto replay.
+func TestConfirmPaymentReceiptYooKassa(t *testing.T) {
+	// Mismatch class, no order mutation (mock store has no anomaly recorder).
+	orders := &mockOrderStore{orders: map[int64]*storage.Order{
+		7: {ID: 7, UserID: 42, Status: storage.OrderStatusPending, TotalRUB: 1849.08},
+		8: {ID: 8, UserID: 42, Status: storage.OrderStatusPending},
+	}}
+	svc := NewOrderService(orders, &mockCartStore{}, &mockProductStore{}, PaymentDeps{}, slog.Default())
+	for _, receipt := range []PaymentReceipt{
+		{OrderID: 7, Provider: "yookassa", ExternalID: "pay_1", Currency: "RUB", AmountMinor: 184907, Scale: 2},
+		{OrderID: 7, Provider: "yookassa", ExternalID: "pay_1", Currency: "RUB", AmountMinor: 184909, Scale: 2},
+		{OrderID: 7, Provider: "yookassa", ExternalID: "pay_1", Currency: "USD", AmountMinor: 184908, Scale: 2},
+		{OrderID: 7, Provider: "yookassa", ExternalID: "pay_1", Currency: "RUB", AmountMinor: 184908, Scale: 0},
+		{OrderID: 7, Provider: "yookassa", ExternalID: "", Currency: "RUB", AmountMinor: 184908, Scale: 2},
+		{OrderID: 8, Provider: "yookassa", ExternalID: "pay_1", Currency: "RUB", AmountMinor: 184908, Scale: 2},
+	} {
+		if _, err := svc.ConfirmPaymentReceipt(context.Background(), receipt); !errors.Is(err, storage.ErrPaymentReceiptMismatch) {
+			t.Fatalf("receipt=%+v err=%v", receipt, err)
+		}
+	}
+	if orders.orders[7].Status != storage.OrderStatusPending || orders.orders[8].Status != storage.OrderStatusPending {
+		t.Fatalf("orders mutated: 7=%+v 8=%+v", orders.orders[7], orders.orders[8])
+	}
+
+	// Durable quarantine with the receipt's actual facts (order 1849.08 RUB;
+	// the last leg targets an order created while RUB was disabled, TotalRUB 0).
+	db, err := storage.New(filepath.Join(t.TempDir(), "yookassa-receipt.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	store := storage.NewSQLOrderStore(db)
+	orderID, err := store.CreateOrder(ctx, &storage.Order{
+		UserID: 42, TotalRUB: 1849.08, Status: storage.OrderStatusPending,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rubDisabledID, err := store.CreateOrder(ctx, &storage.Order{
+		UserID: 42, Status: storage.OrderStatusPending,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc = NewOrderService(store, storage.NewCartStore(db.Conn()), storage.NewSQLProductStore(db), PaymentDeps{}, slog.Default())
+	for _, receipt := range []PaymentReceipt{
+		{OrderID: orderID, Provider: "yookassa", ExternalID: "yoo-low", Currency: "RUB", AmountMinor: 184907, Scale: 2},
+		{OrderID: orderID, Provider: "yookassa", ExternalID: "yoo-high", Currency: "RUB", AmountMinor: 184909, Scale: 2},
+		{OrderID: orderID, Provider: "yookassa", ExternalID: "yoo-usd", Currency: "USD", AmountMinor: 184908, Scale: 2},
+		{OrderID: orderID, Provider: "yookassa", ExternalID: "yoo-scale", Currency: "RUB", AmountMinor: 184908, Scale: 0},
+		{OrderID: orderID, Provider: "yookassa", ExternalID: "", Currency: "RUB", AmountMinor: 184908, Scale: 2},
+		{OrderID: rubDisabledID, Provider: "yookassa", ExternalID: "yoo-rub-off", Currency: "RUB", AmountMinor: 184908, Scale: 2},
+	} {
+		want := storage.ErrPaymentNeedsReview
+		if receipt.ExternalID == "" {
+			// An identity-less fact cannot be quarantined durably; it is
+			// rejected with the mismatch class instead.
+			want = storage.ErrPaymentReceiptMismatch
+		}
+		if _, err := svc.ConfirmPaymentReceipt(ctx, receipt); !errors.Is(err, want) {
+			t.Fatalf("receipt=%+v err=%v want=%v", receipt, err, want)
+		}
+	}
+	for _, leg := range []struct {
+		externalID string
+		amount     int64
+		currency   string
+	}{
+		{"yoo-low", 184907, "RUB"},
+		{"yoo-high", 184909, "RUB"},
+		{"yoo-usd", 184908, "USD"},
+		{"yoo-scale", 184908, "RUB"},
+		{"yoo-rub-off", 184908, "RUB"},
+	} {
+		var amount, payer int64
+		var currency string
+		if err := db.Conn().QueryRow(`
+			SELECT amount_minor, payer_id, currency FROM payment_anomalies
+			WHERE provider='yookassa' AND external_id=?`, leg.externalID).Scan(&amount, &payer, &currency); err != nil {
+			t.Fatalf("anomaly %s: %v", leg.externalID, err)
+		}
+		if amount != leg.amount || payer != 0 || currency != leg.currency {
+			t.Fatalf("anomaly %s: amount=%d payer=%d currency=%s", leg.externalID, amount, payer, currency)
+		}
+	}
+	var anomalies, attempts int64
+	_ = db.Conn().QueryRow(`SELECT COUNT(*) FROM payment_anomalies WHERE proposed_order_id=?`, orderID).Scan(&anomalies)
+	if anomalies != 4 {
+		t.Fatalf("order anomalies=%d, want 4 (the empty-external-id leg leaves no row)", anomalies)
+	}
+	_ = db.Conn().QueryRow(`SELECT COUNT(*) FROM payment_anomalies WHERE proposed_order_id=?`, rubDisabledID).Scan(&anomalies)
+	if anomalies != 1 {
+		t.Fatalf("rub-disabled order anomalies=%d, want 1", anomalies)
+	}
+	_ = db.Conn().QueryRow(`SELECT COUNT(*) FROM payment_attempts WHERE order_id=?`, orderID).Scan(&attempts)
+	_ = db.Conn().QueryRow(`SELECT COUNT(*) FROM payment_attempts WHERE order_id=?`, rubDisabledID).Scan(&attempts)
+	if attempts != 0 {
+		t.Fatalf("attempts=%d, want 0", attempts)
+	}
+	mismatched, _ := store.GetOrder(ctx, orderID)
+	disabled, _ := store.GetOrder(ctx, rubDisabledID)
+	if mismatched.Status != storage.OrderStatusPending || mismatched.PaymentState != storage.PaymentStateNeedsReview ||
+		disabled.Status != storage.OrderStatusPending || disabled.PaymentState != storage.PaymentStateNeedsReview {
+		t.Fatalf("mismatched=%+v disabled=%+v", mismatched, disabled)
+	}
+
+	// Valid receipt settles the order; the attempt row carries the validated facts.
+	settledID, err := store.CreateOrder(ctx, &storage.Order{
+		UserID: 42, TotalRUB: 1849.08, Status: storage.OrderStatusPending,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt := PaymentReceipt{OrderID: settledID, Provider: "yookassa", ExternalID: "pay_1", Currency: "RUB", AmountMinor: 184908, Scale: 2}
+	outcome, err := svc.ConfirmPaymentReceipt(ctx, receipt)
+	if err != nil {
+		t.Fatalf("valid receipt: %v", err)
+	}
+	if outcome == nil || outcome.Order == nil || outcome.Order.Status != storage.OrderStatusPaid {
+		t.Fatalf("outcome=%+v", outcome)
+	}
+	var currency string
+	var amount int64
+	if err := db.Conn().QueryRow(`SELECT currency, amount_minor FROM payment_attempts WHERE external_id='pay_1'`).Scan(&currency, &amount); err != nil {
+		t.Fatal(err)
+	}
+	if currency != "RUB" || amount != 184908 {
+		t.Fatalf("attempt currency=%s amount=%d", currency, amount)
+	}
+
+	// Exact replay: idempotent status conflict; the order settles exactly once.
+	if _, err := svc.ConfirmPaymentReceipt(ctx, receipt); !errors.Is(err, storage.ErrOrderStatusConflict) {
+		t.Fatalf("replay error=%v", err)
+	}
+	var replayAttempts, replayAnomalies int64
+	_ = db.Conn().QueryRow(`SELECT COUNT(*) FROM payment_attempts WHERE order_id=?`, settledID).Scan(&replayAttempts)
+	_ = db.Conn().QueryRow(`SELECT COUNT(*) FROM payment_anomalies WHERE proposed_order_id=?`, settledID).Scan(&replayAnomalies)
+	settled, _ := store.GetOrder(ctx, settledID)
+	if replayAttempts != 1 || replayAnomalies != 0 || settled.Status != storage.OrderStatusPaid ||
+		settled.PaymentState != storage.PaymentStateSettled ||
+		settled.PaymentMethod != storage.PaymentMethodYooKassa || settled.PaymentID != "pay_1" {
+		t.Fatalf("attempts=%d anomalies=%d settled=%+v", replayAttempts, replayAnomalies, settled)
+	}
+}

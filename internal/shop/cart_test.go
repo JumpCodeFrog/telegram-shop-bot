@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"shop_bot/internal/service"
 	"shop_bot/internal/storage"
 
 	"pgregory.net/rapid"
@@ -204,5 +205,53 @@ func TestChangeQuantity_RejectsOutOfStockIncrease(t *testing.T) {
 	err := svc.ChangeQuantity(context.Background(), 42, 7, 1)
 	if err != storage.ErrProductOutOfStock {
 		t.Fatalf("expected ErrProductOutOfStock, got %v", err)
+	}
+}
+
+// TestCartViewTotalRUB verifies TotalRUB is computed once from TotalUSD at the
+// end of Get() (not summed per item, where per-item rounding drifts): 1x$10.00
+// + 2x$4.995 => TotalUSD 19.99, and 19.99 at rate 92.5 -> 1849.08 RUB (the
+// half-kopeck 1849.075 rounds up). Without an exchange service or with a zero
+// RUB rate (RUB disabled) TotalRUB stays 0.
+func TestCartViewTotalRUB(t *testing.T) {
+	cartMock := &mockCartStore{items: []storage.CartItem{
+		{UserID: 42, ProductID: 1, Quantity: 1},
+		{UserID: 42, ProductID: 2, Quantity: 2},
+	}}
+	productMock := &mockProductStore{byID: map[int64]*storage.Product{
+		1: {ID: 1, CategoryID: 1, Name: "gadget", PriceUSD: 10.0, PriceStars: 500, IsActive: true, Stock: 10},
+		2: {ID: 2, CategoryID: 1, Name: "cable", PriceUSD: 4.995, PriceStars: 249, IsActive: true, Stock: 10},
+	}}
+
+	svc := NewCartService(cartMock, productMock, service.NewExchangeService(50, 92.5))
+	view, err := svc.Get(context.Background(), 42)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if math.Abs(view.TotalUSD-19.99) > 1e-9 {
+		t.Fatalf("TotalUSD=%f, want 19.99", view.TotalUSD)
+	}
+	if math.Abs(view.TotalRUB-1849.08) > 1e-9 {
+		t.Fatalf("TotalRUB=%f, want 1849.08", view.TotalRUB)
+	}
+
+	// No exchange service wired: TotalRUB stays 0.
+	bare := NewCartService(cartMock, productMock)
+	view, err = bare.Get(context.Background(), 42)
+	if err != nil {
+		t.Fatalf("unexpected error without exchange: %v", err)
+	}
+	if view.TotalRUB != 0 {
+		t.Fatalf("TotalRUB without exchange service=%f, want 0", view.TotalRUB)
+	}
+
+	// RUB rate 0 (RUB payments disabled): TotalRUB stays 0.
+	zeroRate := NewCartService(cartMock, productMock, service.NewExchangeService(50, 0))
+	view, err = zeroRate.Get(context.Background(), 42)
+	if err != nil {
+		t.Fatalf("unexpected error with zero rate: %v", err)
+	}
+	if view.TotalRUB != 0 {
+		t.Fatalf("TotalRUB with zero rate=%f, want 0", view.TotalRUB)
 	}
 }
