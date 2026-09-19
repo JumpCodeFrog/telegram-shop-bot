@@ -90,7 +90,11 @@ func (s *SQLPaymentLedgerStore) PreviewProviderRefundIngress(ctx context.Context
 	if err != nil {
 		return "", fmt.Errorf("ledger: preview provider refund parent: %w", err)
 	}
-	if parentOrder != refund.OrderID || capturePayerID != refund.PayerID || currency != refund.Currency || scale != refund.Scale {
+	// Payer corroboration mirrors the ingest rule in recordRefundOnce: payer
+	// equality is enforced only when the capture itself carries a positive
+	// payer id. YooKassa (and payerless crypto) captures store payer 0, so
+	// their refunds preview truthfully instead of quarantining forever.
+	if parentOrder != refund.OrderID || (capturePayerID > 0 && capturePayerID != refund.PayerID) || currency != refund.Currency || scale != refund.Scale {
 		return PaymentIngressQuarantine, nil
 	}
 	var existing Refund

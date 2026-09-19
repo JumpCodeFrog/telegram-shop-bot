@@ -132,28 +132,25 @@ func TestProviderRefundIngressPreviewsAndIngestsYooKassa(t *testing.T) {
 	ledger := NewSQLPaymentLedgerStore(db)
 	// The operator supplies the order's Telegram user as the refund payer
 	// because the capture carries no payer id (YooKassa has no Telegram payer
-	// identity). The preview cannot corroborate that linkage against the
-	// payerless capture, so the fact is quarantined as review evidence rather
-	// than rejected as provider-invalid.
+	// identity). Within the capture cap and the exact parent money tuple, the
+	// preview must agree with what ingest would do: apply.
 	refund := Refund{
 		OrderID: orderID, Provider: PaymentMethodYooKassa, ExternalID: "yoo-refund-1",
 		PaymentExternalID: "yoo-pay-1", PayerID: 42,
 		AmountMinor: 184908, Currency: "RUB", Scale: 2, OccurredAt: providerIngressTime.Add(time.Minute),
 	}
 	preview, err := ledger.PreviewProviderRefundIngress(ctx, refund)
-	if err != nil || preview != PaymentIngressQuarantine {
+	if err != nil || preview != PaymentIngressApply {
 		t.Fatalf("initial preview=%q err=%v", preview, err)
+	}
+	var prerecorded int
+	_ = db.Conn().QueryRow(`SELECT COUNT(*) FROM refunds`).Scan(&prerecorded)
+	if prerecorded != 0 {
+		t.Fatalf("preview wrote refunds=%d", prerecorded)
 	}
 	audit := PaymentIngressAudit{Actor: "operator:test", Reason: "provider-only refund"}
 	if err := ledger.IngestProviderRefund(ctx, refund, audit); err != nil {
 		t.Fatalf("ingest error=%v", err)
-	}
-	if err := ledger.IngestProviderRefund(ctx, refund, audit); err != nil {
-		t.Fatalf("exact replay error=%v", err)
-	}
-	preview, err = ledger.PreviewProviderRefundIngress(ctx, refund)
-	if err != nil || preview != PaymentIngressQuarantine {
-		t.Fatalf("replay preview=%q err=%v", preview, err)
 	}
 
 	var refunds, refundEvents, audits int
@@ -182,10 +179,25 @@ func TestProviderRefundIngressPreviewsAndIngestsYooKassa(t *testing.T) {
 		t.Fatalf("refunds=%d refund_events=%d audits=%d state=%s", refunds, refundEvents, audits, state)
 	}
 
+	// The exactly recorded refund previews as a replay, and replaying the
+	// ingest stays idempotent.
+	preview, err = ledger.PreviewProviderRefundIngress(ctx, refund)
+	if err != nil || preview != PaymentIngressReplay {
+		t.Fatalf("replay preview=%q err=%v", preview, err)
+	}
+	if err := ledger.IngestProviderRefund(ctx, refund, audit); err != nil {
+		t.Fatalf("exact replay error=%v", err)
+	}
+
+	// An over-cap refund previews as review evidence only, and the ingest
+	// rejects durably with a quarantine anomaly.
 	over := Refund{
 		OrderID: orderID, Provider: PaymentMethodYooKassa, ExternalID: "yoo-refund-2",
 		PaymentExternalID: "yoo-pay-1", PayerID: 42,
 		AmountMinor: 1, Currency: "RUB", Scale: 2, OccurredAt: providerIngressTime.Add(2 * time.Minute),
+	}
+	if preview, err := ledger.PreviewProviderRefundIngress(ctx, over); err != nil || preview != PaymentIngressQuarantine {
+		t.Fatalf("over-cap preview=%q err=%v", preview, err)
 	}
 	if err := ledger.IngestProviderRefund(ctx, over, audit); !errors.Is(err, ErrRefundExceedsPayment) {
 		t.Fatalf("over-refund error=%v", err)
@@ -198,6 +210,25 @@ func TestProviderRefundIngressPreviewsAndIngestsYooKassa(t *testing.T) {
 	}
 	if overAnomalies != 1 {
 		t.Fatalf("over-refund anomalies=%d", overAnomalies)
+	}
+
+	// Defense in depth: a capture row whose positive payer disagrees with the
+	// refund payer still quarantines the preview. No legitimate settlement
+	// path writes such a row (settlement facts validate the payer against the
+	// order user), so it is seeded directly to pin the corroboration rule.
+	if _, err := db.Conn().Exec(`INSERT INTO payment_attempts
+		(order_id, provider, external_id, payer_id, amount_minor, currency, scale, status, occurred_at)
+		VALUES (?, 'yookassa', 'yoo-hostile-pay', 43, 184908, 'RUB', 2, 'succeeded', ?)`,
+		orderID, providerIngressTime); err != nil {
+		t.Fatal(err)
+	}
+	hostile := Refund{
+		OrderID: orderID, Provider: PaymentMethodYooKassa, ExternalID: "yoo-hostile-refund",
+		PaymentExternalID: "yoo-hostile-pay", PayerID: 42,
+		AmountMinor: 184908, Currency: "RUB", Scale: 2, OccurredAt: providerIngressTime.Add(3 * time.Minute),
+	}
+	if preview, err := ledger.PreviewProviderRefundIngress(ctx, hostile); err != nil || preview != PaymentIngressQuarantine {
+		t.Fatalf("mismatched positive payer preview=%q err=%v", preview, err)
 	}
 }
 
