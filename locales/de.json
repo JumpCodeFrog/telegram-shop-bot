@@ -145,6 +145,7 @@
   "stars_receipt": "<code>✅ BEZAHLT\n---\nID: #%d\nGESAMT: %d Stars\nDATUM: %s\n---\nVielen Dank für deinen Einkauf!</code>",
   "admin_order_paid_stars": "⭐ Bestellung #%d bezahlt (Stars) — Nutzer %d",
   "admin_order_paid_crypto": "💎 Bestellung #%d bezahlt (Crypto) — Nutzer %d — $%.2f",
+  "admin_order_paid_yookassa": "💳 Bestellung #%d mit Karte bezahlt (YooKassa)\nNutzer: %d\nBetrag: %.2f ₽",
   "admin_analytics_title": "📊 Statistik der letzten %d Tage",
   "admin_analytics_total_orders": "Bestellungen gesamt (insgesamt): %d",
   "admin_analytics_paid_orders": "Bezahlte Bestellungen (insgesamt): %d",

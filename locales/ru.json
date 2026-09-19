@@ -145,6 +145,7 @@
   "stars_receipt": "<code>✅ ОПЛАЧЕНО\n---\nID: #%d\nИТОГО: %d Stars\nДАТА: %s\n---\nСпасибо за покупку!</code>",
   "admin_order_paid_stars": "⭐ Оплачен заказ #%d (Stars) — пользователь %d",
   "admin_order_paid_crypto": "💎 Оплачен заказ #%d (Crypto) — пользователь %d — $%.2f",
+  "admin_order_paid_yookassa": "💳 Заказ #%d оплачен картой (YooKassa)\nПользователь: %d\nСумма: %.2f ₽",
   "admin_analytics_title": "📊 Статистика за последние %d дней",
   "admin_analytics_total_orders": "Всего заказов (за всё время): %d",
   "admin_analytics_paid_orders": "Оплаченных заказов (за всё время): %d",
