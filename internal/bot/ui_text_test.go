@@ -153,6 +153,38 @@ func TestFormatPaymentMethodsText_ShowsRUBTotalWhenEnabled(t *testing.T) {
 	}
 }
 
+func TestFormatPaymentMethodsText_SuppressesNoCryptoHintWhenYooKassaOffered(t *testing.T) {
+	t.Parallel()
+
+	b := newTextBot(t)
+	view := &shop.CartView{
+		Items: []shop.CartItemView{
+			{
+				Product: storage.Product{
+					Name:       "Basic Tee",
+					PriceUSD:   19.99,
+					PriceStars: 999,
+				},
+				Quantity: 1,
+			},
+		},
+		TotalUSD:   19.99,
+		TotalStars: 999,
+		TotalRUB:   1849.08,
+	}
+
+	// CryptoBot disabled but the YooKassa card row is offered: the RUB total
+	// must show and the "only Telegram Stars" note (false next to a card-pay
+	// button) must be suppressed.
+	got := b.formatPaymentMethodsText("en", 42, view, false, true)
+	if !strings.Contains(got, "Card payment: <b>1849.08 ₽</b>") {
+		t.Fatalf("RUB total line missing: %q", got)
+	}
+	if strings.Contains(got, "only Telegram Stars payment is available") {
+		t.Fatalf("no-crypto hint must be suppressed when card payment is offered: %q", got)
+	}
+}
+
 func TestFormatCategoryProductsText_ShowsPreviewAndWishlistMark(t *testing.T) {
 	t.Parallel()
 

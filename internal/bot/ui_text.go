@@ -163,7 +163,7 @@ func (b *Bot) formatPaymentMethodsText(lang string, orderID int64, view *shop.Ca
 	if yookassaOK {
 		sb.WriteString(fmt.Sprintf(b.t(lang, "payment_methods_rub_total"), view.TotalRUB))
 	}
-	if !cryptoEnabled {
+	if !cryptoEnabled && !yookassaOK {
 		sb.WriteString(b.t(lang, "order_created_no_crypto"))
 	}
 	return sb.String()
