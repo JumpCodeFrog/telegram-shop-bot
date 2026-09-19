@@ -984,10 +984,14 @@ git commit -m "feat(bot): YooKassa webhook settles only after authoritative API 
 
 **Files:**
 - Modify: `internal/launcher/payment_review.go` (accept `PROVIDER=yookassa`)
+- Modify: `internal/storage/ledger.go:190` and `:238` (refund validation provider allowlists — extend with `PaymentMethodYooKassa`)
+- Modify: `internal/storage/payment_ingress.go:54` (refund preview allowlist — extend)
+- Modify: `internal/storage/payment_resolutions.go:16` and `:468` (resolution validation allowlists — extend with `PaymentMethodYooKassa`, keeping `PaymentReviewProviderUnknown` semantics)
+- Modify: `internal/storage/payment_ingress.go:126` (`IngestProviderCapture` payer gate `fact.PayerID <= 0 || fact.PayerID != order.UserID` — yookassa facts carry PayerID 0 because the provider has no Telegram payer identity; design a yookassa-aware rule here, e.g. payer equality enforced only for providers that supply a payer id, keeping stars' semantics intact; this gates the operator `payment-ingress` tool for yookassa captures)
 - Modify: `internal/launcher/reconcile.go` (only if it enumerates providers — read first; if it is Stars-only by design, leave it and note why in the commit message)
 - Modify: `internal/launcher/doctor.go` (report YooKassa config state: configured/partial/rate-missing)
 - Modify: `docs/payment-operations.md`
-- Test: `internal/launcher/payment_review_test.go`, `internal/launcher/doctor_test.go`
+- Test: `internal/launcher/payment_review_test.go`, `internal/launcher/doctor_test.go`, plus storage tests for the widened allowlists (mirror existing crypto cases)
 
 **Interfaces:**
 - Consumes: storage review/ledger APIs already provider-generic (check `PaymentReviewProviderUnknown` usage); Task 2 config fields.
