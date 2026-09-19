@@ -318,6 +318,11 @@
       payRub.type = 'button';
       payRub.onclick = function () { checkout('yookassa', promo.value, payRub); };
       screenEl.appendChild(payRub);
+
+      var payStripe = el('button', 'btn secondary', t('webapp_pay_stripe'));
+      payStripe.type = 'button';
+      payStripe.onclick = function () { checkout('stripe', promo.value, payStripe); };
+      screenEl.appendChild(payStripe);
     }).catch(showError);
   }
 

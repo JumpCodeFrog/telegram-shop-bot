@@ -362,6 +362,189 @@ func TestRunDoctorFailsOnNonHTTPSYooKassaReturnURL(t *testing.T) {
 	}
 }
 
+func TestRunDoctorReportsStripeNotConfigured(t *testing.T) {
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, ".env")
+	dbPath := filepath.Join(dir, "shop.db")
+	content := "BOT_TOKEN=" + testToken + "\nADMIN_IDS=42\nDB_PATH=" + dbPath + "\n"
+	if err := os.WriteFile(envPath, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	report := RunDoctor(context.Background(), DoctorOptions{
+		EnvPath:    envPath,
+		Out:        &output,
+		Inspector:  &fakeInspector{state: TelegramState{Identity: BotIdentity{ID: 7, Username: "shop_bot"}}},
+		LookupEnv:  func(string) (string, bool) { return "", false },
+		CheckRedis: refusedRedis,
+	})
+	if report.ExitCode() != 0 {
+		t.Fatalf("ExitCode() = %d, want 0:\n%s", report.ExitCode(), output.String())
+	}
+	if !strings.Contains(output.String(), "[OK] Stripe payments: not configured") {
+		t.Fatalf("missing not-configured line:\n%s", output.String())
+	}
+}
+
+func TestRunDoctorFailsOnPartialStripeCredentials(t *testing.T) {
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, ".env")
+	dbPath := filepath.Join(dir, "shop.db")
+	content := "BOT_TOKEN=" + testToken + "\nADMIN_IDS=42\nDB_PATH=" + dbPath + "\nSTRIPE_SECRET_KEY=sk_test_do_not_print\n"
+	if err := os.WriteFile(envPath, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	report := RunDoctor(context.Background(), DoctorOptions{
+		EnvPath:    envPath,
+		Out:        &output,
+		Inspector:  &fakeInspector{},
+		LookupEnv:  func(string) (string, bool) { return "", false },
+		CheckRedis: refusedRedis,
+	})
+	if report.ExitCode() != 1 {
+		t.Fatalf("ExitCode() = %d, want 1", report.ExitCode())
+	}
+	if !strings.Contains(output.String(), "[FAIL] Stripe payments") ||
+		!strings.Contains(output.String(), "must be set together") {
+		t.Fatalf("missing partial credential failure:\n%s", output.String())
+	}
+	if strings.Contains(output.String(), "sk_test_do_not_print") {
+		t.Fatal("doctor output leaked Stripe secret key")
+	}
+
+	// Partial credentials supplied only through the process environment are
+	// still diagnosed: the environment overlay must know the Stripe keys.
+	missingEnv := filepath.Join(dir, "missing.env")
+	var overlayOut bytes.Buffer
+	report = RunDoctor(context.Background(), DoctorOptions{
+		EnvPath:   missingEnv,
+		Out:       &overlayOut,
+		Inspector: &fakeInspector{},
+		LookupEnv: func(key string) (string, bool) {
+			switch key {
+			case "BOT_TOKEN":
+				return testToken, true
+			case "ADMIN_IDS":
+				return "42", true
+			case "DB_PATH":
+				return dbPath, true
+			case "STRIPE_SECRET_KEY":
+				return "sk_test_do_not_print", true
+			}
+			return "", false
+		},
+		CheckRedis: refusedRedis,
+	})
+	if report.ExitCode() != 1 || !strings.Contains(overlayOut.String(), "[FAIL] Stripe payments") {
+		t.Fatalf("overlay report = %+v, output:\n%s", report, overlayOut.String())
+	}
+}
+
+func TestRunDoctorFailsOnNonHTTPSStripeReturnURL(t *testing.T) {
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, ".env")
+	dbPath := filepath.Join(dir, "shop.db")
+	content := "BOT_TOKEN=" + testToken + "\nADMIN_IDS=42\nDB_PATH=" + dbPath +
+		"\nSTRIPE_SECRET_KEY=sk_test_do_not_print\nSTRIPE_WEBHOOK_SECRET=whsec_do_not_print\nSTRIPE_RETURN_URL=http://shop.example.com/return\n"
+	if err := os.WriteFile(envPath, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	report := RunDoctor(context.Background(), DoctorOptions{
+		EnvPath:    envPath,
+		Out:        &output,
+		Inspector:  &fakeInspector{},
+		LookupEnv:  func(string) (string, bool) { return "", false },
+		CheckRedis: refusedRedis,
+	})
+	if report.ExitCode() != 1 {
+		t.Fatalf("ExitCode() = %d, want 1", report.ExitCode())
+	}
+	if !strings.Contains(output.String(), "[FAIL] Stripe payments") ||
+		!strings.Contains(output.String(), "STRIPE_RETURN_URL must be a public https:// URL") {
+		t.Fatalf("missing https failure:\n%s", output.String())
+	}
+	if strings.Contains(output.String(), "sk_test_do_not_print") ||
+		strings.Contains(output.String(), "whsec_do_not_print") {
+		t.Fatal("doctor output leaked Stripe credentials")
+	}
+}
+
+func TestRunDoctorFailsOnBadStripeKeyPrefixes(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "shop.db")
+	scenarios := []struct {
+		name   string
+		extra  string
+		detail string
+	}{
+		{
+			name:   "secret key prefix",
+			extra:  "STRIPE_SECRET_KEY=pk_live_wrong_prefix\nSTRIPE_WEBHOOK_SECRET=whsec_do_not_print\nSTRIPE_RETURN_URL=https://shop.example.com/return\n",
+			detail: "STRIPE_SECRET_KEY must start with sk_live_ or sk_test_",
+		},
+		{
+			name:   "webhook secret prefix",
+			extra:  "STRIPE_SECRET_KEY=sk_test_do_not_print\nSTRIPE_WEBHOOK_SECRET=wrong_prefix\nSTRIPE_RETURN_URL=https://shop.example.com/return\n",
+			detail: "STRIPE_WEBHOOK_SECRET must start with whsec_",
+		},
+	}
+	for _, scenario := range scenarios {
+		t.Run(scenario.name, func(t *testing.T) {
+			envPath := filepath.Join(dir, strings.ReplaceAll(scenario.name, " ", "_")+".env")
+			content := "BOT_TOKEN=" + testToken + "\nADMIN_IDS=42\nDB_PATH=" + dbPath + "\n" + scenario.extra
+			if err := os.WriteFile(envPath, []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			var output bytes.Buffer
+			report := RunDoctor(context.Background(), DoctorOptions{
+				EnvPath:    envPath,
+				Out:        &output,
+				Inspector:  &fakeInspector{},
+				LookupEnv:  func(string) (string, bool) { return "", false },
+				CheckRedis: refusedRedis,
+			})
+			if report.ExitCode() != 1 {
+				t.Fatalf("ExitCode() = %d, want 1", report.ExitCode())
+			}
+			if !strings.Contains(output.String(), "[FAIL] Stripe payments") ||
+				!strings.Contains(output.String(), scenario.detail) {
+				t.Fatalf("missing prefix failure %q:\n%s", scenario.detail, output.String())
+			}
+		})
+	}
+}
+
+func TestRunDoctorPassesConfiguredStripe(t *testing.T) {
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, ".env")
+	dbPath := filepath.Join(dir, "shop.db")
+	content := "BOT_TOKEN=" + testToken + "\nADMIN_IDS=42\nDB_PATH=" + dbPath +
+		"\nSTRIPE_SECRET_KEY=sk_test_do_not_print\nSTRIPE_WEBHOOK_SECRET=whsec_do_not_print\nSTRIPE_RETURN_URL=https://shop.example.com/return\n"
+	if err := os.WriteFile(envPath, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	report := RunDoctor(context.Background(), DoctorOptions{
+		EnvPath:    envPath,
+		Out:        &output,
+		Inspector:  &fakeInspector{state: TelegramState{Identity: BotIdentity{ID: 7, Username: "shop_bot", SupportsInlineQueries: true}}},
+		LookupEnv:  func(string) (string, bool) { return "", false },
+		CheckRedis: func(context.Context, string, string) error { return nil },
+	})
+	if report.ExitCode() != 0 {
+		t.Fatalf("ExitCode() = %d, want 0:\n%s", report.ExitCode(), output.String())
+	}
+	if !strings.Contains(output.String(), "[OK] Stripe payments: configured") {
+		t.Fatalf("missing configured line:\n%s", output.String())
+	}
+	if strings.Contains(output.String(), "sk_test_do_not_print") ||
+		strings.Contains(output.String(), "whsec_do_not_print") {
+		t.Fatal("doctor output leaked Stripe credentials")
+	}
+}
+
 func TestRunDoctorPassesConfiguredYooKassa(t *testing.T) {
 	dir := t.TempDir()
 	envPath := filepath.Join(dir, ".env")

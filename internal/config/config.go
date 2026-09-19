@@ -39,6 +39,10 @@ type Config struct {
 	YooKassaReturnURL string
 	// USDToRUBRate converts USD order totals to RUB (0 = RUB payments disabled).
 	USDToRUBRate float64
+	// Stripe USD card payments. All three must be set together or none.
+	StripeSecretKey     string
+	StripeWebhookSecret string
+	StripeReturnURL     string
 }
 
 // Load reads configuration from environment variables.
@@ -111,6 +115,13 @@ func load(lookup lookupFunc) (*Config, error) {
 		return nil, err
 	}
 
+	stripeSecret := strings.TrimSpace(value(lookup, "STRIPE_SECRET_KEY"))
+	stripeWebhookSecret := strings.TrimSpace(value(lookup, "STRIPE_WEBHOOK_SECRET"))
+	stripeReturn := strings.TrimSpace(value(lookup, "STRIPE_RETURN_URL"))
+	if err := ValidateStripeConfig(stripeSecret, stripeWebhookSecret, stripeReturn); err != nil {
+		return nil, err
+	}
+
 	usdToRUB := 0.0
 	if raw := strings.TrimSpace(value(lookup, "USD_TO_RUB_RATE")); raw != "" {
 		rate, err := strconv.ParseFloat(raw, 64)
@@ -145,6 +156,9 @@ func load(lookup lookupFunc) (*Config, error) {
 		YooKassaSecretKey:     yooSecret,
 		YooKassaReturnURL:     yooReturn,
 		USDToRUBRate:          usdToRUB,
+		StripeSecretKey:       stripeSecret,
+		StripeWebhookSecret:   stripeWebhookSecret,
+		StripeReturnURL:       stripeReturn,
 	}, nil
 }
 

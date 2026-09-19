@@ -31,6 +31,7 @@ processed; it only distinguishes an exact end from truncation.
 telegram-shop-bot payment-review list --provider stars
 telegram-shop-bot payment-review list --provider crypto
 telegram-shop-bot payment-review list --provider yookassa
+telegram-shop-bot payment-review list --provider stripe
 telegram-shop-bot payment-review list --provider unknown
 ```
 
@@ -213,6 +214,71 @@ total.
 ### Subscriptions
 
 Subscriptions remain Stars-only. The RUB button is never offered for
+subscription carts.
+
+## 6. Stripe (USD card) operations
+
+### Security model: signed webhook, no refetch
+
+Stripe notifications are signed. Every `/stripe-webhook` request must carry a
+`Stripe-Signature` header whose HMAC-SHA256 over `<timestamp>.<body>` verifies
+against the endpoint secret (`STRIPE_WEBHOOK_SECRET`, `whsec_` prefix);
+timestamps more than 300 seconds from now are rejected as replays. Once the
+signature verifies, the body itself is authoritative: settlement happens from
+the verified body WITHOUT any API refetch (the CryptoBot pattern, unlike the
+unsigned YooKassa flow, which must re-read the payment). An invalid signature
+is unauthenticated junk: the endpoint answers `403` and records nothing — no
+anomaly, no event, no order change.
+
+### What quarantined Stripe facts look like
+
+Quarantined facts are `payment_anomalies` rows with provider `stripe` and the
+order in `needs_review`:
+
+| Reason | Meaning |
+|---|---|
+| `webhook_parse_failure` | Signature-valid body that still fails to parse, stored as a sha256 digest only |
+| `webhook_invalid_receipt` | Signed checkout session that cannot produce a valid receipt |
+| `receipt_mismatch` | Valid receipt that disagrees with the order's money tuple |
+| `out_of_stock_after_charge` | Paid session whose product went out of stock before fulfillment |
+
+Stripe facts carry no payer id (the provider has no Telegram payer
+identity), so payer checks compare money and order linkage only.
+
+### Resolve flow
+
+```bash
+make payment-review PROVIDER=stripe
+```
+
+The semantics are identical to the Stars, crypto and YooKassa flows above: the
+list exits `1` while targets exist and prints local ids and reason codes only;
+resolve previews read-only first and then applies with
+`--apply --confirm-order N`. A quarantined capture still requires a durable
+succeeded refund before it can be resolved to `settled`.
+
+### Refunds
+
+Refunds are operator-driven: initiate them in the Stripe dashboard or via the
+Stripe API. Nothing in this bot refunds automatically. The ledger records a
+refund through its refund ingestion path (`RecordRefund` /
+`IngestProviderRefund`), which validates it against the immutable captured
+attempt (exact parent identity, money tuple, cumulative amount) and appends
+durable review evidence for anything that disagrees. There is no dedicated
+refund-ingress CLI for Stripe yet: `payment-review ingest-stars` reads the
+Telegram Bot API and cannot serve this rail.
+
+### USD-native amounts
+
+Stripe charges the order's own USD total: there is no rate snapshot and no
+converted currency, so `orders.total_usd` IS the charged fact that receipts
+are validated against. Stripe refuses USD card charges below $0.50, so
+checkout refuses to start a Stripe session below that minimum instead of
+creating a payment that can never succeed.
+
+### Subscriptions
+
+Subscriptions remain Stars-only. The Stripe button is never offered for
 subscription carts.
 
 ## Exit codes

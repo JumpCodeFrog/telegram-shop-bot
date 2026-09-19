@@ -2,6 +2,7 @@ package bot
 
 import (
 	"errors"
+	"slices"
 	"testing"
 
 	"shop_bot/internal/storage"
@@ -66,7 +67,7 @@ func TestHasPendingOrderWithPromo_IgnoresNonPendingOrOtherPromo(t *testing.T) {
 }
 
 func TestPaymentMethodKeyboard_HidesCryptoWhenDisabled(t *testing.T) {
-	keyboard := paymentMethodKeyboard(15, false, false, 0, 100, 1.50, "", nil)
+	keyboard := paymentMethodKeyboard(15, false, false, false, 0, 100, 1.50, "", nil)
 
 	// Stars row + terms/support row + cancel/orders row + menu row
 	if len(keyboard) != 4 {
@@ -80,7 +81,7 @@ func TestPaymentMethodKeyboard_HidesCryptoWhenDisabled(t *testing.T) {
 }
 
 func TestPaymentMethodKeyboard_ShowsCryptoWhenEnabled(t *testing.T) {
-	keyboard := paymentMethodKeyboard(15, true, false, 0, 100, 1.50, "", nil)
+	keyboard := paymentMethodKeyboard(15, true, false, false, 0, 100, 1.50, "", nil)
 
 	// Stars row + crypto row + terms/support row + cancel/orders row + menu row
 	if len(keyboard) != 5 {
@@ -92,6 +93,78 @@ func TestPaymentMethodKeyboard_ShowsCryptoWhenEnabled(t *testing.T) {
 	assertPaymentButton(t, keyboard[2][0], "📄 Terms", "terms")
 	assertPaymentButton(t, keyboard[2][1], "🆘 Payment support", "paysupport")
 	assertPaymentButton(t, keyboard[3][0], "❌ Cancel order", "order:cancel:15")
+}
+
+// styledCallbacks flattens a StyledKeyboard into its callback data strings in
+// display order, mirroring buttonCallbacks in checkout_totals_test.go for the
+// tgbotapi-decoded markup.
+func styledCallbacks(kb StyledKeyboard) []string {
+	var callbacks []string
+	for _, row := range kb {
+		for _, button := range row {
+			if button.CallbackData != "" {
+				callbacks = append(callbacks, button.CallbackData)
+			}
+		}
+	}
+	return callbacks
+}
+
+func TestPaymentMethodKeyboard_StripeDisabledPathInvariance(t *testing.T) {
+	// With Stripe disabled the full callback list must be byte-identical to
+	// the pre-Stripe row set, whether or not the other rails are offered.
+	for _, tc := range []struct {
+		name          string
+		cryptoEnabled bool
+		yookassaOK    bool
+		want          []string
+	}{
+		{
+			name: "stars only",
+			want: []string{"pay:stars:15", "terms", "paysupport", "order:cancel:15", "back:orders", "back:menu"},
+		},
+		{
+			name:          "crypto and yookassa offered",
+			cryptoEnabled: true,
+			yookassaOK:    true,
+			want:          []string{"pay:stars:15", "pay:crypto:15", "pay:yookassa:15", "terms", "paysupport", "order:cancel:15", "back:orders", "back:menu"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			keyboard := paymentMethodKeyboard(15, tc.cryptoEnabled, tc.yookassaOK, false, 1849.08, 100, 19.99, "", nil)
+			if got := styledCallbacks(keyboard); !slices.Equal(got, tc.want) {
+				t.Fatalf("callbacks = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestPaymentMethodKeyboard_ShowsStripeAfterYooKassa(t *testing.T) {
+	keyboard := paymentMethodKeyboard(15, true, true, true, 1849.08, 100, 19.99, "", nil)
+
+	// Row order stays stars → crypto → yookassa → stripe → footer rows.
+	want := []string{"pay:stars:15", "pay:crypto:15", "pay:yookassa:15", "pay:stripe:15", "terms", "paysupport", "order:cancel:15", "back:orders", "back:menu"}
+	if got := styledCallbacks(keyboard); !slices.Equal(got, want) {
+		t.Fatalf("callbacks = %v, want %v", got, want)
+	}
+
+	assertPaymentButton(t, keyboard[3][0], "💳 Pay $19.99", "pay:stripe:15")
+}
+
+func TestPaymentMethodKeyboard_HidesStripeWhenDisabled(t *testing.T) {
+	keyboard := paymentMethodKeyboard(15, true, false, false, 0, 100, 1.50, "", nil)
+
+	// Stars row + crypto row + terms/support row + cancel/orders row + menu row
+	if len(keyboard) != 5 {
+		t.Fatalf("expected 5 rows, got %d", len(keyboard))
+	}
+	for _, row := range keyboard {
+		for _, button := range row {
+			if button.CallbackData == "pay:stripe:15" {
+				t.Fatalf("stripe button must be hidden when disabled: %+v", button)
+			}
+		}
+	}
 }
 
 func assertPaymentButton(t *testing.T, button StyledButton, wantText, wantData string) {

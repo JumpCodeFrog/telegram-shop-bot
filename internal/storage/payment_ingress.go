@@ -15,15 +15,20 @@ const (
 )
 
 // invalidProviderCapturePayer enforces payer equality only for providers that
-// supply a Telegram payer identity. YooKassa facts carry PayerID 0 because the
-// provider has no Telegram payer identity, so a payerless fact is accepted
-// exactly for that rail; a positive PayerID that disagrees with the order user
-// still rejects for every provider.
+// supply a Telegram payer identity. YooKassa and Stripe facts carry PayerID 0
+// because those providers have no Telegram payer identity, so a payerless fact
+// is accepted exactly for those rails. A negative PayerID rejects for every
+// provider, and a positive PayerID that disagrees with the order user still
+// rejects for every provider.
 func invalidProviderCapturePayer(fact PaymentFact, orderUserID int64) bool {
 	if fact.PayerID > 0 {
 		return fact.PayerID != orderUserID
 	}
-	return normalizePaymentProvider(fact.Provider) != PaymentMethodYooKassa
+	if fact.PayerID < 0 {
+		return true
+	}
+	provider := normalizePaymentProvider(fact.Provider)
+	return provider != PaymentMethodYooKassa && provider != PaymentMethodStripe
 }
 
 func (s *SQLOrderStore) PreviewProviderCaptureIngress(ctx context.Context, orderID int64, fact PaymentFact) (string, error) {
@@ -63,7 +68,7 @@ func (s *SQLOrderStore) PreviewProviderCaptureIngress(ctx context.Context, order
 func (s *SQLPaymentLedgerStore) PreviewProviderRefundIngress(ctx context.Context, refund Refund) (string, error) {
 	provider := normalizePaymentProvider(refund.Provider)
 	if refund.OrderID <= 0 || refund.AmountMinor <= 0 || refund.ExternalID == "" ||
-		refund.PaymentExternalID == "" || (provider != PaymentMethodStars && provider != PaymentMethodCrypto && provider != PaymentMethodYooKassa) ||
+		refund.PaymentExternalID == "" || (provider != PaymentMethodStars && provider != PaymentMethodCrypto && provider != PaymentMethodYooKassa && provider != PaymentMethodStripe) ||
 		refund.Scale < 0 || refund.Scale > 9 || refund.Currency == "" || refund.PayerID <= 0 ||
 		refund.OccurredAt.IsZero() || (provider == PaymentMethodStars && refund.ExternalID != refund.PaymentExternalID) {
 		return "", ErrPaymentReceiptMismatch

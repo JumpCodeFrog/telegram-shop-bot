@@ -91,6 +91,12 @@ type YooKassaInvoicer interface {
 	CreatePayment(ctx context.Context, orderID int64, amountRUBMinor int64, description string) (*payment.Invoice, error)
 }
 
+// StripeInvoicer creates Stripe Checkout Sessions (payment.StripePayment).
+type StripeInvoicer interface {
+	Configured() bool
+	CreateCheckoutSession(ctx context.Context, orderID int64, amountCents int64, description string) (*payment.Invoice, error)
+}
+
 // FileURLResolver resolves a Telegram file_id to a direct download URL
 // (tgbotapi.BotAPI.GetFileDirectURL).
 type FileURLResolver interface {
@@ -118,6 +124,7 @@ type Deps struct {
 	Tg       TelegramAPI
 	Crypto   CryptoInvoicer
 	YooKassa YooKassaInvoicer
+	Stripe   StripeInvoicer
 	Files    FileURLResolver
 }
 
@@ -471,10 +478,10 @@ func (s *Server) decodeBody(w http.ResponseWriter, r *http.Request, v any) bool 
 	return true
 }
 
-// POST /api/checkout {"method":"stars"|"crypto"|"yookassa","promo":""} → {"order_id","invoice_link"}.
+// POST /api/checkout {"method":"stars"|"crypto"|"yookassa"|"stripe","promo":""} → {"order_id","invoice_link"}.
 // The order is created through the same OrderService.CreateFromCart as the bot
 // flow; payment confirmation then arrives via the existing successful_payment /
-// CryptoBot / YooKassa webhook pipeline.
+// CryptoBot / YooKassa / Stripe webhook pipeline.
 func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request, auth *AuthResult) {
 	var req struct {
 		Method string `json:"method"`
@@ -483,7 +490,7 @@ func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request, auth *Au
 	if !s.decodeBody(w, r, &req) {
 		return
 	}
-	if req.Method != storage.PaymentMethodStars && req.Method != storage.PaymentMethodCrypto && req.Method != storage.PaymentMethodYooKassa {
+	if req.Method != storage.PaymentMethodStars && req.Method != storage.PaymentMethodCrypto && req.Method != storage.PaymentMethodYooKassa && req.Method != storage.PaymentMethodStripe {
 		s.writeError(w, http.StatusBadRequest, "webapp_err_method")
 		return
 	}
@@ -493,6 +500,10 @@ func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request, auth *Au
 	}
 	if req.Method == storage.PaymentMethodYooKassa && (s.deps.YooKassa == nil || !s.deps.YooKassa.Configured()) {
 		s.writeError(w, http.StatusBadRequest, "webapp_err_yookassa_disabled")
+		return
+	}
+	if req.Method == storage.PaymentMethodStripe && (s.deps.Stripe == nil || !s.deps.Stripe.Configured()) {
+		s.writeError(w, http.StatusBadRequest, "webapp_err_stripe_disabled")
 		return
 	}
 
@@ -579,6 +590,19 @@ func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request, auth *Au
 		}
 		var inv *payment.Invoice
 		inv, err = s.deps.YooKassa.CreatePayment(ctx, order.ID, amountMinor, orderDescription(order.Items))
+		if err == nil {
+			link = inv.PayURL
+		}
+	case storage.PaymentMethodStripe:
+		// Cents from the USD total. Stripe refuses charges under $0.50:
+		// reject rather than create a session that can never be paid.
+		amountCents := int64(math.Round(order.TotalUSD * 100))
+		if amountCents < 50 {
+			s.writeError(w, http.StatusBadRequest, "webapp_err_stripe_disabled")
+			return
+		}
+		var inv *payment.Invoice
+		inv, err = s.deps.Stripe.CreateCheckoutSession(ctx, order.ID, amountCents, orderDescription(order.Items))
 		if err == nil {
 			link = inv.PayURL
 		}

@@ -235,6 +235,122 @@ func TestPaymentReviewCLIListsPreviewsAndResolvesYooKassa(t *testing.T) {
 	}
 }
 
+func TestPaymentReviewCLIListsPreviewsAndResolvesStripe(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "stripe.db")
+	db, err := storage.New(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := db.Conn().Exec(`INSERT INTO orders
+		(user_id,total_usd,total_stars,payment_method,status,order_state,payment_state,fulfillment_state)
+		VALUES (42,23,0,'stripe','pending','placed','pending','unfulfilled')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	orderID, _ := res.LastInsertId()
+	ctx := context.Background()
+	store := storage.NewSQLOrderStore(db)
+	if err := store.UpdateOrderStatus(ctx, orderID, storage.OrderStatusPending, storage.OrderStatusPaid, "stripe", "cs_test_capture_a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordUnexpectedPayment(ctx, orderID, "stripe", "cs_test_capture_b", "second_charge"); !errors.Is(err, storage.ErrPaymentNeedsReview) {
+		t.Fatal(err)
+	}
+	ledger := storage.NewSQLPaymentLedgerStore(db)
+	if err := ledger.RecordRefund(ctx, storage.Refund{
+		OrderID: orderID, Provider: "stripe", ExternalID: "cs_test_refund_b",
+		PaymentExternalID: "cs_test_capture_b", AmountMinor: 2300, Currency: "USD", Scale: 2,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cases, err := ledger.ListPaymentReviews(ctx, "stripe")
+	if err != nil || len(cases) != 1 {
+		t.Fatalf("cases=%+v err=%v", cases, err)
+	}
+	_ = db.Close()
+
+	envPath := filepath.Join(dir, ".env")
+	if err := os.WriteFile(envPath, []byte(fmt.Sprintf("BOT_TOKEN=%s\nDB_PATH=%s\n", testToken, dbPath)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	baseOpts := func(out *bytes.Buffer) PaymentReviewOptions {
+		return PaymentReviewOptions{
+			EnvPath: envPath, BaseDir: dir, Out: out,
+			LookupEnv: func(string) (string, bool) { return "", false },
+		}
+	}
+
+	var usageOut bytes.Buffer
+	if code := RunPaymentReview(ctx, []string{}, baseOpts(&usageOut)); code != 2 || !strings.Contains(usageOut.String(), "stripe") {
+		t.Fatalf("usage code=%d output=%q", code, usageOut.String())
+	}
+	var typoOut bytes.Buffer
+	if code := RunPaymentReview(ctx, []string{"list", "--provider", "strip"}, baseOpts(&typoOut)); code != 2 {
+		t.Fatalf("typo provider code=%d output=%q", code, typoOut.String())
+	}
+
+	var listOut bytes.Buffer
+	if code := RunPaymentReview(ctx, []string{"list", "--provider", "stripe"}, baseOpts(&listOut)); code != 1 {
+		t.Fatalf("list code=%d output=%q", code, listOut.String())
+	}
+	if !strings.Contains(listOut.String(), "provider=stripe") || !strings.Contains(listOut.String(), "event_ids=") ||
+		strings.Contains(listOut.String(), "cs_test_capture_b") || strings.Contains(listOut.String(), "cs_test_refund_b") {
+		t.Fatalf("list output is not redacted: %q", listOut.String())
+	}
+
+	args := []string{
+		"resolve", "--provider", "stripe", "--order", strconv.FormatInt(orderID, 10),
+		"--state", "settled", "--actor", "operator:test", "--reason", "duplicate fully refunded",
+	}
+	for _, target := range cases[0].Targets {
+		switch target.Kind {
+		case storage.PaymentReviewTargetEvent:
+			args = append(args, "--event", strconv.FormatInt(target.ID, 10))
+		case storage.PaymentReviewTargetAnomaly:
+			args = append(args, "--anomaly", strconv.FormatInt(target.ID, 10))
+		}
+	}
+	var previewOut bytes.Buffer
+	if code := RunPaymentReview(ctx, args, baseOpts(&previewOut)); code != 0 ||
+		!strings.Contains(previewOut.String(), "No changes applied") {
+		t.Fatalf("preview code=%d output=%q", code, previewOut.String())
+	}
+	checkDB, _ := storage.OpenReadOnly(dbPath)
+	var resolutions int
+	_ = checkDB.Conn().QueryRow(`SELECT COUNT(*) FROM payment_resolutions`).Scan(&resolutions)
+	_ = checkDB.Close()
+	if resolutions != 0 {
+		t.Fatalf("preview wrote resolutions=%d", resolutions)
+	}
+
+	var wrongOut bytes.Buffer
+	wrongArgs := append(append([]string{}, args...), "--apply", "--confirm-order", "999")
+	if code := RunPaymentReview(ctx, wrongArgs, baseOpts(&wrongOut)); code != 2 {
+		t.Fatalf("wrong confirmation code=%d output=%q", code, wrongOut.String())
+	}
+	var applyOut bytes.Buffer
+	applyArgs := append(append([]string{}, args...), "--apply", "--confirm-order", strconv.FormatInt(orderID, 10))
+	if code := RunPaymentReview(ctx, applyArgs, baseOpts(&applyOut)); code != 0 ||
+		!strings.Contains(applyOut.String(), "resolved") {
+		t.Fatalf("apply code=%d output=%q", code, applyOut.String())
+	}
+
+	finalDB, _ := storage.OpenReadOnly(dbPath)
+	var state string
+	_ = finalDB.Conn().QueryRow(`SELECT payment_state FROM orders WHERE id=?`, orderID).Scan(&state)
+	_ = finalDB.Conn().QueryRow(`SELECT COUNT(*) FROM payment_resolutions`).Scan(&resolutions)
+	_ = finalDB.Close()
+	if state != storage.PaymentStateSettled || resolutions != 2 {
+		t.Fatalf("state=%s resolutions=%d", state, resolutions)
+	}
+	var finalList bytes.Buffer
+	if code := RunPaymentReview(ctx, []string{"list", "--provider", "stripe"}, baseOpts(&finalList)); code != 0 ||
+		!strings.Contains(finalList.String(), "targets=0") {
+		t.Fatalf("final list code=%d output=%q", code, finalList.String())
+	}
+}
+
 func TestPaymentReviewCLIRequiresExplicitDecisionForLegacyNoAttempt(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "shop.db")

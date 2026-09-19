@@ -20,6 +20,10 @@ func (fakeWebhookEndpoints) YooKassaWebhookHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusCreated) }
 }
 
+func (fakeWebhookEndpoints) StripeWebhookHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusResetContent) }
+}
+
 func TestMountWebhookRoutesMatchesPublicContract(t *testing.T) {
 	mux := http.NewServeMux()
 	mountWebhookRoutes(mux, fakeWebhookEndpoints{})
@@ -31,6 +35,7 @@ func TestMountWebhookRoutesMatchesPublicContract(t *testing.T) {
 		{path: "/telegram-webhook", want: http.StatusNoContent},
 		{path: "/cryptobot-webhook", want: http.StatusAccepted},
 		{path: "/yookassa-webhook", want: http.StatusCreated},
+		{path: "/stripe-webhook", want: http.StatusResetContent},
 		{path: "/webhook/telegram-webhook", want: http.StatusNotFound},
 	}
 	for _, tt := range tests {

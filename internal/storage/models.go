@@ -14,6 +14,7 @@ const (
 	PaymentMethodStars    = "stars"
 	PaymentMethodCrypto   = "crypto"
 	PaymentMethodYooKassa = "yookassa"
+	PaymentMethodStripe   = "stripe"
 	// PaymentReviewProviderUnknown is a provider-neutral operator inbox for
 	// legacy paid rows whose original payment rail cannot be established.
 	PaymentReviewProviderUnknown = "unknown"

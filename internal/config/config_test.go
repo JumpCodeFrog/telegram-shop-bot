@@ -450,3 +450,154 @@ func TestYooKassaWebhookURLDerivesFromBase(t *testing.T) {
 		}
 	}
 }
+
+// Stripe USD card payments.
+
+func TestStripeConfigLoadsWhenComplete(t *testing.T) {
+	values := map[string]string{
+		"BOT_TOKEN":             "123456789:abcdefghijklmnopqrstuvwxyz_ABCD",
+		"STRIPE_SECRET_KEY":     "sk_test_abc",
+		"STRIPE_WEBHOOK_SECRET": "whsec_abc",
+		"STRIPE_RETURN_URL":     "https://shop.example.com/return",
+	}
+
+	cfg, err := LoadFromMap(values)
+	if err != nil {
+		t.Fatalf("LoadFromMap() error = %v", err)
+	}
+	if cfg.StripeSecretKey != "sk_test_abc" {
+		t.Errorf("StripeSecretKey = %q, want %q", cfg.StripeSecretKey, "sk_test_abc")
+	}
+	if cfg.StripeWebhookSecret != "whsec_abc" {
+		t.Errorf("StripeWebhookSecret = %q, want %q", cfg.StripeWebhookSecret, "whsec_abc")
+	}
+	if cfg.StripeReturnURL != "https://shop.example.com/return" {
+		t.Errorf("StripeReturnURL = %q, want %q", cfg.StripeReturnURL, "https://shop.example.com/return")
+	}
+}
+
+func TestStripeConfigUnsetIsDisabled(t *testing.T) {
+	values := map[string]string{
+		"BOT_TOKEN": "123456789:abcdefghijklmnopqrstuvwxyz_ABCD",
+	}
+
+	cfg, err := LoadFromMap(values)
+	if err != nil {
+		t.Fatalf("LoadFromMap() error = %v", err)
+	}
+	if cfg.StripeSecretKey != "" || cfg.StripeWebhookSecret != "" || cfg.StripeReturnURL != "" {
+		t.Errorf("Stripe config = %q/%q/%q, want all empty when unset",
+			cfg.StripeSecretKey, cfg.StripeWebhookSecret, cfg.StripeReturnURL)
+	}
+}
+
+func TestStripeConfigPartialCredentialsRejected(t *testing.T) {
+	complete := map[string]string{
+		"STRIPE_SECRET_KEY":     "sk_test_abc",
+		"STRIPE_WEBHOOK_SECRET": "whsec_abc",
+		"STRIPE_RETURN_URL":     "https://shop.example.com/return",
+	}
+	const botToken = "123456789:abcdefghijklmnopqrstuvwxyz_ABCD"
+
+	// Any subset of the three (but not all) must fail: half-configured
+	// credentials must never silently disable the provider.
+	cases := map[string]map[string]string{}
+	for drop := range complete {
+		values := map[string]string{"BOT_TOKEN": botToken}
+		for key, val := range complete {
+			if key != drop {
+				values[key] = val
+			}
+		}
+		cases["missing_"+drop] = values
+	}
+	for only := range complete {
+		values := map[string]string{"BOT_TOKEN": botToken, only: complete[only]}
+		cases["only_"+only] = values
+	}
+	for name, values := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, err := LoadFromMap(values)
+			if err == nil {
+				t.Fatal("expected error for partial STRIPE credentials, got nil")
+			}
+			if !strings.Contains(err.Error(), "STRIPE") {
+				t.Errorf("error should mention STRIPE, got: %v", err)
+			}
+		})
+	}
+}
+
+func TestStripeReturnURLMustBeHTTPS(t *testing.T) {
+	values := map[string]string{
+		"BOT_TOKEN":             "123456789:abcdefghijklmnopqrstuvwxyz_ABCD",
+		"STRIPE_SECRET_KEY":     "sk_test_abc",
+		"STRIPE_WEBHOOK_SECRET": "whsec_abc",
+		"STRIPE_RETURN_URL":     "http://shop.example.com/return",
+	}
+
+	_, err := LoadFromMap(values)
+	if err == nil {
+		t.Fatal("expected error for non-HTTPS STRIPE_RETURN_URL, got nil")
+	}
+	if !strings.Contains(err.Error(), "STRIPE_RETURN_URL") {
+		t.Errorf("error should mention STRIPE_RETURN_URL, got: %v", err)
+	}
+}
+
+func TestStripeSecretKeyMustHaveKnownPrefix(t *testing.T) {
+	values := map[string]string{
+		"BOT_TOKEN":             "123456789:abcdefghijklmnopqrstuvwxyz_ABCD",
+		"STRIPE_SECRET_KEY":     "not-a-stripe-key",
+		"STRIPE_WEBHOOK_SECRET": "whsec_abc",
+		"STRIPE_RETURN_URL":     "https://shop.example.com/return",
+	}
+
+	_, err := LoadFromMap(values)
+	if err == nil {
+		t.Fatal("expected error for STRIPE_SECRET_KEY without sk_live_/sk_test_ prefix, got nil")
+	}
+	if !strings.Contains(err.Error(), "STRIPE_SECRET_KEY") {
+		t.Errorf("error should mention STRIPE_SECRET_KEY, got: %v", err)
+	}
+
+	// Both the test-mode and live-mode prefixes are accepted.
+	for _, key := range []string{"sk_test_abc", "sk_live_abc"} {
+		values["STRIPE_SECRET_KEY"] = key
+		if _, err := LoadFromMap(values); err != nil {
+			t.Errorf("LoadFromMap() rejected %q: %v", key, err)
+		}
+	}
+}
+
+func TestStripeWebhookSecretMustHaveKnownPrefix(t *testing.T) {
+	values := map[string]string{
+		"BOT_TOKEN":             "123456789:abcdefghijklmnopqrstuvwxyz_ABCD",
+		"STRIPE_SECRET_KEY":     "sk_test_abc",
+		"STRIPE_WEBHOOK_SECRET": "not-a-signing-secret",
+		"STRIPE_RETURN_URL":     "https://shop.example.com/return",
+	}
+
+	_, err := LoadFromMap(values)
+	if err == nil {
+		t.Fatal("expected error for STRIPE_WEBHOOK_SECRET without whsec_ prefix, got nil")
+	}
+	if !strings.Contains(err.Error(), "STRIPE_WEBHOOK_SECRET") {
+		t.Errorf("error should mention STRIPE_WEBHOOK_SECRET, got: %v", err)
+	}
+}
+
+func TestStripeWebhookURLDerivesFromBase(t *testing.T) {
+	tests := map[string]string{
+		"":                              "",
+		"   ":                           "",
+		"https://shop.example.com":      "https://shop.example.com/stripe-webhook",
+		"https://shop.example.com/":     "https://shop.example.com/stripe-webhook",
+		" https://shop.example.com/// ": "https://shop.example.com/stripe-webhook",
+	}
+	for input, want := range tests {
+		if got := StripeWebhookURL(input); got != want {
+			t.Errorf("StripeWebhookURL(%q) = %q, want %q", input, got, want)
+		}
+	}
+}

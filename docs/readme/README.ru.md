@@ -19,6 +19,7 @@
 - **Подписки Stars** — регулярные 30-дневные товары, управление через `/mysubs`
 - Оплата **USDT через CryptoBot** (опционально)
 - **Карты в рублях через YooKassa** (опционально)
+- **Карты в долларах через Stripe** (опционально)
 - **Mini App** — полноценная витрина внутри Telegram (включается через `WEBAPP_URL`)
 - **Отзывы и рейтинги** — 1–5 ⭐ после доставки, средняя оценка на карточке товара
 - Промокоды с ограничениями по категориям + персональные одноразовые коды
@@ -215,6 +216,9 @@ docker compose logs -f bot
 **YooKassa (рубли, карты)** — опционально. Оплата картой: покупателя перекидывает на страницу оплаты YooKassa, заказ зачисляется, когда YooKassa уведомит бота.
 Установи `YOOKASSA_SHOP_ID`, `YOOKASSA_SECRET_KEY`, `YOOKASSA_RETURN_URL` (публичный HTTPS) и `USD_TO_RUB_RATE` (рублей за 1 USD, например `92.5`) — первые три задаются вместе, а при `USD_TO_RUB_RATE` по умолчанию `0` кнопка «Оплатить картой» скрыта. Цены в долларах конвертируются по заданному курсу; сумма в рублях фиксируется в заказе при оформлении. Укажи `<WEBHOOK_URL>/yookassa-webhook` как URL уведомлений в личном кабинете мерчанта YooKassa. Уведомления YooKassa не подписаны — тело сообщения только идентифицирует платёж, а зачисление происходит строго после того, как бот запросит авторитетное состояние платежа у API YooKassa. Подписки остаются только на Stars.
 
+**Stripe (доллары, карты)** — опционально. Оплата картой в USD: покупателя перекидывает на страницу Stripe Checkout, заказ зачисляется, когда Stripe уведомит бота.
+Установи `STRIPE_SECRET_KEY` (начинается с `sk_live_` или `sk_test_`), `STRIPE_WEBHOOK_SECRET` (начинается с `whsec_`) и `STRIPE_RETURN_URL` (публичный HTTPS) — все три задаются вместе. В дашборде Stripe (Developers → Webhooks) зарегистрируй `<WEBHOOK_URL>/stripe-webhook` для события `checkout.session.completed` и скопируй подписной секрет эндпоинта в `STRIPE_WEBHOOK_SECRET`. Уведомления Stripe подписаны HMAC: после проверки подписи тело сообщения само зачисляет заказ — без повторного запроса к API (в отличие от неподписанных уведомлений YooKassa, которые бот обязан перезапрашивать). Заказы ниже минимального для Stripe порога $0.50 отклоняются при нажатии кнопки оплаты картой. Подписки остаются только на Stars.
+
 **Подписки Stars** — товар, созданный как «подписка на 30 дней», продаётся регулярным платежом Stars (`subscription_period=2592000`). Подписки оплачиваются только Stars; управление — через `/mysubs`.
 
 ---
@@ -278,7 +282,7 @@ WEBHOOK_URL=https://shop.example.com
 TELEGRAM_WEBHOOK_SECRET=случайная-строка
 ```
 
-Telegram будет отправлять POST на `https://shop.example.com/telegram-webhook`. Если включён CryptoBot, укажи ему `https://shop.example.com/cryptobot-webhook`. Если включена YooKassa, укажи в личном кабинете мерчанта `https://shop.example.com/yookassa-webhook`.
+Telegram будет отправлять POST на `https://shop.example.com/telegram-webhook`. Если включён CryptoBot, укажи ему `https://shop.example.com/cryptobot-webhook`. Если включена YooKassa, укажи в личном кабинете мерчанта `https://shop.example.com/yookassa-webhook`. Если включён Stripe, зарегистрируй `https://shop.example.com/stripe-webhook` в дашборде Stripe (Developers → Webhooks).
 
 </details>
 

@@ -320,6 +320,13 @@ func (s *OrderService) ConfirmPaymentReceipt(ctx context.Context, receipt Paymen
 			receipt.Scale != 2 || receipt.ExternalID == "" {
 			return nil, s.receiptMismatch(ctx, receipt)
 		}
+	case storage.PaymentMethodStripe:
+		// No payer check: stripe receipts carry PayerID 0 like crypto.
+		if receipt.Currency != "USD" || receipt.AmountMinor <= 0 ||
+			receipt.AmountMinor != int64(math.Round(order.TotalUSD*100)) ||
+			receipt.Scale != 2 || receipt.ExternalID == "" {
+			return nil, s.receiptMismatch(ctx, receipt)
+		}
 	default:
 		return nil, storage.ErrPaymentReceiptMismatch
 	}

@@ -261,6 +261,114 @@ func (b *Bot) YooKassaWebhookHandler() http.HandlerFunc {
 	}
 }
 
+// StripeWebhookHandler processes Stripe event notifications. Stripe signs
+// every webhook with the endpoint secret: once the signature verifies, the
+// body itself is authoritative and settles the order WITHOUT any API refetch
+// (the CryptoBot pattern, unlike the unsigned YooKassa flow). An invalid
+// signature is unauthenticated junk: rejected with 403, recorded nowhere.
+func (b *Bot) StripeWebhookHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if b.stripe == nil || !b.stripe.Configured() {
+			http.Error(w, "service unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1 MB
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			b.logger.Error("stripe webhook: read body", "error", err)
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		defer r.Body.Close()
+
+		if err := b.stripe.VerifyWebhookSignature(r.Header.Get("Stripe-Signature"), body); err != nil {
+			b.logger.Error("stripe webhook: invalid signature", "error", err)
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+
+		ctx := r.Context()
+		eventType, session, err := b.stripe.ParseWebhook(body)
+		if err != nil {
+			// The signature was valid, so a body that still fails to parse is
+			// a real anomaly: quarantine a digest, ACK once it is durable.
+			digest := sha256.Sum256(body)
+			recordErr := b.order.RecordPaymentAnomaly(ctx, storage.PaymentAnomaly{
+				Provider: storage.PaymentMethodStripe, RawPayload: fmt.Sprintf("sha256:%x", digest), Reason: "webhook_parse_failure",
+			})
+			if recordErr == nil || errors.Is(recordErr, storage.ErrPaymentNeedsReview) {
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+			b.logger.Error("stripe webhook: signed payload was not quarantined", "error", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+
+		if eventType != "checkout.session.completed" || session == nil {
+			// Other lifecycle events and id-less envelopes: acknowledge, settle nothing.
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		receipt, receiptErr := session.PaymentReceipt()
+		if receiptErr != nil {
+			anomaly, _ := session.PaymentAnomaly("webhook_invalid_receipt")
+			recordErr := b.order.RecordPaymentAnomaly(ctx, anomaly)
+			if recordErr == nil || errors.Is(recordErr, storage.ErrPaymentNeedsReview) {
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+			b.logger.Error("stripe webhook: invalid receipt was not quarantined", "session_id", session.ID)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+
+		outcome, err := b.order.ConfirmPaymentReceipt(ctx, receipt)
+		if err != nil {
+			// Same idempotent-ACK error classes as the yookassa webhook:
+			if errors.Is(err, storage.ErrOrderStatusConflict) || errors.Is(err, storage.ErrNotFound) ||
+				errors.Is(err, storage.ErrPaymentNeedsReview) || errors.Is(err, storage.ErrPaymentIdentityConflict) ||
+				errors.Is(err, storage.ErrPaymentReceiptMismatch) {
+				b.logger.Info("stripe webhook ignored (idempotent)", "session_id", session.ID, "reason", err)
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+			if errors.Is(err, storage.ErrProductOutOfStock) {
+				anomaly, _ := session.PaymentAnomaly("out_of_stock_after_charge")
+				if recordErr := b.order.RecordPaymentAnomaly(ctx, anomaly); recordErr == nil ||
+					errors.Is(recordErr, storage.ErrPaymentNeedsReview) {
+					w.WriteHeader(http.StatusOK)
+					return
+				}
+			}
+			b.logger.Error("stripe webhook: confirm payment", "session_id", session.ID, "error", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+
+		if b.metrics != nil {
+			b.metrics.SuccessfulPayments.WithLabelValues("stripe").Inc()
+		}
+		order := outcome.Order
+		lang := b.userLang(ctx, order.UserID)
+		b.send(tgbotapi.NewMessage(order.UserID, fmt.Sprintf(b.t(lang, "payment_success"), order.ID)))
+		b.NotifyPaymentOutcome(ctx, outcome)
+		b.notifyAdmins(ctx, AdminEventOrderPaid, fmt.Sprintf(b.t("en", "admin_order_paid_stripe"),
+			order.ID, order.UserID, order.TotalUSD))
+		b.outWebhook.Send(service.OutboundWebhookEvent{
+			Event: "order.paid", OrderID: order.ID, UserID: order.UserID,
+			TotalUSD: order.TotalUSD, TotalStars: order.TotalStars,
+			Method: "stripe", PaymentID: session.ID,
+		})
+		w.WriteHeader(http.StatusOK)
+	}
+}
+
 // TelegramWebhookHandler returns an http.HandlerFunc that processes incoming
 // Telegram updates delivered via webhook.
 func (b *Bot) TelegramWebhookHandler() http.HandlerFunc {
