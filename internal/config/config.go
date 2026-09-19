@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -113,7 +114,7 @@ func load(lookup lookupFunc) (*Config, error) {
 	usdToRUB := 0.0
 	if raw := strings.TrimSpace(value(lookup, "USD_TO_RUB_RATE")); raw != "" {
 		rate, err := strconv.ParseFloat(raw, 64)
-		if err != nil || rate <= 0 {
+		if err != nil || math.IsNaN(rate) || math.IsInf(rate, 0) || rate <= 0 {
 			return nil, fmt.Errorf("USD_TO_RUB_RATE: must be a positive number, got %q", raw)
 		}
 		usdToRUB = rate

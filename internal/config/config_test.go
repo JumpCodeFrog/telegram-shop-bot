@@ -426,8 +426,9 @@ func TestUSDToRUBRateDefaultsToZeroAndParsesFloat(t *testing.T) {
 		t.Errorf("USDToRUBRate = %v, want 92.5", cfg.USDToRUBRate)
 	}
 
-	// Invalid values must be rejected when set explicitly.
-	for _, raw := range []string{"abc", "-5", "0"} {
+	// Invalid values must be rejected when set explicitly, including the
+	// non-finite NaN/Inf spellings that ParseFloat accepts with err == nil.
+	for _, raw := range []string{"abc", "-5", "0", "NaN", "Inf"} {
 		values["USD_TO_RUB_RATE"] = raw
 		if _, err := LoadFromMap(values); err == nil {
 			t.Errorf("USD_TO_RUB_RATE = %q: expected error, got nil", raw)
