@@ -11,10 +11,17 @@ const (
 	OrderStatusDelivered = "delivered"
 	OrderStatusCancelled = "cancelled"
 
-	PaymentMethodStars    = "stars"
-	PaymentMethodCrypto   = "crypto"
-	PaymentMethodYooKassa = "yookassa"
-	PaymentMethodStripe   = "stripe"
+	PaymentMethodStars       = "stars"
+	PaymentMethodCrypto      = "crypto"
+	PaymentMethodYooKassa    = "yookassa"
+	PaymentMethodStripe      = "stripe"
+	PaymentMethodTON         = "ton"
+	PaymentMethodNowpayments = "nowpayments"
+	// PaymentMethodBalance is a DB-only forward-pin for the admin/balance
+	// feature: the ledger CHECKs admit it (migration 021) but the app layer
+	// accepts it nowhere until that feature lands — the same discipline as
+	// stripe-in-020.
+	PaymentMethodBalance = "balance"
 	// PaymentReviewProviderUnknown is a provider-neutral operator inbox for
 	// legacy paid rows whose original payment rail cannot be established.
 	PaymentReviewProviderUnknown = "unknown"
@@ -147,6 +154,7 @@ type Order struct {
 	TotalUSD               float64   `db:"total_usd"`
 	TotalStars             int       `db:"total_stars"`
 	TotalRUB               float64   `db:"total_rub"`
+	TotalTonNano           int64     `db:"total_ton_nano"`
 	PaymentMethod          string    `db:"payment_method"`
 	PaymentID              string    `db:"payment_id"`
 	DiscountPct            int       `db:"discount_pct"`
