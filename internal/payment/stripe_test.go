@@ -349,6 +349,64 @@ func TestStripeVerifyWebhookSignature(t *testing.T) {
 	})
 }
 
+func TestStripeParseWebhook(t *testing.T) {
+	client := NewStripePayment(stripeTestSecretKey, stripeTestWebhookSecret, stripeTestReturnURL)
+
+	completedBody := `{"id":"evt_1","type":"checkout.session.completed","data":{"object":{` +
+		`"id":"cs_test_1","status":"complete","payment_status":"paid",` +
+		`"amount_total":199900,"currency":"usd","metadata":{"order_id":"42"}}}}`
+
+	t.Run("completed event yields the session", func(t *testing.T) {
+		eventType, session, err := client.ParseWebhook([]byte(completedBody))
+		if err != nil {
+			t.Fatalf("ParseWebhook: %v", err)
+		}
+		if eventType != "checkout.session.completed" {
+			t.Fatalf("event type = %q, want checkout.session.completed", eventType)
+		}
+		if session == nil {
+			t.Fatal("session = nil, want the parsed checkout session")
+		}
+		if session.ID != "cs_test_1" || session.Status != "complete" || session.PaymentStatus != "paid" ||
+			session.AmountTotal != 199900 || session.Currency != "USD" || session.OrderID != 42 {
+			t.Fatalf("session = %+v", session)
+		}
+	})
+
+	t.Run("other events yield no session", func(t *testing.T) {
+		for _, eventType := range []string{"payment_intent.succeeded", "checkout.session.expired"} {
+			body := strings.Replace(completedBody, "checkout.session.completed", eventType, 1)
+			gotType, session, err := client.ParseWebhook([]byte(body))
+			if err != nil {
+				t.Fatalf("%s: ParseWebhook: %v", eventType, err)
+			}
+			if gotType != eventType {
+				t.Fatalf("event type = %q, want %q", gotType, eventType)
+			}
+			if session != nil {
+				t.Fatalf("%s yielded session %+v, want nil", eventType, session)
+			}
+		}
+	})
+
+	t.Run("completed event without session id yields no session", func(t *testing.T) {
+		body := `{"id":"evt_1","type":"checkout.session.completed","data":{"object":{}}}`
+		eventType, session, err := client.ParseWebhook([]byte(body))
+		if err != nil {
+			t.Fatalf("ParseWebhook: %v", err)
+		}
+		if eventType != "checkout.session.completed" || session != nil {
+			t.Fatalf("event type = %q session = %+v, want completed / nil", eventType, session)
+		}
+	})
+
+	t.Run("garbage JSON errors", func(t *testing.T) {
+		if _, _, err := client.ParseWebhook([]byte("not json at all")); err == nil {
+			t.Fatal("expected an error for undecodable JSON")
+		}
+	})
+}
+
 func TestStripeSessionPaymentReceipt(t *testing.T) {
 	valid := func() *StripeSession {
 		return &StripeSession{

@@ -150,6 +150,7 @@
   "admin_order_paid_stars": "⭐ Pedido #%d pagado (Stars) — usuario %d",
   "admin_order_paid_crypto": "💎 Pedido #%d pagado (Crypto) — usuario %d — $%.2f",
   "admin_order_paid_yookassa": "💳 Pedido #%d pagado con tarjeta (YooKassa)\nUsuario: %d\nImporte: %.2f ₽",
+  "admin_order_paid_stripe": "💳 Pedido #%d pagado con tarjeta (Stripe) — usuario %d — $%.2f",
   "admin_analytics_title": "📊 Estadísticas de los últimos %d días",
   "admin_analytics_total_orders": "Pedidos totales (histórico): %d",
   "admin_analytics_paid_orders": "Pedidos pagados (histórico): %d",

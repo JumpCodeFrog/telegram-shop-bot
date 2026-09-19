@@ -278,6 +278,37 @@ func (s *StripePayment) VerifyWebhookSignature(header string, body []byte) error
 	return ErrStripeSignatureMismatch
 }
 
+// stripeWebhookEnvelope is the outer shape of a Stripe event notification.
+// Only checkout.session.completed carries a session this shop settles.
+type stripeWebhookEnvelope struct {
+	ID   string `json:"id"`
+	Type string `json:"type"`
+	Data struct {
+		Object stripeSessionObject `json:"object"`
+	} `json:"data"`
+}
+
+// ParseWebhook parses a signature-verified Stripe event body and returns the
+// event type plus, for checkout.session.completed events that name a session,
+// the session snapshot. Any other event — or a completed event without a
+// session id — yields a nil session: there is nothing to settle. The caller
+// MUST have verified the webhook signature first; the parsed body is
+// authoritative and is never refetched from the API.
+func (s *StripePayment) ParseWebhook(body []byte) (string, *StripeSession, error) {
+	var event stripeWebhookEnvelope
+	if err := json.Unmarshal(body, &event); err != nil {
+		return "", nil, fmt.Errorf("stripe: parse webhook event: %w", err)
+	}
+	if event.Type != "checkout.session.completed" || event.Data.Object.ID == "" {
+		return event.Type, nil, nil
+	}
+	session, err := event.Data.Object.toSession()
+	if err != nil {
+		return event.Type, nil, err
+	}
+	return event.Type, session, nil
+}
+
 // PaymentReceipt turns a settled session into a ledger receipt. A session
 // settles only when it is complete AND paid, in USD, with a positive amount
 // and a resolvable order reference.
