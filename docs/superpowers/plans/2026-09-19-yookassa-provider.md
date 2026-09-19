@@ -448,6 +448,8 @@ git commit -m "feat(storage): orders.total_rub column (migration 019) and yookas
 - Create: `internal/storage/migrations/020_ledger_provider_yookassa.sql`
 - Test: `internal/storage/migration_020_test.go` (create; harness pattern: `migration_017_test.go` — build an older-schema DB, insert legacy rows, apply migrations, assert)
 
+**Correction (implemented as ruled):** step 0's claim that `defer_foreign_keys` alone suffices proved empirically false — a violation recorded by the parent's implicit DELETE at DROP time is still reported at COMMIT even after valid child rows are recreated. The shipped migration (020) therefore parks `payment_events` rows in an FK-less TEMP table (`CREATE TEMP TABLE payment_events_020_backup AS SELECT * FROM payment_events`), drops the child BEFORE the parent, rebuilds the parent, and recreates the child from the backup; `PRAGMA defer_foreign_keys=ON` remains armed as the first statement. Full rationale is documented in the migration header.
+
 **Rebuild mechanics (per table, all inside the single migration file — the migrator wraps each file in one transaction, and SQLite DDL is transactional):**
 0. **Begin the file with `PRAGMA defer_foreign_keys=ON;`** — load-bearing. The DSN enables `foreign_keys(1)` (db.go:122), the migrator executes the whole file in ONE transaction (`applyMigration`, db.go:210), and `PRAGMA foreign_keys` is a no-op inside a transaction. `payment_events.payment_attempt_id REFERENCES payment_attempts(id)` (017:165) means a bare `DROP TABLE payment_attempts` fails on its implicit DELETE whenever event rows exist. `defer_foreign_keys` postpones enforcement to COMMIT; ids are preserved by the explicit `INSERT … SELECT`, so all constraints are satisfied again at commit. The legacy-rows test MUST include at least one `payment_events` row with a non-NULL `payment_attempt_id` spanning the rebuild to exercise this. House precedent for the rebuild shape: `016_subscriptions_user_fk.sql` (CREATE `_fixed` → explicit-column INSERT SELECT → DROP → RENAME → recreate indexes). Note `018` is trigger-only (no DDL): the authoritative column definitions are 017's.
 1. `CREATE TABLE <name>_new (…)`: copy the full column definition from 017 (lines ~145-250) with the widened `provider` CHECK. Keep every other constraint (NOT NULL, DEFAULT, PRIMARY KEY, UNIQUE) byte-identical.
@@ -493,6 +495,61 @@ func TestYooKassaSettlementWritesLedgerRows(t *testing.T)
 **Commit:** `feat(storage): migration 020 widens ledger provider checks for yookassa/stripe`
 
 **Explicitly out of scope (Task 7 carries these):** app-level provider allowlists that still reject yookassa — `payment_ingress.go:54` (refund preview), `payment_resolutions.go:16` and `:468` (resolution validation).
+
+---
+
+### Task 3c: Storage acceptance — yookassa in fact/anomaly/ingress-audit validation (added by controller ruling)
+
+**Why this task exists:** migration 020 widened the DB CHECKs, but three app-level provider gates still reject yookassa on the settlement/ingress/quarantine paths that Tasks 4 and 6 depend on:
+1. `validatePaymentFact` (`internal/storage/order_state.go:78-89`) — `switch fact.Provider` has only stars/crypto cases; `default` returns `ErrPaymentReceiptMismatch`. This gates `UpdateOrderStatusWithPaymentFact` (`orders.go:281`) — the exact entry `shop.OrderService.ConfirmPaymentReceipt` uses.
+2. `RecordPaymentAnomaly` allowlist (`internal/storage/payment_anomalies.go:32`) — `(anomaly.Provider != PaymentMethodStars && anomaly.Provider != PaymentMethodCrypto)` rejects yookassa anomalies; gates the Task 6 webhook quarantine.
+3. `appendPaymentIngressAudit` allowlist (`internal/storage/payment_ingress_audit.go:39`) — same shape, returns `ErrPaymentReviewConflict`; gates ingress audit rows for yookassa.
+
+**Files:**
+- Modify: `internal/storage/order_state.go`, `internal/storage/payment_anomalies.go`, `internal/storage/payment_ingress_audit.go`
+- Test: `internal/storage/order_state_test.go` (extend), `internal/storage/payment_anomalies_test.go` (extend or nearest existing harness)
+
+**Changes (mirror the crypto shape exactly — yookassa facts carry `Currency: "RUB"`, `Scale: 2`, `PayerID: 0`):**
+
+1. `validatePaymentFact` — new case after `PaymentMethodCrypto`:
+```go
+	case PaymentMethodYooKassa:
+		if fact.Currency != "RUB" {
+			return PaymentFact{}, ErrPaymentReceiptMismatch
+		}
+```
+2. `payment_anomalies.go:32` — extend the allowlist: `(anomaly.Provider != PaymentMethodStars && anomaly.Provider != PaymentMethodCrypto && anomaly.Provider != PaymentMethodYooKassa)`.
+3. `payment_ingress_audit.go:39` — extend identically: `(provider != PaymentMethodStars && provider != PaymentMethodCrypto && provider != PaymentMethodYooKassa)`.
+
+Do NOT touch: refunds/resolutions allowlists (`ledger.go:190`, `ledger.go:238`, `payment_ingress.go:54`, `payment_resolutions.go:16`, `payment_resolutions.go:468`) — Task 7 owns those. Do NOT add `stripe` to app-level allowlists — the Stripe plan adds it when the provider exists (DB CHECK already carries it).
+
+**Tests (TDD, RED first):**
+```go
+func TestUpdateOrderStatusWithPaymentFactYooKassa(t *testing.T)
+    // Order pending, TotalRUB 1849.08. Fact: {Provider:"yookassa", ExternalID:"pay_1",
+    //   Currency:"RUB", AmountMinor:184908, Scale:2, OccurredAt: non-zero}.
+    // UpdateOrderStatusWithPaymentFact(ctx, id, "pending", "paid", fact) -> nil;
+    //   order paid, payment_method "yookassa", payment_id "pay_1";
+    //   payment_attempts row exists with provider "yookassa" (query the ledger table).
+    // Wrong currency ("USD") -> ErrPaymentReceiptMismatch, order stays pending.
+    // Wrong amount (184907) -> ErrPaymentReceiptMismatch.
+    // Replayed identical fact -> idempotent (no duplicate attempts row, no error
+    //   or the documented conflict class — assert what the crypto replay does).
+
+func TestRecordPaymentAnomalyAcceptsYooKassa(t *testing.T)
+    // Anomaly{Provider:"yookassa", ExternalID:"pay_2", Reason:"amount_mismatch",
+    //   RawAmount:"1.00", ProposedOrderID: valid order} -> recorded (no error or
+    //   the needs-review class), row queryable from payment_anomalies with provider "yookassa".
+
+func TestAppendPaymentIngressAuditAcceptsYooKassa(t *testing.T)
+    // Drive through the exported ingress/audit path if one exists; otherwise call
+    // appendPaymentIngressAudit directly (same package) inside a tx with a valid
+    // PaymentIngressAudit -> row in payment_ingress_audits; stars/crypto behavior unchanged.
+```
+
+**Verification:** `go test ./internal/storage/ -run "YooKassa" -v` then full `go build ./... && go test ./...` (~40s storage).
+
+**Commit:** `feat(storage): accept yookassa in payment fact, anomaly and ingress-audit validation`
 
 ---
 
