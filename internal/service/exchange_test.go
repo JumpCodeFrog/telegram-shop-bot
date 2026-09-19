@@ -1,6 +1,9 @@
 package service
 
-import "testing"
+import (
+	"math"
+	"testing"
+)
 
 func TestConvertUSDToRUB(t *testing.T) {
 	s := NewExchangeService(50, 92.5)
@@ -34,5 +37,37 @@ func TestConvertUSDToRUB(t *testing.T) {
 	exact := NewExchangeService(50, 100)
 	if got := exact.ConvertUSDToRUB(2.675); got != 267.50 {
 		t.Errorf("ConvertUSDToRUB(2.675) with rate 100 = %v, want 267.50", got)
+	}
+}
+
+func TestConvertUSDToNanoTON(t *testing.T) {
+	// Pins computed with the exact Go expression
+	// int64(math.Round(usd * 1e9 / usdPerTon)) — e.g. 19.99*1e9/5.13 is the
+	// float64 3896686159.8440547, which rounds to 3896686160.
+	tests := []struct {
+		name      string
+		usd       float64
+		usdPerTon float64
+		want      int64
+	}{
+		{name: "10 USD at 5.0", usd: 10, usdPerTon: 5.0, want: 2000000000},
+		{name: "19.99 USD at 5.13", usd: 19.99, usdPerTon: 5.13, want: 3896686160},
+		{name: "0.01 USD at 5.13", usd: 0.01, usdPerTon: 5.13, want: 1949318},
+		{name: "1 USD at 2.5", usd: 1, usdPerTon: 2.5, want: 400000000},
+		{name: "zero amount", usd: 0, usdPerTon: 5.13, want: 0},
+		{name: "negative amount", usd: -1, usdPerTon: 5.13, want: 0},
+		{name: "zero rate", usd: 10, usdPerTon: 0, want: 0},
+		{name: "negative rate", usd: 10, usdPerTon: -5.13, want: 0},
+		{name: "NaN amount", usd: math.NaN(), usdPerTon: 5.13, want: 0},
+		{name: "NaN rate", usd: 10, usdPerTon: math.NaN(), want: 0},
+		{name: "Inf amount", usd: math.Inf(1), usdPerTon: 5.13, want: 0},
+		{name: "Inf rate", usd: 10, usdPerTon: math.Inf(1), want: 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ConvertUSDToNanoTON(tt.usd, tt.usdPerTon); got != tt.want {
+				t.Errorf("ConvertUSDToNanoTON(%v, %v) = %d, want %d", tt.usd, tt.usdPerTon, got, tt.want)
+			}
+		})
 	}
 }

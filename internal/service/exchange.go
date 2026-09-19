@@ -64,3 +64,21 @@ func (s *ExchangeService) ConvertUSDToRUB(amountUSD float64) float64 {
 	}
 	return math.Round(amountUSD*(rate*100)) / 100
 }
+
+// ConvertUSDToNanoTON converts a USD amount to integer nanotons (TON minor
+// units, scale 9) at the given USD-per-TON rate. Returns 0 for non-positive,
+// NaN or infinite inputs so a bad rate lookup can never produce a negative
+// or runaway amount.
+//
+// Load-bearing: this is the ONLY float boundary for TON money — everything
+// downstream carries integer nanotons (int64). usd*1e9 stays far below 2^53
+// for shop-scale amounts, so the float64 product keeps full integer
+// precision and math.Round lands on the correct nearest nanoton.
+func ConvertUSDToNanoTON(usd, usdPerTon float64) int64 {
+	if usd <= 0 || usdPerTon <= 0 ||
+		math.IsNaN(usd) || math.IsNaN(usdPerTon) ||
+		math.IsInf(usd, 0) || math.IsInf(usdPerTon, 0) {
+		return 0
+	}
+	return int64(math.Round(usd * 1e9 / usdPerTon))
+}
