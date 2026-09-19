@@ -106,3 +106,40 @@ func YooKassaWebhookURL(raw string) string {
 	}
 	return base + "/yookassa-webhook"
 }
+
+// ValidateStripeConfig enforces all-or-none credentials, the Stripe key
+// prefixes, and an HTTPS return URL.
+func ValidateStripeConfig(secretKey, webhookSecret, returnURL string) error {
+	set := 0
+	for _, v := range []string{secretKey, webhookSecret, returnURL} {
+		if v != "" {
+			set++
+		}
+	}
+	if set == 0 {
+		return nil
+	}
+	if set != 3 {
+		return errors.New("STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET and STRIPE_RETURN_URL must be set together")
+	}
+	if !strings.HasPrefix(returnURL, "https://") {
+		return errors.New("STRIPE_RETURN_URL must be a public https:// URL")
+	}
+	if !strings.HasPrefix(secretKey, "sk_live_") && !strings.HasPrefix(secretKey, "sk_test_") {
+		return errors.New("STRIPE_SECRET_KEY must start with sk_live_ or sk_test_")
+	}
+	if !strings.HasPrefix(webhookSecret, "whsec_") {
+		return errors.New("STRIPE_WEBHOOK_SECRET must start with whsec_")
+	}
+	return nil
+}
+
+// StripeWebhookURL turns the configured public base URL into the Stripe
+// webhook endpoint, mirroring YooKassaWebhookURL.
+func StripeWebhookURL(raw string) string {
+	base := strings.TrimRight(strings.TrimSpace(raw), "/")
+	if base == "" {
+		return ""
+	}
+	return base + "/stripe-webhook"
+}
