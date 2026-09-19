@@ -1,515 +1,141 @@
 # Roadmap — Telegram Shop Bot
 
-> Полный профессиональный анализ проекта и приоритизированный план развития.  
-> Дата анализа: апрель 2026.
+> Актуализированный план развития проекта.
+> Дата ревизии: 19 сентября 2026 (заменяет анализ от апреля 2026).
 
 ---
 
-## 1. Общая оценка проекта
+## 1. Статус проекта
 
-Проект находится на уровне **«крепкий MVP, близкий к production-ready»**. Это одна из наиболее функционально насыщенных реализаций Telegram-магазина на чистом Go: чистая архитектура, FSM, rate-limiting, property-based тесты, Redis Streams, Prometheus — всё это редко встречается у конкурентов в open-source.
+Проект — **production-ready Telegram-магазин** с платёжной матрицей из трёх провайдеров
+(Telegram Stars, CryptoBot, YooKassa), Mini App, подписками, отзывами, мультифото,
+i18n на 5 языках, immutable payment ledger (миграции 017–020) и E2E-регрессией
+всего buyer journey.
 
-При этом есть несколько системных проблем, которые накапливают технический долг и начнут ограничивать масштабирование и сопровождение при росте базы пользователей или команды. Ни одна из них не критична прямо сейчас, но откладывать их нельзя.
-
-**Итоговая оценка:** 7.5 / 10
+Почти весь технический долг апрельского анализа закрыт (см. §2). Текущая оценка: **9 / 10**.
+Оставшиеся системные направления: расширение платёжной матрицы (Stripe, крипто),
+полное управление из админки, точечный quality-долг.
 
 ---
 
-## 2. Сильные стороны
+## 2. Закрыто с апрельского анализа
 
-| # | Что именно | Почему важно |
+| Пункт апрельского roadmap | Статус | Где |
 |---|---|---|
-| 1 | Чистая слоёная архитектура: `storage → shop/service → bot` | Изменения в одном слое не ломают другие |
-| 2 | Все сторы — интерфейсы в `interfaces.go` | Легко подменять реализации и мокать в тестах |
-| 3 | FSM с Redis-fallback на in-memory | Бот работает без Redis, не падает при его недоступности |
-| 4 | Идемпотентный `UpdateOrderStatus` через `fromStatus` | Защита от двойного списания при параллельных вебхуках |
-| 5 | Property-based тесты (`pgregory.net/rapid`) | Покрывают граничные случаи, которые сложно написать вручную |
-| 6 | Rate-limiting middleware с per-user token bucket | Защита от спама и DDoS на уровне приложения |
-| 7 | Panic recovery middleware | Падение одного хендлера не убивает весь бот |
-| 8 | Redis Streams для async loyalty | Правильная асинхронная очередь, не просто горутина |
-| 9 | Prometheus + Grafana из коробки | Observability с первого дня |
-| 10 | No CGO (modernc.org/sqlite) | Статически слинкованный бинарник, работает в scratch-контейнере |
-| 11 | Graceful shutdown через context | Рабочие горутины корректно завершаются по сигналу |
-| 12 | Транзакционное снятие stock при оплате | Нет оверселла при конкурентных заказах |
-| 13 | Webhook + polling авто-детект | Удобно и для разработки, и для продакшна |
-| 14 | i18n с fallback на English | Многоязычность заложена архитектурно |
+| 1.1 Индексы БД | ✅ | миграция `008_add_indexes.sql` |
+| 1.2 Дедупликация wishlist-уведомлений | ✅ | миграция `009_wishlist_notif_tracking.sql` |
+| 1.3 Хардкод русских строк в webhook | ✅ | i18n-ключи, `b.t(...)` во всех вебхуках |
+| 1.4 golangci-lint в CI | ✅ | `.golangci.yml` + workflow step |
+| 1.5 HTTP-таймауты + лимит тела | ✅ | `cmd/bot/main.go:311-313`, `MaxBytesReader` во всех вебхуках и webapi |
+| 2.1 Разбить handlers.go (1543 строки) | ✅ | тематические `handlers_*.go`; handlers.go = 428 строк |
+| 2.4 CryptoBot polling cursor | ✅ | `worker/polling.go`: windowed fetcher с continuation (`GetInvoicesWindow`) |
+| 2.3 Воркеры на интерфейсы | ✅ | `worker/polling.go` — `InvoiceFetcher`/`PaymentConfirmer`; воркеры покрыты тестами |
+| 2.6 Загрузка фото через бот | ✅ | wizard `StepPhoto`, `admin.go:135+` |
+| 2.7 `updated_at` автообновление | ✅ | миграция `010_orders_updated_at.sql` |
+| 2.8 Inline-режим каталога | ✅ | `internal/bot/handlers_inline.go` |
+| 3.1 Telegram Mini App | ✅ | `web/app/` + `internal/webapi/` |
+| 3.2 Отзывы и рейтинги | ✅ | миграция `012_reviews.sql` |
+| 3.3 Мультифото | ✅ | миграция `013_product_photos.sql`, `SendMediaGroup` |
+| 3.6 Подписки | ✅ | миграции `014/016`, Stars-рекурренты |
+| 3.8 E2E тесты | ✅ | `internal/bot/e2e_test.go` (+ YooKassa E2E) |
+| 3.5 Платёжный провайдер: ЮKassa | ✅ | смержено 19.09.2026 (21 коммит, см. CHANGELOG) |
+
+### Переоценённые пункты (решения ревизии)
+
+- **АРЕХ-2 (бизнес-логика в `UpdateOrderStatus`)** — после появления commerce ledger (миграция 017)
+  атомарное «status + stock + promo + ledger-факт» в одной транзакции является **намеренным
+  дизайном**: это единственный способ гарантировать отсутствие частичного сеттлмента.
+  Пункт снят; инвариант задокументирован в `docs/payment-operations.md`.
+- **P4 (`price_stars` в products и orders)** — снапшот цены на момент заказа, by design
+  (та же семантика, что `orders.total_rub` для RUB). Не дефект.
+- **P7** — закрыт миграцией 010.
 
 ---
 
-## 3. Слабые стороны и риски
+## 3. Программа «Roadmap Zero» (в работе, ночь 19–20.09.2026)
 
-### 3.1. Критические технические риски
+Порядок выполнения — от денежных рельсов к управлению к качеству. Каждый этап —
+отдельный SDD-план (`docs/superpowers/plans/`), TDD, ревью на каждую задачу,
+локальный мерж в main после финального ревью.
 
-**[РИСК-1] handlers.go — 1543 строки, admin.go — 640 строк**
+### Этап A — Stripe (USD, международные карты)
 
-Оба файла — God Objects. Весь Telegram UI-слой сосредоточен в двух файлах. Это:
-- Делает невозможным написание изолированных unit-тестов на хендлеры
-- Увеличивает вероятность конфликтов в git при параллельной разработке
-- Усложняет навигацию и поиск нужной логики
+- Checkout Sessions (hosted page, redirect — как YooKassa), raw HTTP без SDK.
+- Подписанные вебхуки `Stripe-Signature` (HMAC-SHA256, `t.v1` схема, constant-time compare) —
+  подпись доверенная, re-fetch не обязателен (в отличие от YooKassa).
+- Provider key `'stripe'` (уже принят DB CHECK миграцией 020); валюта USD, scale 2 —
+  конвертация не нужна (магазин USD-нативный).
+- Полный контур: бот (кнопка + handler + роутер), `/stripe-webhook`, webapi
+  `method=stripe`, payment-review/doctor, локали ×5, E2E, docs, CHANGELOG.
+- Payer-факты Stripe без Telegram-идентичности (PayerID 0) → предикат
+  `invalidProviderCapturePayer` обобщается и ужесточается до `== 0`
+  (carry-over из финального ревью YooKassa-ветки).
 
-**[РИСК-2] Нет индексов в базе данных**
+### Этап B — Крипто-расширение (TON + NOWPayments)
 
-В `001_init.sql` нет ни одного `CREATE INDEX`. При росте до 10 000+ заказов следующие запросы будут делать full table scan:
-- `SELECT * FROM orders WHERE user_id = ?`
-- `SELECT * FROM orders WHERE status = ?`
-- `SELECT * FROM cart_items WHERE user_id = ?`
-- `SELECT * FROM wishlist WHERE user_id = ?`
-- `SELECT * FROM loyalty_txs WHERE user_id = ?`
+- **TON** — нативная для Telegram крипта: прямые переводы на адрес магазина,
+  идентификация по memo=order_id, подтверждение polling-воркером через публичный API
+  (patron `worker/polling.go`), wallet deeplink `ton://transfer/...`. Валюта TON,
+  scale 9 (nanoton); курс `USD_PER_TON` из env со снапшотом в заказе.
+- **NOWPayments** — один интеграционный адаптер → 300+ монет (BTC/ETH/USDT/…):
+  hosted invoice (redirect), IPN-вебхук с HMAC-SHA512 (`x-nowpayments-sig`,
+  сортированный payload). Валюта счёта USD, scale 2 (конвертацию берёт на себя провайдер).
+- Миграция 021 — одно расширение ledger CHECK: `+ 'ton', 'nowpayments', 'balance'`
+  (batch, чтобы не пересобирать таблицы дважды).
+- Полный контур для каждого: бот, вебхук/воркер, webapi, ops, локали, E2E, docs.
 
-**[РИСК-3] WishlistWatcher спамит пользователей без дедупликации**
+### Этап C — Полное управление из админки
 
-`worker/wishlist.go` каждые 30 минут проверяет все записи вишлиста. Если цена упала, уведомление отправляется **каждый тик** без отметки «уже отправлено». Пользователь будет получать одно и то же сообщение бесконечно, пока цена не поднимется обратно.
+- **Разбивка `admin.go` (1094 строки)** на тематические файлы по образцу handlers_*:
+  products/categories, photo-wizard, orders, analytics, promos, btn-styles, payments.
+- **Платёжная очередь в боте**: заказы `needs_review` + аномалии (`payment_anomalies`)
+  списком, карточка факта, resolve-действия (settle после re-check / refund-recorded /
+  dismiss) — тот же контракт, что `make payment-review`, но из Telegram UI.
+- **Управление заказами**: фильтры по статусу, смена статусов, карточка заказа с
+  платёжным фактом.
+- **Пользователи и баланс**: список/поиск, начисление/списание баланса админом
+  (wiring существующего `BalanceStore` — закрывает РИСК-5 решением «реализовать»),
+  **оплата балансом** в checkout (provider `'balance'`, синхронный сеттлмент).
+- **Статус провайдеров** в админке (doctor-lite: какие рельсы сконфигурированы).
 
-**[РИСК-4] CryptoBotPolling грузит все оплаченные инвойсы**
+### Этап D — Quality sweep
 
-`worker/polling.go` вызывает `GetInvoices(ctx, "paid")` без курсора и пагинации. С ростом числа заказов это будет возвращать всё больше данных, большинство из которых уже обработаны. Нет отслеживания последнего обработанного invoice_id.
-
-**[РИСК-5] BalanceStore — мёртвая функция**
-
-Таблицы `balance_txs`, колонка `balance_usd` в `users`, модель `Transaction`, `BalanceStore` — всё это реализовано в storage, но нигде не вызывается из checkout-флоу. Метод оплаты `PaymentMethodBalance` существует как константа, но не подключён в `onOrderConfirm`. Если запустить «оплату балансом», ничего не произойдёт, но строка в orders создастся.
-
-### 3.2. Архитектурные проблемы
-
-**[АРЕХ-1] 51 вхождение `context.Background()` в обработчиках**
-
-Все хендлеры создают `ctx := context.Background()`. Это означает, что запросы к БД не учитывают таймаут или отмену от родительского контекста (например, пользователь отключился, а запрос к БД продолжается).
-
-**[АРЕХ-2] Бизнес-логика в storage-слое**
-
-`UpdateOrderStatus` в `internal/storage/orders.go` помимо изменения статуса выполняет:
-- Декремент stock всех товаров в заказе
-- Запись использования промокода
-- Обновление счётчика промокода
-
-Это три бизнес-операции в одной SQL-транзакции на уровне хранилища. Правильное место — `OrderService.ConfirmPayment` в `internal/shop/`.
-
-**[АРЕХ-3] Воркеры принимают конкретные типы вместо интерфейсов**
-
-- `OnboardingWorker` требует `*storage.SQLUserStore` (не интерфейс)
-- `LoyaltyWorker` требует `*storage.LoyaltyStoreImpl` (не интерфейс)
-- `WishlistWatcherWorker` требует `*storage.WishlistStore` (не интерфейс)
-
-Это ломает принцип зависимости от абстракций и не позволяет тестировать воркеры с моками.
-
-**[АРЕХ-4] Хардкод строк на русском в webhook.go**
-
-```go
-// internal/bot/webhook.go:75
-text := fmt.Sprintf("✅ Оплата заказа #%d прошла успешно!\n\nСпасибо за покупку!", payload.OrderID)
-```
-
-Это строка не проходит через i18n. Все уведомления о CryptoBot-оплате всегда на русском, независимо от языка пользователя.
-
-**[АРЕХ-5] `handleCallback` — цепочка if/else без структуры**
-
-Метод `handleCallback` содержит серию `strings.HasPrefix` проверок без паттерна Command/Router. Добавление новой кнопки требует редактирования этого монолита.
-
-### 3.3. Менее критичные проблемы
-
-| # | Проблема | Риск |
-|---|---|---|
-| P1 | `isAdmin()` — линейный поиск O(N) вместо map lookup | Незначительно, но неаккуратно |
-| P2 | Нет лимита на размер HTTP-запроса на эндпоинтах вебхука | DoS через огромное тело |
-| P3 | `go vet` в CI, но нет `golangci-lint` | Пропускаются статические ошибки, race conditions |
-| P4 | `price_stars` хранится и в `products`, и в `orders` | Рассинхрон при изменении курса после создания заказа |
-| P5 | Удаление категории не каскадирует на товары | FK references, но нет `ON DELETE CASCADE` |
-| P6 | Referral-коды генерируются через `math/rand` | Формально слабо для security-sensitive контекста |
-| P7 | Нет `updated_at` триггера / автообновления в orders | `updated_at` не обновляется при `UpdateOrderStatus` |
-| P8 | Нет таймаута на HTTP-сервере | Зависшие соединения не освобождаются |
+- `context.Background()` → propagated/timeout context в bot-хендлерах (~50 сайтов).
+- Carry-over из YooKassa-ledger (quality-батч): покрытие веток GetPayment;
+  `url.Parse` вместо `HasPrefix("https://")`; shared-хелпер миграционных тестов;
+  replay-leg `payment_state` re-assert; восстановить потерянный attempts-count assert
+  (`payment_receipt_test.go:587`); удалить dead `drained()`; покрыть quarantine-ветку
+  invalid-receipt (приоритет — security boundary) и out-of-stock на bot-слое;
+  pin mock `GET /v3/payments/{id}`.
+- Text-pass: устаревшие «USD→Stars» комментарии в `exchange.go`, YooKassa-раздел в
+  `docs/faq.md`, квалификатор поверхности «кнопка скрыта при rate=0» (bot vs webapp).
+- Webapp follow-up: `total_rub`/availability в cartJSON + условная RUB/USD-card кнопка.
+- `math/rand` → `crypto/rand` в реферальных кодах (P6).
+- Post-merge: перетегировать factless-envelope аномалию (`webhook_missing_payment_id`).
 
 ---
 
-## 4. Сравнение с лучшими open-source решениями
+## 4. Бэклог после программы
 
-### Топ-5 аналогов (2026)
-
-| Проект | Язык | Stars | Сильные стороны | Где мы лучше |
-|---|---|---|---|---|
-| **aiogram-shop-bot** | Python | ~3.2k | Mini Apps, широкая экосистема, активное сообщество | Типобезопасность, нет runtime-ошибок, один бинарник |
-| **grammY shop** | TypeScript | ~1.8k | Плагин-система, Deno/Node, хорошая документация | Производительность, zero deps, embedded DB |
-| **teleshop (Ruby)** | Ruby | ~900 | Отличный UI/UX в боте, ActiveRecord миграции | Память, Docker size, нет runtime |
-| **BotShop (Python/aiogram3)** | Python | ~600 | Inline-каталог, тонкая кастомизация | Архитектура, тесты, наблюдаемость |
-| **telebot-shop (Go)** | Go | ~200 | Близкая архитектура | Значительно более полный функционал, лучшее тестирование |
-
-### Где мы отстаём от лидеров
-
-| Возможность | Лидер | У нас |
-|---|---|---|
-| **Telegram Mini Apps** | aiogram-shop, grammY | ❌ Нет |
-| **Inline-режим каталога** | BotShop, grammY | ❌ Нет |
-| **Отзывы на товары / рейтинги** | aiogram-shop | ❌ Нет |
-| **Мультивалютность** | BotShop | ⚠️ Только USD + Stars |
-| **Загрузка фото через бот** | aiogram-shop | ❌ Только URL |
-| **CI с линтером** | Большинство | ⚠️ Только go vet |
-
-### Где мы выигрываем
-
-| Возможность | Наш уровень |
-|---|---|
-| Архитектура | ✅ Значительно чище, чем у всех Python-аналогов |
-| Property-based тесты | ✅ Уникально — ни у одного аналога нет `rapid` |
-| Observability (Prometheus+Grafana) | ✅ Только у единиц из аналогов |
-| Redis Streams для async задач | ✅ Архитектурно правильно |
-| Graceful shutdown | ✅ Корректный teardown воркеров |
-| Один статический бинарник | ✅ Smallest Docker image среди всех аналогов |
+| # | Задача | Сложность | Эффект |
+|---|---|---|---|
+| 4.1 | Topics-нотификации для админов (Supergroup Topics) | Low | Low |
+| 4.2 | Глубокая аналитика (топ-покупатели, отчёт по промокодам, фильтры CSV по датам) | Medium | Средний |
+| 4.3 | Coinbase Commerce / BTCPay (по запросу пользователей; NOWPayments покрывает основной спрос) | Medium | Средний |
+| 4.4 | Авто-рефанды через API провайдеров (сейчас — operator-driven, by design) | High | Средний |
+| 4.5 | Poller потерянных вебхуков YooKassa (сейчас покрыто ручным payment-review) | Medium | Средний |
 
 ---
 
-## 5. Приоритизированный план улучшения
-
----
-
-### Этап 1 — Must Have
-
-> Это технический долг, который мешает расти и поддерживать проект.
-
----
-
-#### 1.1. Добавить индексы в базу данных
-
-**Что:** Добавить новую миграцию `008_add_indexes.sql` с индексами на все горячие запросы.
-
-```sql
-CREATE INDEX IF NOT EXISTS idx_orders_user_id ON orders(user_id);
-CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
-CREATE INDEX IF NOT EXISTS idx_cart_items_user_id ON cart_items(user_id);
-CREATE INDEX IF NOT EXISTS idx_wishlist_user_id ON wishlist(user_id);
-CREATE INDEX IF NOT EXISTS idx_loyalty_txs_user_id ON loyalty_txs(user_id);
-CREATE INDEX IF NOT EXISTS idx_products_category_id ON products(category_id);
-CREATE INDEX IF NOT EXISTS idx_products_is_active ON products(is_active);
-```
-
-**Почему важно:** При базе в 10k заказов и 1k пользователей без индексов запрос `GetUserOrders` будет делать full scan по всей таблице на каждый `/orders`.  
-**Сложность:** Low  
-**Эффект:** Снижение latency на запросы к истории заказов, корзине, вишлисту — в 10-100x при росте данных.
-
----
-
-#### 1.2. Дедупликация уведомлений в WishlistWatcher
-
-**Что:** Добавить в таблицу `wishlist` колонки `price_drop_notified_at` и `back_in_stock_notified_at`. В воркере проверять: если уведомление уже было отправлено в этом «цикле» (цена не менялась), не отправлять повторно. Сбрасывать флаг при изменении цены/стока.
-
-**Почему важно:** Сейчас пользователи будут получать одно и то же сообщение каждые 30 минут бесконечно. Это гарантированный путь к блокировке бота и жалобам.  
-**Сложность:** Low  
-**Эффект:** Устранение спама. Корректная UX для вишлиста.
-
----
-
-#### 1.3. Исправить хардкод русских строк в webhook.go
-
-**Что:** Заменить все hardcoded строки на `b.t(lang, "key")`. Для этого нужно получить язык пользователя через `users.GetByTelegramID` и добавить ключи в `ru.json` / `en.json`.
-
-```go
-// Сейчас:
-text := fmt.Sprintf("✅ Оплата заказа #%d прошла успешно!\n\nСпасибо за покупку!", payload.OrderID)
-
-// Надо:
-user, _ := b.users.GetByTelegramID(ctx, order.UserID)
-lang := user.LanguageCode
-text := fmt.Sprintf(b.t(lang, "payment_success"), payload.OrderID)
-```
-
-**Почему важно:** Английский пользователь получает уведомление об оплате на русском — это критический UX-баг.  
-**Сложность:** Low  
-**Эффект:** Корректная i18n для всех платёжных уведомлений.
-
----
-
-#### 1.4. Добавить golangci-lint в CI
-
-**Что:** Добавить step в `.github/workflows/ci.yml`:
-
-```yaml
-- name: Lint
-  uses: golangci/golangci-lint-action@v6
-  with:
-    version: latest
-```
-
-И `.golangci.yml` с минимальным набором: `errcheck`, `govet`, `staticcheck`, `gosimple`, `unused`.
-
-**Почему важно:** `go vet` не ловит неотловленные ошибки (`err` присваивается `_`), гонки данных и многие статические проблемы. В текущем коде есть несколько мест с проигнорированными ошибками.  
-**Сложность:** Low  
-**Эффект:** Автоматическое обнаружение багов до merge.
-
----
-
-#### 1.5. Добавить таймаут на HTTP-сервер и лимит тела запроса
-
-**Что:** В `cmd/bot/main.go` заменить инициализацию HTTP-сервера:
-
-```go
-server := &http.Server{
-    Addr:         ":8080",
-    Handler:      mux,
-    ReadTimeout:  10 * time.Second,
-    WriteTimeout: 10 * time.Second,
-    IdleTimeout:  60 * time.Second,
-}
-```
-
-И в вебхук-хендлерах добавить `http.MaxBytesReader(w, r.Body, 1<<20)` (1 MB лимит).
-
-**Почему важно:** Без таймаутов медленный/злонамеренный клиент держит соединение вечно, исчерпывая goroutine pool.  
-**Сложность:** Low  
-**Эффект:** Защита от slow-client DoS.
-
----
-
-#### 1.6. Довести или задокументировать статус BalanceStore
-
-**Что:** Принять решение: либо подключить оплату балансом в `onOrderConfirm` и `checkout`-флоу, либо убрать мёртвый код (`BalanceStore`, `balance_txs`, `PaymentMethodBalance`, `balance_usd`).
-
-**Почему важно:** Мёртвый код вводит в заблуждение и создаёт ложное ощущение готовой функции. При попытке добавить оплату балансом разработчик потратит время на разбор «как это уже реализовано», обнаружит что ничего не работает.  
-**Сложность:** Low (удалить) / High (реализовать)  
-**Эффект:** Чистота кодовой базы или новый метод оплаты.
-
----
-
-### Этап 2 — Should Have
-
-> Важные улучшения для production-уровня и масштабирования.
-
----
-
-#### 2.1. Разбить handlers.go на тематические файлы
-
-**Что:** Разделить 1543-строчный файл на:
-
-```
-internal/bot/
-  handlers_catalog.go     # handleCatalog, sendCatalog, onCategorySelected, onProductSelected
-  handlers_cart.go        # handleCart, sendCart, onCartAdd, onCartPlus, onCartMinus, onCartDel
-  handlers_checkout.go    # onCartCheckout, onOrderConfirm, onPayStars, onPayCrypto, onPromoEnter
-  handlers_orders.go      # handleOrders, sendOrders, onOrderCancel
-  handlers_search.go      # handleSearch
-  handlers_wishlist.go    # handleWishlist, onWishlistToggle
-  handlers_profile.go     # handleProfile (уже есть profile.go, слить туда)
-  handlers_support.go     # onSupport, onPaySupport, onTerms
-  handlers_start.go       # handleStart, handleHelp, handleCancel
-  handlers_callback.go    # handleCallback (диспетчер без логики)
-  handlers_payment.go     # handlePreCheckout, handleSuccessfulPayment
-```
-
-**Почему важно:** При текущем размере любой PR в handlers.go почти гарантированно даёт merge-конфликты. Невозможно быстро найти нужный хендлер.  
-**Сложность:** Medium  
-**Эффект:** Кардинальное улучшение maintainability. Нулевой риск регрессий при аккуратном переименовании.
-
----
-
-#### 2.2. Вынести бизнес-логику из UpdateOrderStatus в service-слой
-
-**Что:** Убрать из `storage/orders.go` логику снятия stock, записи промо и обновления счётчиков. Перенести это в `shop.OrderService.ConfirmPayment` с явными вызовами:
-
-```go
-func (s *OrderService) ConfirmPayment(ctx context.Context, orderID int64, method, paymentID string) error {
-    // 1. Изменить статус (только статус, без бизнес-логики)
-    if err := s.orders.SetPaid(ctx, orderID, method, paymentID); err != nil { ... }
-    // 2. Снять stock
-    if err := s.products.DecrementStock(ctx, items...); err != nil { ... }
-    // 3. Записать промо
-    if err := s.promos.RecordUsage(ctx, ...); err != nil { ... }
-    return nil
-}
-```
-
-**Почему важно:** Сейчас storage-слой содержит бизнес-правила, что нарушает Clean Architecture и делает невозможным тестирование этой логики без реальной БД.  
-**Сложность:** Medium  
-**Эффект:** Тестируемость checkout-флоу, явная читаемость бизнес-правил.
-
----
-
-#### 2.3. Перевести воркеры на интерфейсы
-
-**Что:** Определить минимальные интерфейсы для каждого воркера:
-
-```go
-// worker/onboarding.go
-type userFinder interface {
-    GetNewUsersWithoutOrders(ctx context.Context, minAge, maxAge time.Duration) ([]storage.User, error)
-}
-```
-
-Аналогично для `LoyaltyWorker` и `WishlistWatcherWorker`.
-
-**Почему важно:** Сейчас воркеры невозможно покрыть тестами без поднятия реальной SQLite БД. Это нарушает принцип зависимости от абстракций.  
-**Сложность:** Low  
-**Эффект:** Тесты для воркеров без реальной БД.
-
----
-
-#### 2.4. Исправить CryptoBotPolling — добавить курсор
-
-**Что:** Хранить в Redis (или in-memory при старте) `last_processed_invoice_id`. В каждом тике запрашивать только инвойсы с ID > последнего обработанного.
-
-Альтернатива проще: запрашивать `active` инвойсы (их всегда мало), а не `paid`.
-
-**Почему важно:** При 1000+ оплаченных заказах текущий подход будет возвращать и обрабатывать весь исторический список каждые 30 секунд.  
-**Сложность:** Low  
-**Эффект:** O(new_invoices) вместо O(all_invoices).
-
----
-
-#### 2.5. Заменить context.Background() на propagated context
-
-**Что:** Передавать контекст из Telegram update в хендлеры. Создать вспомогательную функцию с таймаутом:
-
-```go
-func handlerCtx() (context.Context, context.CancelFunc) {
-    return context.WithTimeout(context.Background(), 30*time.Second)
-}
-```
-
-Долгосрочно — проброс контекста из polling/webhook loop.
-
-**Почему важно:** Запросы к БД не имеют таймаута. Один медленный запрос занимает goroutine навсегда.  
-**Сложность:** Medium  
-**Эффект:** Корректная отмена запросов, защита от зависших DB-соединений.
-
----
-
-#### 2.6. Добавить загрузку фото товаров через бот
-
-**Что:** В диалоге добавления товара (`StepPhoto`) поддержать отправку фото напрямую в чат (не только URL). Получать `file_id` через `GetFile`, сохранять его как `photo_url`.
-
-**Почему важно:** Все аналоги поддерживают загрузку фото. Требование вводить URL вручную — серьёзный барьер для нетехничных администраторов.  
-**Сложность:** Medium  
-**Эффект:** Существенное улучшение UX для admin-панели.
-
----
-
-#### 2.7. Добавить `updated_at` автообновление
-
-**Что:** Добавить SQLite-триггер или явное обновление `updated_at` в `UpdateOrderStatus`:
-
-```sql
-UPDATE orders SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE ...
-```
-
-**Почему важно:** Текущий `updated_at` устанавливается только при создании (`DEFAULT CURRENT_TIMESTAMP`). Аналитика по времени обработки заказов невозможна.  
-**Сложность:** Low  
-**Эффект:** Корректная аналитика времени жизни заказов.
-
----
-
-#### 2.8. Inline-режим каталога
-
-**Что:** Реализовать обработчик `update.InlineQuery` для поиска товаров через inline-запрос `@botname товар`. Возвращать `InlineQueryResultArticle` с карточками товаров.
-
-**Почему важно:** Позволяет делиться товарами в любом чате. Все топовые аналоги это поддерживают. В README упомянуто как будущая функция.  
-**Сложность:** Medium  
-**Эффект:** Вирусный рост — пользователи шарят товары друзьям.
-
----
-
-### Этап 3 — Nice-to-Have
-
-> Развитие продукта, конкурентные преимущества.
-
----
-
-#### 3.1. Telegram Mini App (Web App)
-
-**Что:** Разработать React/Vue Mini App для каталога и корзины. Backend API уже есть — нужен REST-слой поверх существующих сервисов.
-
-**Почему важно:** В 2025-2026 Mini Apps стали стандартом для серьёзных Telegram-магазинов. Большинство топовых конкурентов уже перешли. Возможности UX несравнимо богаче inline-кнопок.  
-**Сложность:** High  
-**Эффект:** Качественный скачок в UX. Выход на уровень топовых решений.
-
----
-
-#### 3.2. Система отзывов и рейтингов
-
-**Что:** После перевода заказа в `delivered` — запрашивать оценку (1-5 ⭐) и опциональный отзыв. Хранить в отдельной таблице `reviews`. Показывать средний рейтинг на карточке товара.
-
-**Почему важно:** Социальное доказательство. Увеличивает конверсию. Есть у aiogram-shop и большинства e-commerce платформ.  
-**Сложность:** Medium  
-**Эффект:** Повышение доверия к товарам, рост конверсии.
-
----
-
-#### 3.3. Несколько фото на товар (медиагруппы)
-
-**Что:** Заменить `photo_url TEXT` на отдельную таблицу `product_photos (product_id, file_id, sort_order)`. Отправлять через `SendMediaGroup`.
-
-**Почему важно:** Для одежды, обуви и аксессуаров одно фото — серьёзное ограничение. Конкуренты поддерживают галерею.  
-**Сложность:** Medium  
-**Эффект:** Лучшая презентация товаров.
-
----
-
-#### 3.4. Расширенная аналитика и дашборд
-
-**Что:** Добавить в admin-панель:
-- Графики продаж по дням/неделям (уже есть `GetRevenueByDays`, нужна визуализация в боте или Grafana)
-- Топ-пользователи по выручке
-- Отчёт по промокодам (использование, экономия)
-- Экспорт в CSV уже есть — добавить фильтр по датам
-
-**Сложность:** Medium  
-**Эффект:** Осмысленное управление магазином на основе данных.
-
----
-
-#### 3.5. Подключение второго платёжного провайдера (ЮKassa / Stripe)
-
-**Что:** Реализовать `PaymentProvider` интерфейс (уже определён в `service/payment.go`) для ЮKassa или Stripe. Интерфейс уже проектировался под это расширение.
-
-**Сложность:** High  
-**Эффект:** Оплата рублями через карты — критически важно для российской аудитории.
-
----
-
-#### 3.6. Подписки и периодические платежи
-
-**Что:** Добавить тип товара `subscription` с периодом (`monthly`, `yearly`). Автоматическое выставление инвойса через Stars recurring payments (Telegram добавил в 2025).
-
-**Сложность:** High  
-**Эффект:** Recurring revenue. Новый бизнес-юкейс.
-
----
-
-#### 3.7. Нотификации об изменении статуса заказа через Telegram Topics
-
-**Что:** Поддержка форумных топиков (Supergroup Topics) для группировки уведомлений администраторов по типу (новые заказы, оплаченные, доставленные).
-
-**Сложность:** Low  
-**Эффект:** Удобство для команд с несколькими администраторами.
-
----
-
-#### 3.8. Автоматизированные E2E тесты
-
-**Что:** Расширить `cmd/usability-smoke` до полноценного E2E-фреймворка с использованием mock Telegram API (уже есть `NewWithAPI`). Покрыть: старт → каталог → корзина → промокод → checkout → оплата Stars.
-
-**Сложность:** Medium  
-**Эффект:** Регрессионная защита для всего buyer journey.
-
----
-
-## Сводная таблица приоритетов
-
-| # | Задача | Этап | Сложность | Эффект |
-|---|---|---|---|---|
-| 1.1 | DB indexes | Must Have | Low | 🔥 Высокий |
-| 1.2 | Wishlist dedup | Must Have | Low | 🔥 Высокий |
-| 1.3 | i18n в webhook | Must Have | Low | 🔥 Высокий |
-| 1.4 | golangci-lint в CI | Must Have | Low | 📈 Средний |
-| 1.5 | HTTP таймауты | Must Have | Low | 🔥 Высокий |
-| 1.6 | BalanceStore решение | Must Have | Low/High | 📈 Средний |
-| 2.1 | Разбить handlers.go | Should Have | Medium | 📈 Средний |
-| 2.2 | Бизнес-логика из storage | Should Have | Medium | 📈 Средний |
-| 2.3 | Воркеры на интерфейсы | Should Have | Low | 📈 Средний |
-| 2.4 | CryptoBot polling cursor | Should Have | Low | 📈 Средний |
-| 2.5 | Context propagation | Should Have | Medium | 📈 Средний |
-| 2.6 | Загрузка фото в боте | Should Have | Medium | 🔥 Высокий |
-| 2.7 | updated_at в orders | Should Have | Low | Low |
-| 2.8 | Inline-режим каталога | Should Have | Medium | 🔥 Высокий |
-| 3.1 | Telegram Mini App | Nice-to-Have | High | 🚀 Очень высокий |
-| 3.2 | Отзывы и рейтинги | Nice-to-Have | Medium | 📈 Средний |
-| 3.3 | Мультифото | Nice-to-Have | Medium | 📈 Средний |
-| 3.4 | Расширенная аналитика | Nice-to-Have | Medium | 📈 Средний |
-| 3.5 | ЮKassa / Stripe | Nice-to-Have | High | 🚀 Очень высокий |
-| 3.6 | Подписки | Nice-to-Have | High | 🚀 Очень высокий |
-| 3.7 | Topics нотификации | Nice-to-Have | Low | Low |
-| 3.8 | E2E тесты | Nice-to-Have | Medium | 📈 Средний |
+## 5. Инварианты, которые нельзя ломать (для всех будущих планов)
+
+1. **Деньги в minor units** на каждой границе; одна формула конверсии на валюту;
+   снапшот курса в заказе при создании (env-изменение не перепраисывает заказы).
+2. **Settlement только через проверенный факт**: подписанный вебхук (crypto/Stripe/NOWPayments)
+   или авторитетный re-fetch (YooKassa) или on-chain подтверждение (TON). Тело неподписанного
+   вебхука — только идентификаторы.
+3. **Ledger immutable**: факты не правятся — только quarantine + resolution.
+4. **Один provider-ключ = одна миграция CHECK**; app-слой принимает только реализованные
+   провайдеры.
+5. **Подписки — только Stars** на всех поверхностях (бот, webapi, storage).
+6. При отключённом провайдере все checkout-поверхности **байт-идентичны** текущим.
