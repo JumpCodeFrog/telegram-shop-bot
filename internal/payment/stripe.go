@@ -39,8 +39,9 @@ const (
 )
 
 // StripePayment handles USD card payments via Stripe Checkout Sessions.
-// Webhooks are HMAC-signed; the session is still re-read from the API before
-// it can settle an order.
+// Webhooks are HMAC-signed: once the signature verifies, the signed body is
+// authoritative and settles the order WITHOUT any API refetch (see
+// ParseWebhook).
 type StripePayment struct {
 	secretKey     string
 	webhookSecret string

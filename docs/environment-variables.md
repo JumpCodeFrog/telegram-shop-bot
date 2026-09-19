@@ -69,6 +69,9 @@ When available, Redis is used for:
 | `YOOKASSA_SECRET_KEY` | _(empty)_ | YooKassa secret API key. Set only together with `YOOKASSA_SHOP_ID` and `YOOKASSA_RETURN_URL`. |
 | `YOOKASSA_RETURN_URL` | _(empty)_ | Public **HTTPS** page the buyer returns to after paying on the YooKassa checkout page. Set only together with the other YooKassa variables. |
 | `USD_TO_RUB_RATE` | `0` | RUB per 1 USD used to price RUB card payments, e.g. `92.5`. The USD price converts at this rate and the RUB total is snapshotted on the order at checkout. With the default `0` (or missing YooKassa credentials) the "Pay by card" button stays hidden. |
+| `STRIPE_SECRET_KEY` | _(empty)_ | Stripe API secret key for USD card payments; must start with `sk_live_` or `sk_test_`. Must be set together with `STRIPE_WEBHOOK_SECRET` and `STRIPE_RETURN_URL`; leave all three empty to disable USD card payments. |
+| `STRIPE_WEBHOOK_SECRET` | _(empty)_ | Signing secret of the `<WEBHOOK_URL>/stripe-webhook` endpoint (Stripe Dashboard → Developers → Webhooks); must start with `whsec_`. Set only together with the other Stripe variables. |
+| `STRIPE_RETURN_URL` | _(empty)_ | Public **HTTPS** page the buyer returns to after paying on Stripe's hosted Checkout page. Set only together with the other Stripe variables. |
 
 ---
 
@@ -81,7 +84,7 @@ When available, Redis is used for:
 
 > When `WEBHOOK_URL` is empty the bot uses **long polling** — recommended for local development.
 
-If CryptoBot is enabled, configure its callback as `<WEBHOOK_URL>/cryptobot-webhook`. If YooKassa is enabled, register `<WEBHOOK_URL>/yookassa-webhook` as the notification URL in the YooKassa merchant cabinet.
+If CryptoBot is enabled, configure its callback as `<WEBHOOK_URL>/cryptobot-webhook`. If YooKassa is enabled, register `<WEBHOOK_URL>/yookassa-webhook` as the notification URL in the YooKassa merchant cabinet. If Stripe is enabled, register `<WEBHOOK_URL>/stripe-webhook` in the Stripe dashboard (Developers → Webhooks) for `checkout.session.completed` and copy its signing secret into `STRIPE_WEBHOOK_SECRET`.
 
 ---
 

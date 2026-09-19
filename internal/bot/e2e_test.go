@@ -1128,3 +1128,218 @@ func TestE2EYooKassaPurchase(t *testing.T) {
 		t.Fatal("replay fired another outbound webhook event")
 	}
 }
+
+// --- Stripe USD journey ---
+
+// stripeE2ESessionURL is the hosted checkout page the fake Stripe API hands
+// back for created Checkout Sessions.
+const stripeE2ESessionURL = "https://checkout.stripe.com/pay/cs_e2e"
+
+// stripeE2EAPIMock is a fake Stripe API covering the single route the full
+// purchase journey may touch: POST /checkout/sessions (session creation from
+// the USD pay button). EVERY request is counted — Stripe webhooks are
+// HMAC-signed, so settlement must never refetch from the API, and the
+// defining assertion of the Stripe E2E is that the hit count stays at
+// exactly 1 (the create) after the webhook settles the order.
+type stripeE2EAPIMock struct {
+	mu   sync.Mutex
+	srv  *httptest.Server
+	hits int
+}
+
+func newStripeE2EAPIMock(t *testing.T) *stripeE2EAPIMock {
+	t.Helper()
+	m := &stripeE2EAPIMock{}
+	m.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		m.mu.Lock()
+		m.hits++
+		m.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodPost && r.URL.Path == "/checkout/sessions" {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id":  "cs_e2e",
+				"url": stripeE2ESessionURL,
+			})
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"error":{"type":"invalid_request_error","message":"unrecognized route"}}`))
+	}))
+	t.Cleanup(m.srv.Close)
+	return m
+}
+
+func (m *stripeE2EAPIMock) count() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.hits
+}
+
+// TestE2EStripePurchase walks the full USD card-payment journey: /start →
+// catalog → product card → cart → checkout → confirm (the USD card button is
+// offered because Stripe is configured) → pay:stripe → Checkout Session
+// creation → hosted-page URL button → SIGNED checkout.session.completed
+// webhook → settlement straight from the signature-verified body (order paid
+// via stripe, stock decremented once, loyalty points awarded once, buyer and
+// admin notified, outbound webhook fired) with the mock's hit count pinned at
+// exactly 1 — no refetch, unlike the unsigned YooKassa flow — and an
+// identical signed replay that settles nothing new.
+func TestE2EStripePurchase(t *testing.T) {
+	out := newOutboundCapture(t)
+	api := newStripeE2EAPIMock(t)
+	e := newE2EEnvWithConfig(t, func(c *config.Config) {
+		enableStripe(c)
+		c.OutboundWebhookURL = out.srv.URL
+	})
+	e.bot.stripe.SetBaseURL(api.srv.URL)
+	const buyer = int64(6001)
+
+	// /start registers the user; the catalog journey fills the cart.
+	calls := e.cmd(buyer, "/start", "en")
+	requireRender(t, calls, "back:catalog")
+	e.cb(buyer, "back:catalog", "en")
+	e.cb(buyer, fmt.Sprintf("category:%d", e.catID), "en")
+	e.cb(buyer, fmt.Sprintf("product:%d", e.prodReg), "en")
+	e.cb(buyer, fmt.Sprintf("cart:add:%d", e.prodReg), "en")
+	if got := e.qInt(`SELECT quantity FROM cart_items WHERE user_id = ? AND product_id = ?`, buyer, e.prodReg); got != 1 {
+		t.Fatalf("cart quantity = %d, want 1", got)
+	}
+
+	// Checkout and confirm: the USD card button is offered. USD needs no
+	// conversion — the $10.00 total is snapshotted straight onto the order.
+	e.cb(buyer, "cart:checkout", "en")
+	calls = e.cb(buyer, "order:confirm", "en")
+	orderID := e.qInt(`SELECT MAX(id) FROM orders WHERE user_id = ?`, buyer)
+	payScreen := requireRender(t, calls, fmt.Sprintf("pay:stars:%d", orderID))
+	if !strings.Contains(payScreen.markup(), fmt.Sprintf("pay:stripe:%d", orderID)) {
+		t.Fatalf("USD card pay button missing from the checkout screen: %s", payScreen.markup())
+	}
+	if got := e.qStr(`SELECT printf('%.2f', total_usd) FROM orders WHERE id = ?`, orderID); got != "10.00" {
+		t.Fatalf("order total_usd = %q, want 10.00", got)
+	}
+
+	// pay:stripe → the API creates the Checkout Session and the buyer gets a
+	// URL button leading to Stripe's hosted checkout page.
+	calls = e.cb(buyer, fmt.Sprintf("pay:stripe:%d", orderID), "en")
+	render := requireRender(t, calls, stripeE2ESessionURL)
+	var markup tgbotapi.InlineKeyboardMarkup
+	if err := json.Unmarshal([]byte(render.markup()), &markup); err != nil {
+		t.Fatalf("parse payment keyboard: %v", err)
+	}
+	if len(markup.InlineKeyboard) != 1 || len(markup.InlineKeyboard[0]) != 1 ||
+		markup.InlineKeyboard[0][0].URL == nil || *markup.InlineKeyboard[0][0].URL != stripeE2ESessionURL {
+		t.Fatalf("payment keyboard = %s, want a single URL button to %s", render.markup(), stripeE2ESessionURL)
+	}
+	if got := api.count(); got != 1 {
+		t.Fatalf("after pay button: API calls = %d, want 1 (session creation)", got)
+	}
+
+	// The signed payment notification arrives: status complete, payment paid,
+	// $10.00 → 1000 cents, carrying the real order id in metadata. The HMAC
+	// signature makes the body authoritative, so settlement consumes it
+	// WITHOUT any API refetch (unlike the unsigned YooKassa flow).
+	body := stripeEventBody("checkout.session.completed", "cs_e2e", "complete", "paid", 1000, orderID)
+	post := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/stripe-webhook", strings.NewReader(body))
+		req.Header.Set("Stripe-Signature", stripeWebhookSignature(stripeTestWebhookSecret, time.Now().Unix(), body))
+		rec := httptest.NewRecorder()
+		e.bot.StripeWebhookHandler()(rec, req)
+		return rec
+	}
+
+	before := e.tg.count()
+	if rec := post(); rec.Code != http.StatusOK {
+		t.Fatalf("webhook status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+
+	// Order paid via stripe with the session id as the payment id.
+	if got := e.qStr(`SELECT status FROM orders WHERE id = ?`, orderID); got != storage.OrderStatusPaid {
+		t.Fatalf("order status = %q, want paid", got)
+	}
+	if got := e.qStr(`SELECT payment_method FROM orders WHERE id = ?`, orderID); got != storage.PaymentMethodStripe {
+		t.Fatalf("payment_method = %q, want stripe", got)
+	}
+	if got := e.qStr(`SELECT payment_id FROM orders WHERE id = ?`, orderID); got != "cs_e2e" {
+		t.Fatalf("payment_id = %q, want cs_e2e", got)
+	}
+	if got := e.qInt(`SELECT COUNT(*) FROM payment_attempts
+		WHERE provider='stripe' AND external_id='cs_e2e' AND status='succeeded'`); got != 1 {
+		t.Fatalf("settled payment attempts = %d, want 1", got)
+	}
+	// Stock decremented exactly once: 5 → 4.
+	if got := e.qInt(`SELECT stock FROM products WHERE id = ?`, e.prodReg); got != 4 {
+		t.Fatalf("stock = %d, want 4", got)
+	}
+	// Loyalty: $10.00 at 1% bronze cashback → 10 points, one accrual.
+	if got := e.qInt(`SELECT loyalty_pts FROM users WHERE telegram_id = ?`, buyer); got != 10 {
+		t.Fatalf("loyalty_pts = %d, want 10", got)
+	}
+	if got := e.qInt(`SELECT COUNT(*) FROM loyalty_txs WHERE user_id = ? AND reason = 'purchase'`, e.userDBID(buyer)); got != 1 {
+		t.Fatalf("purchase loyalty_txs = %d, want 1", got)
+	}
+	// The buyer got the localized payment_success message.
+	lang := e.qStr(`SELECT COALESCE(language_code, '') FROM users WHERE telegram_id = ?`, buyer)
+	wantText := fmt.Sprintf(e.bot.t(lang, "payment_success"), orderID)
+	if !findMessage(e.tg.since(before), buyer, wantText) {
+		t.Fatalf("no payment_success message to buyer %d (lang %q):\n%s", buyer, lang, dumpCalls(e.tg.since(before)))
+	}
+	// The admin got the stripe card notification with the USD total.
+	adminNotified := false
+	for _, c := range e.tg.since(before) {
+		if c.Method == "sendMessage" && c.Params.Get("chat_id") == strconv.FormatInt(e2eAdminID, 10) {
+			if strings.Contains(c.Params.Get("text"), "Stripe") &&
+				strings.Contains(c.Params.Get("text"), "10.00") &&
+				strings.Contains(c.Params.Get("text"), fmt.Sprintf("#%d", orderID)) {
+				adminNotified = true
+			}
+		}
+	}
+	if !adminNotified {
+		t.Fatalf("no admin_order_paid_stripe message to admin %d:\n%s", e2eAdminID, dumpCalls(e.tg.since(before)))
+	}
+	// Defining assertion: settlement consumed only the signed body — the mock
+	// API's hit count stays at exactly 1 (the session creation), no refetch.
+	if got := api.count(); got != 1 {
+		t.Fatalf("API calls after webhook = %d, want still 1 (no refetch — the signed body is authoritative)", got)
+	}
+	// Outbound webhook fired with method stripe.
+	ev := out.wait(t)
+	if ev.Event != "order.paid" || ev.OrderID != orderID || ev.UserID != buyer ||
+		ev.Method != "stripe" || ev.PaymentID != "cs_e2e" {
+		t.Fatalf("outbound webhook event = %+v, want order.paid for order %d via stripe cs_e2e", ev, orderID)
+	}
+
+	// Webhook replay: the identical signed POST is ACKed with 200, settles
+	// nothing new, and still makes no API call.
+	beforeReplay := e.tg.count()
+	if rec := post(); rec.Code != http.StatusOK {
+		t.Fatalf("replayed webhook status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+	if got := api.count(); got != 1 {
+		t.Fatalf("API calls after replay = %d, want still 1 (no refetch)", got)
+	}
+	if got := e.qStr(`SELECT status FROM orders WHERE id = ?`, orderID); got != storage.OrderStatusPaid {
+		t.Fatalf("order status after replay = %q, want still paid", got)
+	}
+	if got := e.qStr(`SELECT payment_id FROM orders WHERE id = ?`, orderID); got != "cs_e2e" {
+		t.Fatalf("payment_id after replay = %q, want still cs_e2e", got)
+	}
+	if got := e.qInt(`SELECT stock FROM products WHERE id = ?`, e.prodReg); got != 4 {
+		t.Fatalf("stock after replay = %d, want still 4", got)
+	}
+	if got := e.qInt(`SELECT loyalty_pts FROM users WHERE telegram_id = ?`, buyer); got != 10 {
+		t.Fatalf("loyalty_pts after replay = %d, want still 10", got)
+	}
+	if got := e.qInt(`SELECT COUNT(*) FROM loyalty_txs WHERE user_id = ? AND reason = 'purchase'`, e.userDBID(buyer)); got != 1 {
+		t.Fatalf("purchase loyalty_txs after replay = %d, want still 1", got)
+	}
+	if got := e.qInt(`SELECT COUNT(*) FROM payment_attempts WHERE provider='stripe' AND external_id='cs_e2e'`); got != 1 {
+		t.Fatalf("payment_attempts after replay = %d, want still 1", got)
+	}
+	if got := e.tg.count() - beforeReplay; got != 0 {
+		t.Fatalf("replay sent %d messages, want 0:\n%s", got, dumpCalls(e.tg.since(beforeReplay)))
+	}
+	if !out.drained() {
+		t.Fatal("replay fired another outbound webhook event")
+	}
+}

@@ -37,6 +37,7 @@ A full-featured e-commerce bot for Telegram — catalog, cart, Telegram Stars & 
 - **Stars subscriptions** — recurring 30-day products, `/mysubs` to manage
 - **USDT via CryptoBot** (optional)
 - **RUB cards via YooKassa** (optional)
+- **USD cards via Stripe** (optional)
 - **Mini App** — full shop UI inside Telegram (opt-in via `WEBAPP_URL`)
 - **Reviews & ratings** — 1–5 ⭐ after delivery, average shown on the product card
 - Promo codes with category limits + personal one-off codes
@@ -236,6 +237,9 @@ Background worker polls payment status every 30 seconds. Signatures verified via
 **YooKassa (RUB)** — optional. Card payments: the buyer is redirected to the YooKassa checkout page, the order settles when YooKassa notifies the bot.  
 Set `YOOKASSA_SHOP_ID`, `YOOKASSA_SECRET_KEY`, `YOOKASSA_RETURN_URL` (public HTTPS) and `USD_TO_RUB_RATE` (RUB per 1 USD, e.g. `92.5`) — the first three must be set together, and with `USD_TO_RUB_RATE` at the default `0` the "Pay by card" button stays hidden. USD prices convert at the configured rate; the RUB total is snapshotted on the order at checkout. Register `<WEBHOOK_URL>/yookassa-webhook` as the notification URL in the YooKassa merchant cabinet. YooKassa notifications are unsigned — the body only identifies the payment, and settlement happens strictly after the bot re-fetches the authoritative payment state from the YooKassa API. Subscriptions remain Stars-only.
 
+**Stripe (USD)** — optional. Card payments in USD: the buyer is redirected to Stripe's hosted Checkout page, the order settles when Stripe notifies the bot.  
+Set `STRIPE_SECRET_KEY` (must start with `sk_live_` or `sk_test_`), `STRIPE_WEBHOOK_SECRET` (must start with `whsec_`) and `STRIPE_RETURN_URL` (public HTTPS) — all three must be set together. In the Stripe dashboard (Developers → Webhooks) register `<WEBHOOK_URL>/stripe-webhook` for `checkout.session.completed` and copy the endpoint's signing secret into `STRIPE_WEBHOOK_SECRET`. Stripe notifications are HMAC-signed: once the signature verifies, the signed body itself settles the order — no API refetch needed (unlike the unsigned YooKassa flow, which must re-fetch the payment). Orders below Stripe's $0.50 minimum are refused when the card button is tapped. Subscriptions remain Stars-only.
+
 **Stars subscriptions** — a product created as a "30-day subscription" is sold as a recurring Stars payment (`subscription_period=2592000`). Subscriptions are Stars-only; users manage them via `/mysubs`.
 
 ---
@@ -299,7 +303,7 @@ WEBHOOK_URL=https://shop.example.com
 TELEGRAM_WEBHOOK_SECRET=random-secret-string
 ```
 
-Telegram posts to `https://shop.example.com/telegram-webhook`. If CryptoBot is enabled, configure its webhook as `https://shop.example.com/cryptobot-webhook`. If YooKassa is enabled, register `https://shop.example.com/yookassa-webhook` as the notification URL in the YooKassa merchant cabinet.
+Telegram posts to `https://shop.example.com/telegram-webhook`. If CryptoBot is enabled, configure its webhook as `https://shop.example.com/cryptobot-webhook`. If YooKassa is enabled, register `https://shop.example.com/yookassa-webhook` as the notification URL in the YooKassa merchant cabinet. If Stripe is enabled, register `https://shop.example.com/stripe-webhook` in the Stripe dashboard (Developers → Webhooks).
 
 </details>
 
