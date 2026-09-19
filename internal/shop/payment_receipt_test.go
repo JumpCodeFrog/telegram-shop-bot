@@ -634,3 +634,163 @@ func TestConfirmPaymentReceiptYooKassa(t *testing.T) {
 		t.Fatalf("attempts=%d anomalies=%d settled=%+v", replayAttempts, replayAnomalies, settled)
 	}
 }
+
+// TestConfirmPaymentReceiptStripe pins the stripe receipt contract:
+// provider "stripe", currency USD, scale 2, cents equal to
+// round(order.TotalUSD*100) and a non-empty external id (no payer check:
+// stripe receipts carry PayerID 0 like crypto). Mismatched receipts are
+// rejected with the mismatch class without mutating the order (mock harness,
+// the shape TestConfirmPaymentReceiptRejectsStarsMismatchWithoutMutation
+// uses) and durably quarantined with the order left pending in needs review
+// (SQL harness, the shape TestMismatchedProviderReceiptIsDurablyQuarantined-
+// WithActualFacts uses). An exact replay of the settled receipt is an
+// idempotent status conflict like the yookassa replay.
+func TestConfirmPaymentReceiptStripe(t *testing.T) {
+	// Mismatch class, no order mutation (mock store has no anomaly recorder).
+	orders := &mockOrderStore{orders: map[int64]*storage.Order{
+		7: {ID: 7, UserID: 42, Status: storage.OrderStatusPending, TotalUSD: 12.34},
+		8: {ID: 8, UserID: 42, Status: storage.OrderStatusPending},
+	}}
+	svc := NewOrderService(orders, &mockCartStore{}, &mockProductStore{}, PaymentDeps{}, slog.Default())
+	for _, receipt := range []PaymentReceipt{
+		{OrderID: 7, Provider: "stripe", ExternalID: "cs_1", Currency: "USD", AmountMinor: 1233, Scale: 2},
+		{OrderID: 7, Provider: "stripe", ExternalID: "cs_1", Currency: "USD", AmountMinor: 1235, Scale: 2},
+		{OrderID: 7, Provider: "stripe", ExternalID: "cs_1", Currency: "RUB", AmountMinor: 1234, Scale: 2},
+		{OrderID: 7, Provider: "stripe", ExternalID: "cs_1", Currency: "USD", AmountMinor: 1234, Scale: 0},
+		{OrderID: 7, Provider: "stripe", ExternalID: "", Currency: "USD", AmountMinor: 1234, Scale: 2},
+		{OrderID: 8, Provider: "stripe", ExternalID: "cs_1", Currency: "USD", AmountMinor: 1234, Scale: 2},
+	} {
+		if _, err := svc.ConfirmPaymentReceipt(context.Background(), receipt); !errors.Is(err, storage.ErrPaymentReceiptMismatch) {
+			t.Fatalf("receipt=%+v err=%v", receipt, err)
+		}
+	}
+	if orders.orders[7].Status != storage.OrderStatusPending || orders.orders[8].Status != storage.OrderStatusPending {
+		t.Fatalf("orders mutated: 7=%+v 8=%+v", orders.orders[7], orders.orders[8])
+	}
+
+	// Durable quarantine with the receipt's actual facts (order 12.34 USD;
+	// the last leg targets an order whose USD snapshot is zero).
+	db, err := storage.New(filepath.Join(t.TempDir(), "stripe-receipt.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	store := storage.NewSQLOrderStore(db)
+	orderID, err := store.CreateOrder(ctx, &storage.Order{
+		UserID: 42, TotalUSD: 12.34, Status: storage.OrderStatusPending,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zeroUSDID, err := store.CreateOrder(ctx, &storage.Order{
+		UserID: 42, Status: storage.OrderStatusPending,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc = NewOrderService(store, storage.NewCartStore(db.Conn()), storage.NewSQLProductStore(db), PaymentDeps{}, slog.Default())
+	for _, receipt := range []PaymentReceipt{
+		{OrderID: orderID, Provider: "stripe", ExternalID: "stripe-low", Currency: "USD", AmountMinor: 1233, Scale: 2},
+		{OrderID: orderID, Provider: "stripe", ExternalID: "stripe-high", Currency: "USD", AmountMinor: 1235, Scale: 2},
+		{OrderID: orderID, Provider: "stripe", ExternalID: "stripe-rub", Currency: "RUB", AmountMinor: 1234, Scale: 2},
+		{OrderID: orderID, Provider: "stripe", ExternalID: "stripe-scale", Currency: "USD", AmountMinor: 1234, Scale: 0},
+		{OrderID: orderID, Provider: "stripe", ExternalID: "", Currency: "USD", AmountMinor: 1234, Scale: 2},
+		{OrderID: zeroUSDID, Provider: "stripe", ExternalID: "stripe-zero-usd", Currency: "USD", AmountMinor: 1234, Scale: 2},
+	} {
+		want := storage.ErrPaymentNeedsReview
+		if receipt.ExternalID == "" {
+			// An identity-less fact cannot be quarantined durably; it is
+			// rejected with the mismatch class instead.
+			want = storage.ErrPaymentReceiptMismatch
+		}
+		if _, err := svc.ConfirmPaymentReceipt(ctx, receipt); !errors.Is(err, want) {
+			t.Fatalf("receipt=%+v err=%v want=%v", receipt, err, want)
+		}
+	}
+	for _, leg := range []struct {
+		externalID string
+		amount     int64
+		currency   string
+	}{
+		{"stripe-low", 1233, "USD"},
+		{"stripe-high", 1235, "USD"},
+		{"stripe-rub", 1234, "RUB"},
+		{"stripe-scale", 1234, "USD"},
+		{"stripe-zero-usd", 1234, "USD"},
+	} {
+		var amount, payer int64
+		var currency string
+		if err := db.Conn().QueryRow(`
+			SELECT amount_minor, payer_id, currency FROM payment_anomalies
+			WHERE provider='stripe' AND external_id=?`, leg.externalID).Scan(&amount, &payer, &currency); err != nil {
+			t.Fatalf("anomaly %s: %v", leg.externalID, err)
+		}
+		if amount != leg.amount || payer != 0 || currency != leg.currency {
+			t.Fatalf("anomaly %s: amount=%d payer=%d currency=%s", leg.externalID, amount, payer, currency)
+		}
+	}
+	var anomalies, attempts int64
+	_ = db.Conn().QueryRow(`SELECT COUNT(*) FROM payment_anomalies WHERE proposed_order_id=?`, orderID).Scan(&anomalies)
+	if anomalies != 4 {
+		t.Fatalf("order anomalies=%d, want 4 (the empty-external-id leg leaves no row)", anomalies)
+	}
+	_ = db.Conn().QueryRow(`SELECT COUNT(*) FROM payment_anomalies WHERE proposed_order_id=?`, zeroUSDID).Scan(&anomalies)
+	if anomalies != 1 {
+		t.Fatalf("zero-usd order anomalies=%d, want 1", anomalies)
+	}
+	_ = db.Conn().QueryRow(`SELECT COUNT(*) FROM payment_attempts WHERE order_id=?`, orderID).Scan(&attempts)
+	_ = db.Conn().QueryRow(`SELECT COUNT(*) FROM payment_attempts WHERE order_id=?`, zeroUSDID).Scan(&attempts)
+	if attempts != 0 {
+		t.Fatalf("attempts=%d, want 0", attempts)
+	}
+	mismatched, _ := store.GetOrder(ctx, orderID)
+	zeroUSD, _ := store.GetOrder(ctx, zeroUSDID)
+	if mismatched.Status != storage.OrderStatusPending || mismatched.PaymentState != storage.PaymentStateNeedsReview ||
+		zeroUSD.Status != storage.OrderStatusPending || zeroUSD.PaymentState != storage.PaymentStateNeedsReview {
+		t.Fatalf("mismatched=%+v zeroUSD=%+v", mismatched, zeroUSD)
+	}
+
+	// Valid receipt settles the order; the attempt row carries the validated facts.
+	settledID, err := store.CreateOrder(ctx, &storage.Order{
+		UserID: 42, TotalUSD: 12.34, Status: storage.OrderStatusPending,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt := PaymentReceipt{OrderID: settledID, Provider: "stripe", ExternalID: "cs_test_1", Currency: "USD", AmountMinor: 1234, Scale: 2}
+	outcome, err := svc.ConfirmPaymentReceipt(ctx, receipt)
+	if err != nil {
+		t.Fatalf("valid receipt: %v", err)
+	}
+	if outcome == nil || outcome.Order == nil || outcome.Order.Status != storage.OrderStatusPaid {
+		t.Fatalf("outcome=%+v", outcome)
+	}
+	var currency string
+	var amount int64
+	if err := db.Conn().QueryRow(`SELECT currency, amount_minor FROM payment_attempts WHERE external_id='cs_test_1'`).Scan(&currency, &amount); err != nil {
+		t.Fatal(err)
+	}
+	if currency != "USD" || amount != 1234 {
+		t.Fatalf("attempt currency=%s amount=%d", currency, amount)
+	}
+	var events int64
+	_ = db.Conn().QueryRow(`SELECT COUNT(*) FROM payment_events WHERE provider='stripe' AND external_id='cs_test_1'`).Scan(&events)
+	if events != 1 {
+		t.Fatalf("events=%d, want 1", events)
+	}
+
+	// Exact replay: idempotent status conflict; the order settles exactly once.
+	if _, err := svc.ConfirmPaymentReceipt(ctx, receipt); !errors.Is(err, storage.ErrOrderStatusConflict) {
+		t.Fatalf("replay error=%v", err)
+	}
+	var replayAttempts, replayAnomalies int64
+	_ = db.Conn().QueryRow(`SELECT COUNT(*) FROM payment_attempts WHERE order_id=?`, settledID).Scan(&replayAttempts)
+	_ = db.Conn().QueryRow(`SELECT COUNT(*) FROM payment_anomalies WHERE proposed_order_id=?`, settledID).Scan(&replayAnomalies)
+	settled, _ := store.GetOrder(ctx, settledID)
+	if replayAttempts != 1 || replayAnomalies != 0 || settled.Status != storage.OrderStatusPaid ||
+		settled.PaymentState != storage.PaymentStateSettled ||
+		settled.PaymentMethod != storage.PaymentMethodStripe || settled.PaymentID != "cs_test_1" {
+		t.Fatalf("attempts=%d anomalies=%d settled=%+v", replayAttempts, replayAnomalies, settled)
+	}
+}
