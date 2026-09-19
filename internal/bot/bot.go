@@ -69,6 +69,7 @@ type Bot struct {
 	stars           *payment.StarsPayment
 	crypto          *payment.CryptoBotPayment
 	yookassa        *payment.YooKassaPayment
+	stripe          *payment.StripePayment
 	logger          *slog.Logger
 	metrics         *service.MetricsService
 	fsm             storage.FSMStore
@@ -174,6 +175,7 @@ func NewWithAPI(cfg *config.Config, api *tgbotapi.BotAPI, db *storage.DB, metric
 		stars:           payment.NewStarsPayment(api, os, translate),
 		crypto:          payment.NewCryptoBotPayment(cfg.CryptoBotToken),
 		yookassa:        payment.NewYooKassaPayment(cfg.YooKassaShopID, cfg.YooKassaSecretKey, cfg.YooKassaReturnURL),
+		stripe:          payment.NewStripePayment(cfg.StripeSecretKey, cfg.StripeWebhookSecret, cfg.StripeReturnURL),
 		logger:          logger,
 		metrics:         metrics,
 		fsm:             fsm,
@@ -232,6 +234,13 @@ func (b *Bot) cryptoPaymentsEnabled() bool {
 // positive RUB snapshot (checked per-order at button build time).
 func (b *Bot) yooKassaPaymentsEnabled() bool {
 	return b.yookassa != nil && b.yookassa.Configured() && b.cfg != nil && b.cfg.USDToRUBRate > 0
+}
+
+// stripePaymentsEnabled reports whether USD card payments via Stripe can be
+// offered: the adapter is fully configured. No conversion is needed — the
+// order's USD snapshot is charged directly.
+func (b *Bot) stripePaymentsEnabled() bool {
+	return b.stripe != nil && b.stripe.Configured()
 }
 
 // registerCommands registers the bot command list with Telegram so the "/" menu shows up.

@@ -256,6 +256,83 @@ func (b *Bot) onPayYooKassa(cbID string, chatID, userID int64, msgID int, data, 
 	b.send(reply)
 }
 
+func (b *Bot) onPayStripe(cbID string, chatID, userID int64, msgID int, data, lang string) {
+	if !b.stripePaymentsEnabled() {
+		b.alert(cbID, b.t(lang, "stripe_unavailable"))
+		return
+	}
+
+	orderID, err := parseIDFromCallback(data, "pay:stripe:")
+	if err != nil {
+		b.logger.Error("parse pay:stripe callback", "error", err)
+		b.ack(cbID)
+		return
+	}
+
+	ctx := context.Background()
+	target, err := b.loadPayableOrder(ctx, userID, orderID)
+	if err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			b.alert(cbID, b.t(lang, "order_not_found"))
+			return
+		}
+		if errors.Is(err, storage.ErrOrderStatusConflict) {
+			b.alert(cbID, b.t(lang, "order_already_paid"))
+			return
+		}
+		b.logger.Error("load payable order for stripe payment", "order_id", orderID, "error", err)
+		b.alert(cbID, b.t(lang, "error_short"))
+		return
+	}
+
+	// Subscription products are payable with Telegram Stars only.
+	if _, subDays, subErr := b.orderSubscriptionProduct(ctx, target); subErr != nil {
+		b.logger.Error("detect subscription product for stripe payment", "order_id", orderID, "error", subErr)
+		b.alert(cbID, b.t(lang, "error_short"))
+		return
+	} else if subDays > 0 {
+		b.alert(cbID, b.t(lang, "sub_stars_only"))
+		return
+	}
+
+	// Stripe refuses USD card charges below $0.50, so a tiny order total
+	// surfaces the same "unavailable" alert as an unconfigured adapter.
+	amountCents := int64(math.Round(target.TotalUSD * 100))
+	if amountCents < 50 {
+		b.alert(cbID, b.t(lang, "stripe_unavailable"))
+		return
+	}
+
+	// Show skeleton state while generating the checkout session.
+	skeletonKeyboard := tgbotapi.NewInlineKeyboardMarkup(
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData(b.t(lang, "btn_generating_invoice"), "noop"),
+		),
+	)
+	editSkeleton := tgbotapi.NewEditMessageReplyMarkup(chatID, msgID, skeletonKeyboard)
+	b.send(editSkeleton)
+	b.ack(cbID)
+
+	invoice, err := b.stripe.CreateCheckoutSession(ctx, orderID, amountCents, b.t(lang, "stripe_invoice_desc"))
+	if err != nil {
+		b.logger.Error("create stripe checkout session", "error", err)
+		b.send(tgbotapi.NewMessage(chatID, b.t(lang, "payment_error")))
+		return
+	}
+
+	keyboard := tgbotapi.NewInlineKeyboardMarkup(
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonURL(b.t(lang, "btn_pay_stripe"), invoice.PayURL),
+		),
+	)
+
+	text := fmt.Sprintf(b.t(lang, "stripe_pay_title"), orderID, target.TotalUSD)
+	reply := tgbotapi.NewMessage(chatID, text)
+	reply.ParseMode = "HTML"
+	reply.ReplyMarkup = keyboard
+	b.send(reply)
+}
+
 // --- Payment handlers ---
 
 // handlePreCheckout handles Telegram PreCheckoutQuery for Stars payments.
