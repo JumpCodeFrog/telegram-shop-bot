@@ -211,7 +211,9 @@ func TestChangeQuantity_RejectsOutOfStockIncrease(t *testing.T) {
 // TestCartViewTotalRUB verifies TotalRUB is computed once from TotalUSD at the
 // end of Get() (not summed per item, where per-item rounding drifts): 1x$10.00
 // + 2x$4.995 => TotalUSD 19.99, and 19.99 at rate 92.5 -> 1849.08 RUB (the
-// half-kopeck 1849.075 rounds up). Without an exchange service or with a zero
+// half-kopeck 1849.075 rounds up). A drifting multi-item cart (3x$6.663) pins
+// the same rule where the two strategies disagree: once-at-end 1848.98 RUB vs
+// per-item 3x616.33 = 1848.99 RUB. Without an exchange service or with a zero
 // RUB rate (RUB disabled) TotalRUB stays 0.
 func TestCartViewTotalRUB(t *testing.T) {
 	cartMock := &mockCartStore{items: []storage.CartItem{
@@ -233,6 +235,33 @@ func TestCartViewTotalRUB(t *testing.T) {
 	}
 	if math.Abs(view.TotalRUB-1849.08) > 1e-9 {
 		t.Fatalf("TotalRUB=%f, want 1849.08", view.TotalRUB)
+	}
+
+	// Drifting multi-item cart: 3 x $6.663 at rate 92.5. Converting once at
+	// the end of Get() (see the drift comment in cart.go) gives
+	// ConvertUSDToRUB(19.989) = 1848.98, while per-item conversion would give
+	// 3 x ConvertUSDToRUB(6.663) = 3 x 616.33 = 1848.99. The leg pins the
+	// once-at-end rule: a single-item cart cannot distinguish the two.
+	driftCartMock := &mockCartStore{items: []storage.CartItem{
+		{UserID: 42, ProductID: 3, Quantity: 1},
+		{UserID: 42, ProductID: 4, Quantity: 1},
+		{UserID: 42, ProductID: 5, Quantity: 1},
+	}}
+	driftProductMock := &mockProductStore{byID: map[int64]*storage.Product{
+		3: {ID: 3, CategoryID: 1, Name: "widget", PriceUSD: 6.663, PriceStars: 333, IsActive: true, Stock: 10},
+		4: {ID: 4, CategoryID: 1, Name: "bolt", PriceUSD: 6.663, PriceStars: 333, IsActive: true, Stock: 10},
+		5: {ID: 5, CategoryID: 1, Name: "gizmo", PriceUSD: 6.663, PriceStars: 333, IsActive: true, Stock: 10},
+	}}
+
+	driftView, err := NewCartService(driftCartMock, driftProductMock, service.NewExchangeService(50, 92.5)).Get(context.Background(), 42)
+	if err != nil {
+		t.Fatalf("unexpected error for drifting cart: %v", err)
+	}
+	if math.Abs(driftView.TotalUSD-19.989) > 1e-9 {
+		t.Fatalf("drifting TotalUSD=%f, want 19.989", driftView.TotalUSD)
+	}
+	if math.Abs(driftView.TotalRUB-1848.98) > 1e-9 {
+		t.Fatalf("drifting TotalRUB=%f, want 1848.98 (once-at-end), not 1848.99 (per item)", driftView.TotalRUB)
 	}
 
 	// No exchange service wired: TotalRUB stays 0.
