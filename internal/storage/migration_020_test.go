@@ -382,8 +382,8 @@ func TestMigration020ImmutabilityTriggersSurviveRebuild(t *testing.T) {
 	applyLedgerProviderRebuild(t, db)
 
 	aborts := []struct {
-		note     string
-		want     string
+		note      string
+		want      string
 		statement string
 	}{
 		{"payment_attempts amount update", "identity is immutable",
