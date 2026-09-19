@@ -43,6 +43,16 @@ type Config struct {
 	StripeSecretKey     string
 	StripeWebhookSecret string
 	StripeReturnURL     string
+	// TON on-chain payments (polling via toncenter — no webhook). The wallet
+	// address and USDPerTON enable the provider together; TONAPIKey is
+	// optional (higher toncenter rate limits) and may be empty.
+	TONWalletAddress string
+	USDPerTON        float64
+	TONAPIKey        string
+	// NOWPayments crypto payments. All three must be set together or none.
+	NowpaymentsAPIKey    string
+	NowpaymentsIPNSecret string
+	NowpaymentsReturnURL string
 }
 
 // Load reads configuration from environment variables.
@@ -124,11 +134,32 @@ func load(lookup lookupFunc) (*Config, error) {
 
 	usdToRUB := 0.0
 	if raw := strings.TrimSpace(value(lookup, "USD_TO_RUB_RATE")); raw != "" {
-		rate, err := strconv.ParseFloat(raw, 64)
-		if err != nil || math.IsNaN(rate) || math.IsInf(rate, 0) || rate <= 0 {
-			return nil, fmt.Errorf("USD_TO_RUB_RATE: must be a positive number, got %q", raw)
+		rate, err := parsePositiveFloat(raw)
+		if err != nil {
+			return nil, fmt.Errorf("USD_TO_RUB_RATE: %w", err)
 		}
 		usdToRUB = rate
+	}
+
+	tonAddress := strings.TrimSpace(value(lookup, "TON_WALLET_ADDRESS"))
+	tonAPIKey := strings.TrimSpace(value(lookup, "TON_API_KEY"))
+	usdPerTON := 0.0
+	if raw := strings.TrimSpace(value(lookup, "USD_PER_TON")); raw != "" {
+		rate, err := parsePositiveFloat(raw)
+		if err != nil {
+			return nil, fmt.Errorf("USD_PER_TON: %w", err)
+		}
+		usdPerTON = rate
+	}
+	if err := ValidateTONConfig(tonAddress, usdPerTON, tonAPIKey); err != nil {
+		return nil, err
+	}
+
+	nowAPIKey := strings.TrimSpace(value(lookup, "NOWPAYMENTS_API_KEY"))
+	nowIPNSecret := strings.TrimSpace(value(lookup, "NOWPAYMENTS_IPN_SECRET"))
+	nowReturn := strings.TrimSpace(value(lookup, "NOWPAYMENTS_RETURN_URL"))
+	if err := ValidateNowpaymentsConfig(nowAPIKey, nowIPNSecret, nowReturn); err != nil {
+		return nil, err
 	}
 
 	return &Config{
@@ -159,6 +190,12 @@ func load(lookup lookupFunc) (*Config, error) {
 		StripeSecretKey:       stripeSecret,
 		StripeWebhookSecret:   stripeWebhookSecret,
 		StripeReturnURL:       stripeReturn,
+		TONWalletAddress:      tonAddress,
+		USDPerTON:             usdPerTON,
+		TONAPIKey:             tonAPIKey,
+		NowpaymentsAPIKey:     nowAPIKey,
+		NowpaymentsIPNSecret:  nowIPNSecret,
+		NowpaymentsReturnURL:  nowReturn,
 	}, nil
 }
 
@@ -210,6 +247,17 @@ func parseOptionalInt64(s string) (int64, error) {
 	n, err := strconv.ParseInt(s, 10, 64)
 	if err != nil {
 		return 0, fmt.Errorf("must be a number, got %q", s)
+	}
+	return n, nil
+}
+
+// parsePositiveFloat parses s as a positive finite float64. Non-numeric input
+// and the non-finite NaN/Inf spellings that ParseFloat accepts with err == nil
+// are rejected, as are zero and negative values.
+func parsePositiveFloat(s string) (float64, error) {
+	n, err := strconv.ParseFloat(s, 64)
+	if err != nil || math.IsNaN(n) || math.IsInf(n, 0) || n <= 0 {
+		return 0, fmt.Errorf("must be a positive number, got %q", s)
 	}
 	return n, nil
 }

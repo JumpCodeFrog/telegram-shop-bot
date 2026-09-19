@@ -143,3 +143,70 @@ func StripeWebhookURL(raw string) string {
 	}
 	return base + "/stripe-webhook"
 }
+
+// tonFriendlyAddressLength is the length of a base64url-encoded TON friendly
+// address (36 bytes: workchain flag + workchain + 256-bit hash + CRC16).
+const tonFriendlyAddressLength = 48
+
+// ValidateTONConfig enforces the TON polling-provider combination: a wallet
+// address requires a positive USD_PER_TON rate, the rate requires the
+// address, and the optional toncenter API key is valid only alongside both.
+func ValidateTONConfig(address string, usdPerTON float64, apiKey string) error {
+	if address == "" {
+		if usdPerTON > 0 {
+			return errors.New("USD_PER_TON requires TON_WALLET_ADDRESS to be set")
+		}
+		if apiKey != "" {
+			return errors.New("TON_API_KEY requires TON_WALLET_ADDRESS and USD_PER_TON to be set")
+		}
+		return nil
+	}
+	if usdPerTON <= 0 {
+		return errors.New("USD_PER_TON must be set and positive when TON_WALLET_ADDRESS is set")
+	}
+	// Shape check only: a well-formed-but-wrong address fails at toncenter
+	// polling time, not at boot — full validation is toncenter's job.
+	if len(address) != tonFriendlyAddressLength {
+		return errors.New("TON_WALLET_ADDRESS must be a 48-character base64url friendly address")
+	}
+	for _, ch := range address {
+		if (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+			(ch >= '0' && ch <= '9') || ch == '_' || ch == '-' {
+			continue
+		}
+		return errors.New("TON_WALLET_ADDRESS must be base64url (A-Z, a-z, 0-9, underscore and hyphen only)")
+	}
+	return nil
+}
+
+// ValidateNowpaymentsConfig enforces all-or-none credentials and an HTTPS
+// return URL, mirroring the Stripe validator. NOWPayments documents no key
+// or secret prefixes, so none are enforced.
+func ValidateNowpaymentsConfig(apiKey, ipnSecret, returnURL string) error {
+	set := 0
+	for _, v := range []string{apiKey, ipnSecret, returnURL} {
+		if v != "" {
+			set++
+		}
+	}
+	if set == 0 {
+		return nil
+	}
+	if set != 3 {
+		return errors.New("NOWPAYMENTS_API_KEY, NOWPAYMENTS_IPN_SECRET and NOWPAYMENTS_RETURN_URL must be set together")
+	}
+	if !strings.HasPrefix(returnURL, "https://") {
+		return errors.New("NOWPAYMENTS_RETURN_URL must be a public https:// URL")
+	}
+	return nil
+}
+
+// NowpaymentsWebhookURL turns the configured public base URL into the
+// NOWPayments IPN endpoint, mirroring StripeWebhookURL.
+func NowpaymentsWebhookURL(raw string) string {
+	base := strings.TrimRight(strings.TrimSpace(raw), "/")
+	if base == "" {
+		return ""
+	}
+	return base + "/nowpayments-webhook"
+}
