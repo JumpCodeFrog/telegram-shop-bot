@@ -438,6 +438,63 @@ git commit -m "feat(storage): orders.total_rub column (migration 019) and yookas
 
 ---
 
+### Task 3b: Migration 020 — ledger provider CHECK rebuild (added by controller ruling)
+
+**Why this task exists:** `017_commerce_ledger.sql` pins `CHECK (provider IN ('stars','crypto'))` on six ledger tables (`payment_attempts`, `payment_events`, `refunds`, `payment_anomalies`, `payment_resolutions` — which also allows `'unknown'` — and `payment_ingress_audits`). Every YooKassa settlement/anomaly/refund INSERT fails on the CHECK (verified empirically during Task 3). SQLite cannot ALTER a CHECK constraint: the six tables must be rebuilt.
+
+**Ruling on CHECK content:** the rebuilt CHECKs list `'stars','crypto','yookassa','stripe'` (plus `'unknown'` for `payment_resolutions`). `'stripe'` is included now because Stripe is the approved immediate follow-up plan and a second 6-table rebuild of the immutable ledger is the costlier risk; the app layer (`orderMoney` default case) rejects `stripe` facts until the Stripe provider exists, so the DB CHECK remains a safety net, not a feature flag. The Stripe plan MUST use provider key `stripe`.
+
+**Files:**
+- Create: `internal/storage/migrations/020_ledger_provider_yookassa.sql`
+- Test: `internal/storage/migration_020_test.go` (create; harness pattern: `migration_017_test.go` — build an older-schema DB, insert legacy rows, apply migrations, assert)
+
+**Rebuild mechanics (per table, all inside the single migration file — the migrator wraps each file in one transaction, and SQLite DDL is transactional):**
+1. `CREATE TABLE <name>_new (…)`: copy the full column definition from 017 (lines ~145-250) with the widened `provider` CHECK. Keep every other constraint (NOT NULL, DEFAULT, PRIMARY KEY, UNIQUE) byte-identical.
+2. `INSERT INTO <name>_new (<explicit column list>) SELECT <same column list> FROM <name>;` — never `SELECT *`.
+3. `DROP TABLE <name>;` — this silently drops the table's triggers and indexes.
+4. `ALTER TABLE <name>_new RENAME TO <name>;`
+5. Recreate indexes (017 lines 254-260): `idx_payment_attempts_order`, `idx_payment_events_order_time`, `idx_payment_anomalies_provider_time`, `idx_refunds_order`, `idx_refunds_payment_identity`, `idx_payment_resolutions_order`, `idx_payment_ingress_audits_order`.
+6. Recreate triggers — **current versions**: `payment_attempts_identity_no_update` and `refunds_identity_no_update` from **018** (they supersede 017's); `payment_attempts_entitlement_once`, `payment_attempts_no_delete`, `refunds_no_delete` from 017; `payment_events_no_update/no_delete`, `payment_anomalies_no_update/no_delete`, `payment_resolutions_no_update/no_delete`, `payment_ingress_audits_no_update/no_delete` from 017 (lines ~389-429). Use `CREATE TRIGGER` (no `IF NOT EXISTS` needed after DROP; `DROP TRIGGER IF EXISTS` first is acceptable defensive style matching 018).
+   `order_events` and `idx_order_events_order_time` are NOT touched (no provider column).
+
+**Tests (`migration_020_test.go`):**
+```go
+func TestMigration020PreservesLegacyLedgerRows(t *testing.T)
+    // Build a DB at schema 019 (apply 001..019 via the production migrator or the
+    // 017-test harness), insert representative rows into all six tables
+    // (stars + crypto providers), apply 020, assert every row survives byte-identical
+    // and all 7 indexes exist (sqlite_master query).
+
+func TestMigration020AcceptsYooKassaAndStripeProviders(t *testing.T)
+    // After 020: INSERT provider='yookassa' succeeds into all six tables
+    // (payment_resolutions also 'unknown'); INSERT provider='stripe' succeeds;
+    // INSERT provider='paypal' still fails with a CHECK constraint error.
+
+func TestMigration020ImmutabilityTriggersSurviveRebuild(t *testing.T)
+    // After 020: UPDATE payment_attempts SET amount_minor=… -> RAISE abort
+    //   ("identity is immutable" — the 018 trigger text);
+    // UPDATE of provider/external_id on refunds -> abort;
+    // DELETE FROM payment_events -> abort; DELETE FROM payment_anomalies -> abort;
+    // DELETE FROM payment_resolutions / payment_ingress_audits -> abort;
+    // UPDATE on payment_events/anomalies/resolutions/ingress_audits -> abort (no_update triggers).
+
+func TestYooKassaSettlementWritesLedgerRows(t *testing.T)
+    // The end-to-end storage settlement the Task 3 round-trip test had to stop short of:
+    // create an order with TotalRUB, UpdateOrderStatusWithPaymentFact (or the
+    // UpdateOrderStatus path) with a yookassa fact (RUB, 184908, scale 2, external id)
+    // -> succeeds; payment_attempts row exists with provider 'yookassa';
+    // a replayed identical fact is idempotent; a conflicting fact quarantines
+    // (ErrPaymentNeedsReview) instead of failing on a CHECK.
+```
+
+**Verification:** `go test ./internal/storage/ -run "Migration020|YooKassaSettlement" -v` then the full suite `go build ./... && go test ./...` (~40s storage).
+
+**Commit:** `feat(storage): migration 020 widens ledger provider checks for yookassa/stripe`
+
+**Explicitly out of scope (Task 7 carries these):** app-level provider allowlists that still reject yookassa — `payment_ingress.go:54` (refund preview), `payment_resolutions.go:16` and `:468` (resolution validation).
+
+---
+
 ### Task 4: Shop layer — CartView.TotalRUB, order snapshot, receipt validation
 
 **Files:**
