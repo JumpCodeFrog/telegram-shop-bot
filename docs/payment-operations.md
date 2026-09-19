@@ -30,7 +30,14 @@ processed; it only distinguishes an exact end from truncation.
 ```bash
 telegram-shop-bot payment-review list --provider stars
 telegram-shop-bot payment-review list --provider crypto
+telegram-shop-bot payment-review list --provider yookassa
 telegram-shop-bot payment-review list --provider unknown
+```
+
+Or through make:
+
+```bash
+make payment-review PROVIDER=yookassa
 ```
 
 The list returns exit `1` while targets exist. Record the printed `order`,
@@ -138,6 +145,75 @@ telegram-shop-bot payment-review resolve \
 
 This appends an immutable operator resolution and changes the order to
 `cancelled`; it creates no payment attempt, refund, entitlement, or revenue.
+
+## 5. YooKassa (RUB card) operations
+
+### Security model: unsigned webhook, authoritative refetch
+
+YooKassa notifications are unsigned. The `/yookassa-webhook` body is used only
+to learn the event type and the payment id; settlement happens only after the
+bot refetches the payment with an authenticated `GET /v3/payments/{id}` call.
+A `payment.succeeded` notification therefore settles nothing by itself: the
+refetched payment must be terminal, paid, an exact positive RUB amount with two
+fractional digits, and bound to the local order's money tuple and id. Any
+disagreement quarantines the fact instead of settling.
+
+Known limitation: the `/yookassa-webhook` endpoint is unauthenticated (YooKassa
+provides no notification signature). Each request provokes at most one upstream
+`GetPayment`; unparseable or factless bodies are quarantined and acknowledged
+without any upstream call. If the endpoint is abused, rate-limit it at the
+reverse proxy — settlement is still impossible without valid credentials and a
+matching order.
+
+### What quarantined YooKassa facts look like
+
+Quarantined facts are `payment_anomalies` rows with provider `yookassa` and the
+order in `needs_review`:
+
+| Reason | Meaning |
+|---|---|
+| `webhook_parse_failure` | Unparseable webhook body, stored as a sha256 digest only |
+| `webhook_invalid_receipt` | Refetched payment cannot produce a valid receipt |
+| `receipt_mismatch` | Valid receipt that disagrees with the order's money tuple |
+
+YooKassa facts carry no payer id (the provider has no Telegram payer
+identity), so payer checks compare money and order linkage only.
+
+### Resolve flow
+
+```bash
+make payment-review PROVIDER=yookassa
+```
+
+The semantics are identical to the Stars and crypto flows above: the list exits
+`1` while targets exist and prints local ids and reason codes only; resolve
+previews read-only first and then applies with `--apply --confirm-order N`.
+A quarantined capture still requires a durable succeeded refund before it can
+be resolved to `settled`.
+
+### Refunds
+
+Refunds are operator-driven: initiate them in the YooKassa dashboard or via
+the YooKassa API. Nothing in this bot refunds automatically — the webhook
+acknowledges `refund.*` notifications without touching the ledger. The ledger
+records a refund through its refund ingestion path (`RecordRefund` /
+`IngestProviderRefund`), which validates it against the immutable captured
+attempt (exact parent identity, money tuple, cumulative amount) and appends
+durable review evidence for anything that disagrees. There is no dedicated
+refund-ingress CLI for YooKassa yet: `payment-review ingest-stars` reads the
+Telegram Bot API and cannot serve this rail.
+
+### RUB rate snapshots
+
+`orders.total_rub` is frozen at order creation from `USD_TO_RUB_RATE`. Changing
+the environment variable later changes only future orders; it never reprices
+existing ones, and quarantined facts are validated against the frozen order
+total.
+
+### Subscriptions
+
+Subscriptions remain Stars-only. The RUB button is never offered for
+subscription carts.
 
 ## Exit codes
 

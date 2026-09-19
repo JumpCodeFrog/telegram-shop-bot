@@ -59,17 +59,27 @@ func RunPaymentReview(ctx context.Context, args []string, opts PaymentReviewOpti
 
 func printPaymentReviewUsage(out io.Writer) {
 	fmt.Fprintln(out, "Usage:")
-	fmt.Fprintln(out, "  telegram-shop-bot payment-review list --provider stars|crypto|unknown")
-	fmt.Fprintln(out, "  telegram-shop-bot payment-review resolve --provider stars|crypto|unknown --order N [--event N|--anomaly N|--order-target N] --state STATE [--decision compensated|accepted_refund|dismissed] --actor NAME --reason TEXT [--apply --confirm-order N]")
+	fmt.Fprintln(out, "  telegram-shop-bot payment-review list --provider stars|crypto|yookassa|unknown")
+	fmt.Fprintln(out, "  telegram-shop-bot payment-review resolve --provider stars|crypto|yookassa|unknown --order N [--event N|--anomaly N|--order-target N] --state STATE [--decision compensated|accepted_refund|dismissed] --actor NAME --reason TEXT [--apply --confirm-order N]")
 	fmt.Fprintln(out, "  telegram-shop-bot payment-review ingest-stars --kind capture|refund --transaction ID --order N --actor NAME --reason TEXT [--apply --confirm-order N]")
+}
+
+// validPaymentReviewProvider accepts exactly the providers whose quarantined
+// facts the review inbox can list and resolve.
+func validPaymentReviewProvider(provider string) bool {
+	switch provider {
+	case "stars", "crypto", storage.PaymentMethodYooKassa, storage.PaymentReviewProviderUnknown:
+		return true
+	default:
+		return false
+	}
 }
 
 func runPaymentReviewList(ctx context.Context, args []string, opts PaymentReviewOptions) int {
 	fs := flag.NewFlagSet("payment-review list", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	provider := fs.String("provider", "", "provider: stars, crypto, or unknown")
-	if err := fs.Parse(args); err != nil || fs.NArg() != 0 ||
-		(*provider != "stars" && *provider != "crypto" && *provider != storage.PaymentReviewProviderUnknown) {
+	provider := fs.String("provider", "", "provider: stars, crypto, yookassa, or unknown")
+	if err := fs.Parse(args); err != nil || fs.NArg() != 0 || !validPaymentReviewProvider(*provider) {
 		fmt.Fprintln(paymentReviewOut(opts), "Payment review: invalid list arguments")
 		return 2
 	}
@@ -108,7 +118,7 @@ func runPaymentReviewList(ctx context.Context, args []string, opts PaymentReview
 func runPaymentReviewResolve(ctx context.Context, args []string, opts PaymentReviewOptions) int {
 	fs := flag.NewFlagSet("payment-review resolve", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	provider := fs.String("provider", "", "provider: stars, crypto, or unknown")
+	provider := fs.String("provider", "", "provider: stars, crypto, yookassa, or unknown")
 	orderID := fs.Int64("order", -1, "order id; 0 for an orphan anomaly")
 	state := fs.String("state", "", "resulting payment state")
 	decision := fs.String("decision", "", "explicit anomaly or neutral-import decision")
@@ -121,7 +131,7 @@ func runPaymentReviewResolve(ctx context.Context, args []string, opts PaymentRev
 	fs.Var(&eventIDs, "event", "exact payment event id; repeatable")
 	fs.Var(&anomalyIDs, "anomaly", "exact payment anomaly id; repeatable")
 	if err := fs.Parse(args); err != nil || fs.NArg() != 0 || *orderID < 0 ||
-		(*provider != "stars" && *provider != "crypto" && *provider != storage.PaymentReviewProviderUnknown) ||
+		!validPaymentReviewProvider(*provider) ||
 		(*decision != "" && *decision != "compensated" && *decision != "accepted_refund" && *decision != "dismissed") ||
 		strings.TrimSpace(*actor) == "" || strings.TrimSpace(*reason) == "" {
 		fmt.Fprintln(paymentReviewOut(opts), "Payment review: invalid resolve arguments")
