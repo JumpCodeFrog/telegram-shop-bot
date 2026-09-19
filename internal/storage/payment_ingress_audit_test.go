@@ -12,8 +12,9 @@ import (
 // payer id the YooKassa API never provides, and the refund ingress gate
 // belongs to Task 7 — so the unexported helper is driven directly inside a
 // transaction, exactly the way recordPaymentAnomaly calls it. The stars
-// behavior is unchanged and the allowlist still fails closed for providers
-// without an app-level identity (stripe stays DB-only until its plan adds it).
+// behavior is unchanged; stripe is accepted too since the stripe provider
+// plan's storage acceptance task added its app-level identity, and the
+// allowlist still fails closed for providers without one.
 // Feature: shop_bot, Property 2: Round-trip хранилища данных
 // Validates: Requirements 12.5, 9.3
 func TestAppendPaymentIngressAuditAcceptsYooKassa(t *testing.T) {
@@ -104,15 +105,41 @@ func TestAppendPaymentIngressAuditAcceptsYooKassa(t *testing.T) {
 		t.Fatalf("commit stars audit: %v", err)
 	}
 
-	// The allowlist still fails closed for providers with no app-level
-	// identity: stripe is DB-only and stays rejected here.
+	// Stripe behavior mirrors yookassa: the stripe provider plan's storage
+	// acceptance task added its app-level identity, so the same call shape
+	// appends and the durable row attributes the operator write.
+	stripeAudit := PaymentIngressAudit{Actor: "operator:stripe", Reason: "stripe quarantine reviewed"}
 	tx, err = db.Conn().BeginTx(ctx, nil)
 	if err != nil {
 		t.Fatalf("begin stripe tx: %v", err)
 	}
+	if err := appendPaymentIngressAudit(ctx, tx, orderID, PaymentMethodStripe,
+		PaymentEventCaptured, PaymentIngressTargetAnomaly, anomalyID, stripeAudit); err != nil {
+		tx.Rollback()
+		t.Fatalf("append stripe audit: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit stripe audit: %v", err)
+	}
+	var stripeProvider string
+	if err := db.Conn().QueryRowContext(ctx,
+		`SELECT provider FROM payment_ingress_audits WHERE provider = ? AND actor = ?`,
+		PaymentMethodStripe, "operator:stripe").Scan(&stripeProvider); err != nil {
+		t.Fatalf("load stripe audit: %v", err)
+	}
+	if stripeProvider != PaymentMethodStripe {
+		t.Fatalf("stripe audit provider=%s", stripeProvider)
+	}
+
+	// The allowlist still fails closed for providers with no app-level
+	// identity.
+	tx, err = db.Conn().BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin unknown provider tx: %v", err)
+	}
 	defer tx.Rollback()
-	if err := appendPaymentIngressAudit(ctx, tx, orderID, "stripe",
+	if err := appendPaymentIngressAudit(ctx, tx, orderID, "sepa",
 		PaymentEventCaptured, PaymentIngressTargetAnomaly, anomalyID, audit); !errors.Is(err, ErrPaymentReviewConflict) {
-		t.Fatalf("stripe audit: err=%v, want ErrPaymentReviewConflict", err)
+		t.Fatalf("unknown provider audit: err=%v, want ErrPaymentReviewConflict", err)
 	}
 }
