@@ -84,6 +84,10 @@ func validatePaymentFact(order Order, fact PaymentFact) (PaymentFact, error) {
 		if fact.Currency != "USD" && fact.Currency != "USDT" {
 			return PaymentFact{}, ErrPaymentReceiptMismatch
 		}
+	case PaymentMethodYooKassa:
+		if fact.Currency != "RUB" {
+			return PaymentFact{}, ErrPaymentReceiptMismatch
+		}
 	default:
 		return PaymentFact{}, ErrPaymentReceiptMismatch
 	}
