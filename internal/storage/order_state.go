@@ -79,6 +79,13 @@ func orderMoney(order Order, provider string) (amount int64, currency string, sc
 			return 0, "", 0, ErrInvalidMoney
 		}
 		return int64(math.Round(order.TotalUSD * 100)), "USD", 2, nil
+	case PaymentMethodBalance:
+		// The internal balance rail charges the USD snapshot directly, same
+		// as the stripe/nowpayments USD rails.
+		if order.TotalUSD <= 0 || math.IsNaN(order.TotalUSD) || math.IsInf(order.TotalUSD, 0) {
+			return 0, "", 0, ErrInvalidMoney
+		}
+		return int64(math.Round(order.TotalUSD * 100)), "USD", 2, nil
 	default:
 		return 0, "", 0, fmt.Errorf("order store: unsupported payment provider %q", provider)
 	}
@@ -130,6 +137,15 @@ func validatePaymentFact(order Order, fact PaymentFact) (PaymentFact, error) {
 		// NOWPayments has no Telegram payer identity, so only the money is
 		// validated; the payer rule lives in invalidProviderCapturePayer.
 		if fact.Currency != "USD" {
+			return PaymentFact{}, ErrPaymentReceiptMismatch
+		}
+	case PaymentMethodBalance:
+		// The internal balance rail always knows its Telegram payer: the
+		// debit and the settlement name the same user, so a missing or
+		// foreign payer is a mismatch here (not merely an absent identity,
+		// unlike the payerless rails — balance is deliberately NOT in
+		// providerHasNoTelegramPayer).
+		if fact.Currency != "USD" || fact.PayerID <= 0 || fact.PayerID != order.UserID {
 			return PaymentFact{}, ErrPaymentReceiptMismatch
 		}
 	default:

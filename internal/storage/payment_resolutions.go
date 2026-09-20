@@ -13,7 +13,7 @@ import (
 // transaction identities, payer details and raw payloads stay out of output.
 func (s *SQLPaymentLedgerStore) ListPaymentReviews(ctx context.Context, provider string) ([]PaymentReviewCase, error) {
 	provider = normalizePaymentProvider(provider)
-	if provider != PaymentMethodStars && provider != PaymentMethodCrypto && provider != PaymentMethodYooKassa && provider != PaymentMethodStripe && provider != PaymentMethodTON && provider != PaymentMethodNowpayments && provider != PaymentReviewProviderUnknown {
+	if provider != PaymentMethodStars && provider != PaymentMethodCrypto && provider != PaymentMethodYooKassa && provider != PaymentMethodStripe && provider != PaymentMethodTON && provider != PaymentMethodNowpayments && provider != PaymentMethodBalance && provider != PaymentReviewProviderUnknown {
 		return nil, ErrPaymentReviewConflict
 	}
 	cases := make(map[int64]*PaymentReviewCase)
@@ -465,7 +465,7 @@ func validateReviewResolutionInput(r *PaymentReviewResolution) error {
 	r.Decision = strings.TrimSpace(r.Decision)
 	r.Actor = strings.TrimSpace(r.Actor)
 	r.Reason = strings.TrimSpace(r.Reason)
-	if r.OrderID < 0 || (r.Provider != PaymentMethodStars && r.Provider != PaymentMethodCrypto && r.Provider != PaymentMethodYooKassa && r.Provider != PaymentMethodStripe && r.Provider != PaymentMethodTON && r.Provider != PaymentMethodNowpayments && r.Provider != PaymentReviewProviderUnknown) ||
+	if r.OrderID < 0 || (r.Provider != PaymentMethodStars && r.Provider != PaymentMethodCrypto && r.Provider != PaymentMethodYooKassa && r.Provider != PaymentMethodStripe && r.Provider != PaymentMethodTON && r.Provider != PaymentMethodNowpayments && r.Provider != PaymentMethodBalance && r.Provider != PaymentReviewProviderUnknown) ||
 		r.Actor == "" || len(r.Actor) > 128 || r.Reason == "" || len(r.Reason) > 512 {
 		return ErrPaymentReviewConflict
 	}

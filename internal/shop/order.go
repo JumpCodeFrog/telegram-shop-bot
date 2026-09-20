@@ -158,6 +158,9 @@ type PaymentDeps struct {
 	Cache     ProductCacheInvalidator
 	// Metrics is optional; when set, CreateFromCart increments OrdersCreated.
 	Metrics *service.MetricsService
+	// Balances is optional; when set, ConfirmBalancePayment can settle orders
+	// through the internal USD balance rail.
+	Balances storage.BalanceStore
 }
 
 // OrderService provides business logic for managing orders.

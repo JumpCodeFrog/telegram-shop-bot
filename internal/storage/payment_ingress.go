@@ -79,7 +79,7 @@ func (s *SQLOrderStore) PreviewProviderCaptureIngress(ctx context.Context, order
 func (s *SQLPaymentLedgerStore) PreviewProviderRefundIngress(ctx context.Context, refund Refund) (string, error) {
 	provider := normalizePaymentProvider(refund.Provider)
 	if refund.OrderID <= 0 || refund.AmountMinor <= 0 || refund.ExternalID == "" ||
-		refund.PaymentExternalID == "" || (provider != PaymentMethodStars && provider != PaymentMethodCrypto && provider != PaymentMethodYooKassa && provider != PaymentMethodStripe && provider != PaymentMethodTON && provider != PaymentMethodNowpayments) ||
+		refund.PaymentExternalID == "" || (provider != PaymentMethodStars && provider != PaymentMethodCrypto && provider != PaymentMethodYooKassa && provider != PaymentMethodStripe && provider != PaymentMethodTON && provider != PaymentMethodNowpayments && provider != PaymentMethodBalance) ||
 		refund.Scale < 0 || refund.Scale > 9 || refund.Currency == "" || refund.PayerID <= 0 ||
 		refund.OccurredAt.IsZero() || (provider == PaymentMethodStars && refund.ExternalID != refund.PaymentExternalID) {
 		return "", ErrPaymentReceiptMismatch

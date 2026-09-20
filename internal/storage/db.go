@@ -30,6 +30,10 @@ var (
 	ErrSubscriptionEntitlement   = errors.New("storage: subscription entitlement write failed")
 	ErrProductOutOfStock         = errors.New("storage: product out of stock")
 	ErrEmptyCart                 = errors.New("storage: cart is empty")
+	// ErrInsufficientFunds rejects a balance debit that would overdraw the
+	// user's USD balance. The guard lives in the UPDATE's WHERE clause, so
+	// the check and the mutation are one atomic statement.
+	ErrInsufficientFunds = errors.New("storage: insufficient funds")
 )
 
 // DB wraps *sql.DB and provides storage operations.

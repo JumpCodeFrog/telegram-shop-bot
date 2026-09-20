@@ -142,6 +142,10 @@ func (b *Bot) routeMessage(msg *tgbotapi.Message) {
 	case "payreview":
 		b.handlePayReview(msg)
 
+	// Balance adjustments.
+	case "setbalance":
+		b.handleSetBalance(msg)
+
 	// Export.
 	case "export_orders":
 		b.handleExportOrders(msg)
@@ -246,6 +250,9 @@ func (b *Bot) handleCallback(cb *tgbotapi.CallbackQuery) {
 
 	case strings.HasPrefix(data, "pay:nowpayments:"):
 		b.onPayNowpayments(cb.ID, chatID, userID, msgID, data, lang)
+
+	case strings.HasPrefix(data, "pay:balance:"):
+		b.onPayBalance(cb.ID, chatID, userID, msgID, data, lang)
 
 	case strings.HasPrefix(data, "admin:togglestock:"):
 		b.ack(cb.ID)

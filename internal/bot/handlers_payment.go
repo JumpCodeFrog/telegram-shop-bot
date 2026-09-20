@@ -475,6 +475,69 @@ func (b *Bot) onPayNowpayments(cbID string, chatID, userID int64, msgID int, dat
 	b.send(reply)
 }
 
+// onPayBalance settles the order synchronously through the internal balance
+// rail: no adapter call, no invoice — ConfirmBalancePayment debits the buyer
+// and commits the settlement in one step, then the standard announce surface
+// delivers the notifications.
+func (b *Bot) onPayBalance(cbID string, chatID, userID int64, msgID int, data, lang string) {
+	orderID, err := parseIDFromCallback(data, "pay:balance:")
+	if err != nil {
+		b.logger.Error("parse pay:balance callback", "error", err)
+		b.ack(cbID)
+		return
+	}
+
+	ctx := context.Background()
+	target, err := b.loadPayableOrder(ctx, userID, orderID)
+	if err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			b.alert(cbID, b.t(lang, "order_not_found"))
+			return
+		}
+		if errors.Is(err, storage.ErrOrderStatusConflict) {
+			b.alert(cbID, b.t(lang, "order_already_paid"))
+			return
+		}
+		b.logger.Error("load payable order for balance payment", "order_id", orderID, "error", err)
+		b.alert(cbID, b.t(lang, "error_short"))
+		return
+	}
+
+	// Subscription products are payable with Telegram Stars only.
+	if _, subDays, subErr := b.orderSubscriptionProduct(ctx, target); subErr != nil {
+		b.logger.Error("detect subscription product for balance payment", "order_id", orderID, "error", subErr)
+		b.alert(cbID, b.t(lang, "error_short"))
+		return
+	} else if subDays > 0 {
+		b.alert(cbID, b.t(lang, "sub_stars_only"))
+		return
+	}
+
+	outcome, err := b.order.ConfirmBalancePayment(ctx, orderID, userID)
+	if err != nil {
+		switch {
+		case errors.Is(err, storage.ErrInsufficientFunds):
+			// Report the CURRENT balance; a lookup failure degrades to 0.
+			balance, balErr := b.balances.GetBalance(ctx, userID)
+			if balErr != nil {
+				b.logger.Warn("load balance for insufficient-funds alert", "user_id", userID, "error", balErr)
+			}
+			b.alert(cbID, fmt.Sprintf(b.t(lang, "balance_insufficient"), balance))
+		case errors.Is(err, storage.ErrOrderStatusConflict):
+			b.alert(cbID, b.t(lang, "order_already_paid"))
+		case errors.Is(err, shop.ErrBalanceSubscriptionUnsupported):
+			b.alert(cbID, b.t(lang, "sub_stars_only"))
+		default:
+			b.logger.Error("confirm balance payment", "order_id", orderID, "error", err)
+			b.alert(cbID, b.t(lang, "error_short"))
+		}
+		return
+	}
+
+	b.ack(cbID)
+	b.AnnouncePaidOutcome(ctx, outcome, storage.PaymentMethodBalance)
+}
+
 // formatTON renders an integer nanoton amount (TON minor units, scale 9) as
 // a decimal TON string with trailing fractional zeros trimmed:
 // 2000000000 → "2", 1500000000 → "1.5", 3896686160 → "3.89668616".
@@ -746,6 +809,8 @@ func (b *Bot) AnnouncePaidOutcome(ctx context.Context, outcome *shop.PaymentOutc
 		adminText = fmt.Sprintf(b.t("en", "admin_order_paid_stripe"), order.ID, order.UserID, order.TotalUSD)
 	case storage.PaymentMethodNowpayments:
 		adminText = fmt.Sprintf(b.t("en", "admin_order_paid_nowpayments"), order.ID, order.UserID, order.TotalUSD)
+	case storage.PaymentMethodBalance:
+		adminText = fmt.Sprintf(b.t("en", "admin_order_paid_balance"), order.ID, order.UserID, order.TotalUSD)
 	default: // crypto and anything else
 		adminText = fmt.Sprintf(b.t("en", "admin_order_paid_crypto"), order.ID, order.UserID, order.TotalUSD)
 	}

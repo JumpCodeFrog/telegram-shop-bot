@@ -263,19 +263,31 @@ func (b *Bot) onOrderConfirm(chatID, userID int64, msgID int, data, lang string)
 	stripeOK := b.stripePaymentsEnabled() && !cartHasSubscription(view)
 	tonOK := b.tonPaymentsEnabled() && !cartHasSubscription(view) && view.TotalTONNano > 0
 	nowpaymentsOK := b.nowpaymentsEnabled() && !cartHasSubscription(view)
+	// The internal balance rail is offered only for non-subscription orders
+	// when the buyer holds a positive balance; a lookup failure hides the row
+	// rather than blocking checkout.
+	balanceUSD := 0.0
+	if b.balances != nil && !cartHasSubscription(view) {
+		if bal, balErr := b.balances.GetBalance(ctx, userID); balErr == nil {
+			balanceUSD = bal
+		} else if !errors.Is(balErr, storage.ErrNotFound) {
+			b.logger.Warn("load buyer balance for payment keyboard", "user_id", userID, "error", balErr)
+		}
+	}
 	text := b.formatPaymentMethodsText(lang, orderID, view, cryptoOK, yookassaOK, stripeOK, tonOK, nowpaymentsOK)
-	kb := paymentMethodKeyboard(orderID, cryptoOK, yookassaOK, stripeOK, tonOK, nowpaymentsOK, view.TotalRUB, view.TotalStars, view.TotalUSD, view.TotalTONNano, lang, b)
+	kb := paymentMethodKeyboard(orderID, cryptoOK, yookassaOK, stripeOK, tonOK, nowpaymentsOK, balanceUSD, view.TotalRUB, view.TotalStars, view.TotalUSD, view.TotalTONNano, lang, b)
 
 	b.sendOrEditStyled(chatID, msgID, text, "HTML", kb)
 }
 
-func paymentMethodKeyboard(orderID int64, cryptoEnabled, yookassaOK, stripeOK, tonOK, nowpaymentsOK bool, totalRUB float64, totalStars int, totalUSD float64, totalTONNano int64, lang string, b *Bot) StyledKeyboard {
+func paymentMethodKeyboard(orderID int64, cryptoEnabled, yookassaOK, stripeOK, tonOK, nowpaymentsOK bool, balanceUSD, totalRUB float64, totalStars int, totalUSD float64, totalTONNano int64, lang string, b *Bot) StyledKeyboard {
 	starsLabel := fmt.Sprintf("⭐ Pay %d Stars", totalStars)
 	cryptoLabel := fmt.Sprintf("💎 Pay $%.2f USDT", totalUSD)
 	rubLabel := fmt.Sprintf("💳 Pay %.2f ₽", totalRUB)
 	stripeLabel := fmt.Sprintf("💳 Pay $%.2f", totalUSD)
 	tonLabel := fmt.Sprintf("💎 Pay %s TON", formatTON(totalTONNano))
 	nowpaymentsLabel := "🪙 Pay crypto"
+	balanceLabel := fmt.Sprintf("💰 Pay $%.2f (balance)", balanceUSD)
 	termsLabel := "📄 Terms"
 	paySupportLabel := "🆘 Payment support"
 	cancelLabel := "❌ Cancel order"
@@ -288,6 +300,7 @@ func paymentMethodKeyboard(orderID int64, cryptoEnabled, yookassaOK, stripeOK, t
 		stripeLabel = b.t(lang, "btn_pay_stripe")
 		tonLabel = fmt.Sprintf("%s (%s TON)", b.t(lang, "btn_pay_ton"), formatTON(totalTONNano))
 		nowpaymentsLabel = b.t(lang, "btn_pay_nowpayments")
+		balanceLabel = fmt.Sprintf("💰 %s ($%.2f)", b.t(lang, "btn_pay_balance"), balanceUSD)
 		termsLabel = b.t(lang, "btn_terms")
 		paySupportLabel = b.t(lang, "btn_paysupport")
 		cancelLabel = b.t(lang, "btn_cancel_order")
@@ -316,10 +329,16 @@ func paymentMethodKeyboard(orderID int64, cryptoEnabled, yookassaOK, stripeOK, t
 	if tonOK {
 		kb = append(kb, []StyledButton{b.styledBtn(BtnKeyPayTON, tonLabel, fmt.Sprintf("pay:ton:%d", orderID), StyleSuccess)})
 	}
-	// Hosted crypto invoices via NOWPayments close the payment section: the
+	// Hosted crypto invoices via NOWPayments close the external rails: the
 	// USD snapshot is priced directly, so no per-order total guard is needed.
 	if nowpaymentsOK {
 		kb = append(kb, []StyledButton{b.styledBtn(BtnKeyPayNowpayments, nowpaymentsLabel, fmt.Sprintf("pay:nowpayments:%d", orderID), StyleSuccess)})
+	}
+	// The internal balance rail settles synchronously and closes the payment
+	// section; it is offered only while the buyer holds a positive balance
+	// (the caller passes 0 for subscription orders and lookup failures).
+	if balanceUSD > 0 {
+		kb = append(kb, []StyledButton{b.styledBtn(BtnKeyPayBalance, balanceLabel, fmt.Sprintf("pay:balance:%d", orderID), StyleSuccess)})
 	}
 	kb = append(kb,
 		[]StyledButton{Btn(termsLabel, "terms"), Btn(paySupportLabel, "paysupport")},
