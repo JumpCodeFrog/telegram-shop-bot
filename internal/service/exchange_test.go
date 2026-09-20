@@ -6,7 +6,7 @@ import (
 )
 
 func TestConvertUSDToRUB(t *testing.T) {
-	s := NewExchangeService(50, 92.5)
+	s := NewExchangeService(50, 92.5, 5.13)
 
 	tests := []struct {
 		name      string
@@ -25,7 +25,7 @@ func TestConvertUSDToRUB(t *testing.T) {
 	}
 
 	// Rate 0 (RUB disabled) -> 0 for any input.
-	disabled := NewExchangeService(50, 0)
+	disabled := NewExchangeService(50, 0, 0)
 	for _, amount := range []float64{19.99, 0.01, 100, 0} {
 		if got := disabled.ConvertUSDToRUB(amount); got != 0 {
 			t.Errorf("ConvertUSDToRUB(%v) with rate 0 = %v, want 0", amount, got)
@@ -34,7 +34,7 @@ func TestConvertUSDToRUB(t *testing.T) {
 
 	// Float-noise guard: 2.675 with rate 100 must land on exactly 267.50
 	// (math.Round(x*100)/100, never FormatFloat chains).
-	exact := NewExchangeService(50, 100)
+	exact := NewExchangeService(50, 100, 0)
 	if got := exact.ConvertUSDToRUB(2.675); got != 267.50 {
 		t.Errorf("ConvertUSDToRUB(2.675) with rate 100 = %v, want 267.50", got)
 	}
@@ -69,5 +69,23 @@ func TestConvertUSDToNanoTON(t *testing.T) {
 				t.Errorf("ConvertUSDToNanoTON(%v, %v) = %d, want %d", tt.usd, tt.usdPerTon, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestExchangeServiceConvertUSDToNanoTON(t *testing.T) {
+	// The method reads the constructor-configured USD-per-TON rate and
+	// delegates to the package-level conversion: 19.99 USD at 5.13 USD/TON
+	// is the float64 3896686159.8440547, rounding to 3896686160 nanotons.
+	s := NewExchangeService(50, 92.5, 5.13)
+	if got := s.ConvertUSDToNanoTON(19.99); got != 3896686160 {
+		t.Errorf("ConvertUSDToNanoTON(19.99) = %d, want 3896686160", got)
+	}
+
+	// Rate 0 (TON disabled) -> 0 for any input.
+	disabled := NewExchangeService(50, 92.5, 0)
+	for _, amount := range []float64{19.99, 0.01, 100, 0} {
+		if got := disabled.ConvertUSDToNanoTON(amount); got != 0 {
+			t.Errorf("ConvertUSDToNanoTON(%v) with rate 0 = %d, want 0", amount, got)
+		}
 	}
 }

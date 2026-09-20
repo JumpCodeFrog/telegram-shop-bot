@@ -225,7 +225,7 @@ func TestCartViewTotalRUB(t *testing.T) {
 		2: {ID: 2, CategoryID: 1, Name: "cable", PriceUSD: 4.995, PriceStars: 249, IsActive: true, Stock: 10},
 	}}
 
-	svc := NewCartService(cartMock, productMock, service.NewExchangeService(50, 92.5))
+	svc := NewCartService(cartMock, productMock, service.NewExchangeService(50, 92.5, 0))
 	view, err := svc.Get(context.Background(), 42)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -253,7 +253,7 @@ func TestCartViewTotalRUB(t *testing.T) {
 		5: {ID: 5, CategoryID: 1, Name: "gizmo", PriceUSD: 6.663, PriceStars: 333, IsActive: true, Stock: 10},
 	}}
 
-	driftView, err := NewCartService(driftCartMock, driftProductMock, service.NewExchangeService(50, 92.5)).Get(context.Background(), 42)
+	driftView, err := NewCartService(driftCartMock, driftProductMock, service.NewExchangeService(50, 92.5, 0)).Get(context.Background(), 42)
 	if err != nil {
 		t.Fatalf("unexpected error for drifting cart: %v", err)
 	}
@@ -275,12 +275,92 @@ func TestCartViewTotalRUB(t *testing.T) {
 	}
 
 	// RUB rate 0 (RUB payments disabled): TotalRUB stays 0.
-	zeroRate := NewCartService(cartMock, productMock, service.NewExchangeService(50, 0))
+	zeroRate := NewCartService(cartMock, productMock, service.NewExchangeService(50, 0, 5.13))
 	view, err = zeroRate.Get(context.Background(), 42)
 	if err != nil {
 		t.Fatalf("unexpected error with zero rate: %v", err)
 	}
 	if view.TotalRUB != 0 {
 		t.Fatalf("TotalRUB with zero rate=%f, want 0", view.TotalRUB)
+	}
+}
+
+// TestCartViewTotalTONNano verifies TotalTONNano is computed once from
+// TotalUSD at the end of Get() (not summed per item, where per-item nanoton
+// rounding drifts): 1x$10.00 + 2x$4.995 => TotalUSD 19.99, and 19.99 at
+// 5.13 USD/TON -> 3896686160 nanotons. A drifting multi-item cart
+// (3x$6.663) pins the same rule where the two strategies disagree:
+// once-at-end 3896491228 vs per-item 3x1298830409 = 3896491227. Without an
+// exchange service or with a zero TON rate (TON disabled) TotalTONNano
+// stays 0.
+func TestCartViewTotalTONNano(t *testing.T) {
+	cartMock := &mockCartStore{items: []storage.CartItem{
+		{UserID: 42, ProductID: 1, Quantity: 1},
+		{UserID: 42, ProductID: 2, Quantity: 2},
+	}}
+	productMock := &mockProductStore{byID: map[int64]*storage.Product{
+		1: {ID: 1, CategoryID: 1, Name: "gadget", PriceUSD: 10.0, PriceStars: 500, IsActive: true, Stock: 10},
+		2: {ID: 2, CategoryID: 1, Name: "cable", PriceUSD: 4.995, PriceStars: 249, IsActive: true, Stock: 10},
+	}}
+
+	svc := NewCartService(cartMock, productMock, service.NewExchangeService(50, 92.5, 5.13))
+	view, err := svc.Get(context.Background(), 42)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if math.Abs(view.TotalUSD-19.99) > 1e-9 {
+		t.Fatalf("TotalUSD=%f, want 19.99", view.TotalUSD)
+	}
+	if view.TotalTONNano != 3896686160 {
+		t.Fatalf("TotalTONNano=%d, want 3896686160", view.TotalTONNano)
+	}
+
+	// Drifting multi-item cart: 3 x $6.663 at 5.13 USD/TON. Converting once
+	// at the end of Get() (see the drift comment in cart.go) gives
+	// ConvertUSDToNanoTON(19.989, 5.13) = 3896491228, while per-item
+	// conversion would give 3 x ConvertUSDToNanoTON(6.663, 5.13) =
+	// 3 x 1298830409 = 3896491227. The leg pins the once-at-end rule: a
+	// single-item cart cannot distinguish the two. (Both values computed
+	// with the real Go expression int64(math.Round(usd*1e9/5.13)).)
+	driftCartMock := &mockCartStore{items: []storage.CartItem{
+		{UserID: 42, ProductID: 3, Quantity: 1},
+		{UserID: 42, ProductID: 4, Quantity: 1},
+		{UserID: 42, ProductID: 5, Quantity: 1},
+	}}
+	driftProductMock := &mockProductStore{byID: map[int64]*storage.Product{
+		3: {ID: 3, CategoryID: 1, Name: "widget", PriceUSD: 6.663, PriceStars: 333, IsActive: true, Stock: 10},
+		4: {ID: 4, CategoryID: 1, Name: "bolt", PriceUSD: 6.663, PriceStars: 333, IsActive: true, Stock: 10},
+		5: {ID: 5, CategoryID: 1, Name: "gizmo", PriceUSD: 6.663, PriceStars: 333, IsActive: true, Stock: 10},
+	}}
+
+	driftView, err := NewCartService(driftCartMock, driftProductMock, service.NewExchangeService(50, 92.5, 5.13)).Get(context.Background(), 42)
+	if err != nil {
+		t.Fatalf("unexpected error for drifting cart: %v", err)
+	}
+	if math.Abs(driftView.TotalUSD-19.989) > 1e-9 {
+		t.Fatalf("drifting TotalUSD=%f, want 19.989", driftView.TotalUSD)
+	}
+	if driftView.TotalTONNano != 3896491228 {
+		t.Fatalf("drifting TotalTONNano=%d, want 3896491228 (once-at-end), not 3896491227 (per item)", driftView.TotalTONNano)
+	}
+
+	// No exchange service wired: TotalTONNano stays 0.
+	bare := NewCartService(cartMock, productMock)
+	view, err = bare.Get(context.Background(), 42)
+	if err != nil {
+		t.Fatalf("unexpected error without exchange: %v", err)
+	}
+	if view.TotalTONNano != 0 {
+		t.Fatalf("TotalTONNano without exchange service=%d, want 0", view.TotalTONNano)
+	}
+
+	// TON rate 0 (TON payments disabled): TotalTONNano stays 0.
+	zeroRate := NewCartService(cartMock, productMock, service.NewExchangeService(50, 92.5, 0))
+	view, err = zeroRate.Get(context.Background(), 42)
+	if err != nil {
+		t.Fatalf("unexpected error with zero rate: %v", err)
+	}
+	if view.TotalTONNano != 0 {
+		t.Fatalf("TotalTONNano with zero rate=%d, want 0", view.TotalTONNano)
 	}
 }

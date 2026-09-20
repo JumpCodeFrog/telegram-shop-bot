@@ -167,13 +167,21 @@ type OrderService struct {
 	products storage.ProductStore
 	payments PaymentDeps
 	logger   *slog.Logger
+	exchange *service.ExchangeService
 }
 
 // NewOrderService creates a new OrderService backed by the given stores.
 // deps may be the zero value: then ConfirmPayment only flips the order status
-// without loyalty/referral/cache side effects.
-func NewOrderService(os storage.OrderStore, cs storage.CartStore, ps storage.ProductStore, deps PaymentDeps, logger *slog.Logger) *OrderService {
-	return &OrderService{orders: os, cart: cs, products: ps, payments: deps, logger: logger}
+// without loyalty/referral/cache side effects. The optional exchange service
+// (mirroring NewCartService) provides the USD-per-TON rate for the order's
+// TotalTonNano snapshot; without it, or with a zero rate, orders are created
+// with TotalTonNano 0 (TON payments disabled).
+func NewOrderService(os storage.OrderStore, cs storage.CartStore, ps storage.ProductStore, deps PaymentDeps, logger *slog.Logger, exchange ...*service.ExchangeService) *OrderService {
+	var ex *service.ExchangeService
+	if len(exchange) > 0 {
+		ex = exchange[0]
+	}
+	return &OrderService{orders: os, cart: cs, products: ps, payments: deps, logger: logger, exchange: ex}
 }
 
 // CreateFromCart creates a new order from the given CartView. If promo is
@@ -216,15 +224,24 @@ func (s *OrderService) CreateFromCart(ctx context.Context, userID int64, cartVie
 	if promo != nil {
 		totalRUB = math.Round(totalRUB*float64(100-discountPct)) / 100
 	}
+	// TON snapshot: convert the final USD total (already discounted above)
+	// once, mirroring the RUB promo placement — discounting a pre-converted
+	// nano amount would double-round. Stays 0 while TON payments are
+	// disabled (no exchange service or rate 0).
+	var totalTONNano int64
+	if s.exchange != nil {
+		totalTONNano = s.exchange.ConvertUSDToNanoTON(totalUSD)
+	}
 
 	order := &storage.Order{
-		UserID:      userID,
-		TotalUSD:    totalUSD,
-		TotalStars:  totalStars,
-		TotalRUB:    totalRUB,
-		Status:      storage.OrderStatusPending,
-		DiscountPct: discountPct,
-		PromoCode:   promoCode,
+		UserID:       userID,
+		TotalUSD:     totalUSD,
+		TotalStars:   totalStars,
+		TotalRUB:     totalRUB,
+		TotalTonNano: totalTONNano,
+		Status:       storage.OrderStatusPending,
+		DiscountPct:  discountPct,
+		PromoCode:    promoCode,
 	}
 
 	items := make([]storage.OrderItem, len(cartView.Items))
@@ -322,6 +339,26 @@ func (s *OrderService) ConfirmPaymentReceipt(ctx context.Context, receipt Paymen
 		}
 	case storage.PaymentMethodStripe:
 		// No payer check: stripe receipts carry PayerID 0 like crypto.
+		if receipt.Currency != "USD" || receipt.AmountMinor <= 0 ||
+			receipt.AmountMinor != int64(math.Round(order.TotalUSD*100)) ||
+			receipt.Scale != 2 || receipt.ExternalID == "" {
+			return nil, s.receiptMismatch(ctx, receipt)
+		}
+	case storage.PaymentMethodTON:
+		// No payer check: on-chain receipts carry PayerID 0 like crypto.
+		// Settlement is overpay-tolerant: an on-chain transfer larger than
+		// the snapshot is real money received, so it settles — and the
+		// ledger records the ACTUAL receipt.AmountMinor, so events/attempts
+		// carry what truly arrived. Underpay quarantines, and a zero
+		// snapshot (TON disabled when the order was created) never settles.
+		if receipt.Currency != "TON" || receipt.Scale != 9 || order.TotalTonNano <= 0 ||
+			receipt.AmountMinor < order.TotalTonNano || receipt.ExternalID == "" {
+			return nil, s.receiptMismatch(ctx, receipt)
+		}
+	case storage.PaymentMethodNowpayments:
+		// No payer check: nowpayments receipts carry PayerID 0 like stripe.
+		// The signed IPN echoes our own invoice, so the USD cents match
+		// exactly — no overpay tolerance.
 		if receipt.Currency != "USD" || receipt.AmountMinor <= 0 ||
 			receipt.AmountMinor != int64(math.Round(order.TotalUSD*100)) ||
 			receipt.Scale != 2 || receipt.ExternalID == "" {

@@ -135,7 +135,7 @@ func NewWithAPI(cfg *config.Config, api *tgbotapi.BotAPI, db *storage.DB, metric
 	analyticsStore := storage.NewSQLAnalyticsStore(db)
 	referralStore := storage.NewReferralStore(db.Conn())
 	referralSvc := service.NewReferralService(2.0, 1.0, 100, redisClient)
-	exchangeSvc := service.NewExchangeService(cfg.USDToStarsRate, cfg.USDToRUBRate)
+	exchangeSvc := service.NewExchangeService(cfg.USDToStarsRate, cfg.USDToRUBRate, cfg.USDPerTON)
 	loyaltyStore := storage.NewLoyaltyStore(db.Conn())
 	loyaltySvc := service.NewLoyaltyService(loyaltyStore, 1)
 
@@ -165,7 +165,7 @@ func NewWithAPI(cfg *config.Config, api *tgbotapi.BotAPI, db *storage.DB, metric
 		cfg:             cfg,
 		catalog:         shop.NewCatalogService(cachedPS, exchangeSvc),
 		cart:            shop.NewCartService(cs, cachedPS, exchangeSvc),
-		order:           shop.NewOrderService(os, cs, cachedPS, paymentDeps, logger),
+		order:           shop.NewOrderService(os, cs, cachedPS, paymentDeps, logger, exchangeSvc),
 		users:           us,
 		products:        cachedPS,
 		promos:          promoStore,

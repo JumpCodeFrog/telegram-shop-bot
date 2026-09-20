@@ -12,13 +12,15 @@ type ExchangeService struct {
 	mu         sync.RWMutex
 	usdToStars int
 	usdToRUB   float64
+	usdPerTON  float64
 }
 
 // NewExchangeService creates the service with the given initial rates.
-// Pass config.USDToStarsRate (loaded from USD_TO_STARS_RATE env, default 50)
-// and config.USDToRUBRate (loaded from USD_TO_RUB_RATE env, 0 = RUB disabled).
-func NewExchangeService(usdToStarsRate int, usdToRUBRate float64) *ExchangeService {
-	return &ExchangeService{usdToStars: usdToStarsRate, usdToRUB: usdToRUBRate}
+// Pass config.USDToStarsRate (loaded from USD_TO_STARS_RATE env, default 50),
+// config.USDToRUBRate (loaded from USD_TO_RUB_RATE env, 0 = RUB disabled) and
+// config.USDPerTON (loaded from USD_PER_TON env, 0 = TON disabled).
+func NewExchangeService(usdToStarsRate int, usdToRUBRate float64, usdPerTON float64) *ExchangeService {
+	return &ExchangeService{usdToStars: usdToStarsRate, usdToRUB: usdToRUBRate, usdPerTON: usdPerTON}
 }
 
 // GetUSDToStarsRate returns the current exchange rate.
@@ -63,6 +65,18 @@ func (s *ExchangeService) ConvertUSDToRUB(amountUSD float64) float64 {
 		return 0
 	}
 	return math.Round(amountUSD*(rate*100)) / 100
+}
+
+// ConvertUSDToNanoTON converts a USD amount to integer nanotons (TON minor
+// units, scale 9) at the configured USD-per-TON rate. Returns 0 when the
+// TON rate is not configured (TON payments disabled) or the amount is
+// non-positive. All guards live in the package-level ConvertUSDToNanoTON;
+// see its comment for the integer-minor-unit contract.
+func (s *ExchangeService) ConvertUSDToNanoTON(amountUSD float64) int64 {
+	s.mu.RLock()
+	rate := s.usdPerTON
+	s.mu.RUnlock()
+	return ConvertUSDToNanoTON(amountUSD, rate)
 }
 
 // ConvertUSDToNanoTON converts a USD amount to integer nanotons (TON minor

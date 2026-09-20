@@ -253,7 +253,7 @@ func runBot() {
 	// Stripe webhook pipeline.
 	var apiServer *webapi.Server
 	if cfg.WebAppURL != "" {
-		exchangeSvc := service.NewExchangeService(cfg.USDToStarsRate, cfg.USDToRUBRate)
+		exchangeSvc := service.NewExchangeService(cfg.USDToStarsRate, cfg.USDToRUBRate, cfg.USDPerTON)
 		productStore := storage.NewSQLProductStore(db)
 		apiServer = webapi.New(webapi.Deps{
 			Auth:     webapi.NewAuthenticator(cfg.BotToken, webapi.DefaultAuthTTL),
