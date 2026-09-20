@@ -2,11 +2,13 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
 
 	"shop_bot/internal/payment"
 	"shop_bot/internal/shop"
+	"shop_bot/internal/storage"
 )
 
 // tonPollWindow bounds each poll to the wallet's latest 50 transactions.
@@ -88,9 +90,19 @@ func (w *TONPollingWorker) poll(ctx context.Context) {
 		outcome, err := w.orders.ConfirmPaymentReceipt(ctx, receipt)
 		if err != nil {
 			// One transfer must never panic the ticker or abort the batch.
-			// Conflicts, unknown orders and quarantined mismatches are
-			// durably handled by the ledger (replay-safe no-ops here);
-			// anything unexpected is retried on the next tick.
+			// Money that arrives after the stock sold out can never settle,
+			// so it is quarantined permanently (no retry); conflicts,
+			// unknown orders and quarantined mismatches are durably handled
+			// by the ledger (replay-safe no-ops here); anything else is
+			// retried on the next tick.
+			if errors.Is(err, storage.ErrProductOutOfStock) {
+				recordErr := w.orders.RecordUnexpectedPayment(ctx, receipt, "out_of_stock_after_charge")
+				if recordErr == nil || errors.Is(recordErr, storage.ErrPaymentNeedsReview) {
+					slog.Warn("TON polling: quarantined out-of-stock settlement",
+						"order_id", receipt.OrderID, "external_id", receipt.ExternalID)
+					continue
+				}
+			}
 			if isDurablyHandledPaymentError(err) {
 				slog.Debug("TON polling: ConfirmPayment skipped",
 					"order_id", receipt.OrderID, "reason", err)

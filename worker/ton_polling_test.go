@@ -233,6 +233,107 @@ func TestTONPollingUnderpaidIsQuarantined(t *testing.T) {
 	}
 }
 
+// TestTONPollingOutOfStockIsQuarantined mirrors crypto's out-of-stock branch:
+// the buyer's on-chain transfer arrives after the stock sold out, so the
+// settlement-time stock decrement fails with ErrProductOutOfStock. The worker
+// must quarantine the receipt via RecordUnexpectedPayment (reason
+// out_of_stock_after_charge) and leave the order pending in needs_review —
+// permanently, not retried. Like crypto's branch, the durable evidence is a
+// needs_review payment_attempt plus a needs_review captured payment_event
+// (the review surface ListPaymentReviews reads); payment_anomalies stays
+// empty because no identity conflict occurred.
+// The re-poll pin: a second poll over the same tx reaches
+// ConfirmPaymentReceipt again, which the ledger now answers with
+// ErrPaymentNeedsReview (the capture_on_unresolved_order guard finds the
+// exact needs_review attempt and short-circuits), so no second row of any
+// kind is ever written.
+func TestTONPollingOutOfStockIsQuarantined(t *testing.T) {
+	svc, store, db := newTONSQLHarness(t)
+	ctx := context.Background()
+	if _, err := db.Conn().ExecContext(ctx, `INSERT INTO categories (name) VALUES ('ton-oos')`); err != nil {
+		t.Fatal(err)
+	}
+	res, err := db.Conn().ExecContext(ctx,
+		`INSERT INTO products (category_id, name, price_usd, price_stars, stock, is_active)
+		 VALUES (1, 'Widget', 12.50, 25, 1, 1)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	productID, _ := res.LastInsertId()
+	orderID, err := store.CreateOrder(ctx, &storage.Order{
+		UserID: 42, TotalTonNano: 1500000000, Status: storage.OrderStatusPending,
+	}, []storage.OrderItem{{ProductID: productID, ProductName: "Widget", Quantity: 1, PriceUSD: 12.50}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The stock sells out between order creation and the poll.
+	if _, err := db.Conn().ExecContext(ctx, `UPDATE products SET stock = 0 WHERE id = ?`, productID); err != nil {
+		t.Fatal(err)
+	}
+	tx := tonTransfer("1720000000008", "oos", "order-"+itoa(orderID), 1500000000)
+	fetcher := &stubTxFetcher{txs: []payment.TONTransaction{tx}}
+	notifications := 0
+	w := NewTONPollingWorker(fetcher, svc, func(context.Context, *shop.PaymentOutcome) {
+		notifications++
+	}, time.Minute)
+
+	w.poll(ctx)
+	w.poll(ctx) // re-poll over the same tx: quarantine is durable, no second anomaly
+
+	if notifications != 0 {
+		t.Fatalf("notifications=%d, want 0", notifications)
+	}
+	order, _ := store.GetOrder(ctx, orderID)
+	if order.Status != storage.OrderStatusPending || order.PaymentState != storage.PaymentStateNeedsReview {
+		t.Fatalf("order=%+v, want pending/needs_review (money quarantined, never settled)", order)
+	}
+	// The quarantine evidence is the needs_review capture: exactly one
+	// payment_attempts row and one captured payment_events row, both
+	// needs_review, provider ton, carrying the real received amount.
+	var attempts, reviewEvents int64
+	var attemptStatus, eventProvider string
+	if err := db.Conn().QueryRow(`
+		SELECT COUNT(*), COALESCE(MIN(status), '') FROM payment_attempts
+		WHERE order_id=? AND provider='ton' AND external_id='1720000000008:oos'`,
+		orderID).Scan(&attempts, &attemptStatus); err != nil {
+		t.Fatal(err)
+	}
+	if attempts != 1 || attemptStatus != storage.PaymentStateNeedsReview {
+		t.Fatalf("attempts=%d status=%q, want 1 needs_review attempt after two polls", attempts, attemptStatus)
+	}
+	if err := db.Conn().QueryRow(`
+		SELECT COUNT(*), COALESCE(MIN(provider), '') FROM payment_events
+		WHERE order_id=? AND external_id='1720000000008:oos'
+		  AND event_kind='captured' AND disposition='needs_review'`,
+		orderID).Scan(&reviewEvents, &eventProvider); err != nil {
+		t.Fatal(err)
+	}
+	if reviewEvents != 1 || eventProvider != "ton" {
+		t.Fatalf("needs_review events=%d provider=%q, want exactly 1 ton event after two polls", reviewEvents, eventProvider)
+	}
+	var anomalies int64
+	_ = db.Conn().QueryRow(`SELECT COUNT(*) FROM payment_anomalies WHERE proposed_order_id=?`, orderID).Scan(&anomalies)
+	if anomalies != 0 {
+		t.Fatalf("anomalies=%d, want 0 (no identity conflict; the event/attempt rows are the quarantine)", anomalies)
+	}
+	// Pin the re-poll observable: a repeat confirm of the quarantined fact is a
+	// durable ErrPaymentNeedsReview no-op that writes nothing new.
+	receipt, receiptErr := tx.PaymentReceipt()
+	if receiptErr != nil {
+		t.Fatal(receiptErr)
+	}
+	if _, err := svc.ConfirmPaymentReceipt(ctx, receipt); !errors.Is(err, storage.ErrPaymentNeedsReview) {
+		t.Fatalf("repeat confirm err=%v, want ErrPaymentNeedsReview", err)
+	}
+	_ = db.Conn().QueryRow(`SELECT COUNT(*) FROM payment_events
+		WHERE order_id=? AND external_id='1720000000008:oos'`, orderID).Scan(&reviewEvents)
+	_ = db.Conn().QueryRow(`SELECT COUNT(*) FROM payment_attempts
+		WHERE order_id=? AND provider='ton' AND external_id='1720000000008:oos'`, orderID).Scan(&attempts)
+	if reviewEvents != 1 || attempts != 1 {
+		t.Fatalf("after repeat confirm: events=%d attempts=%d, want still 1/1", reviewEvents, attempts)
+	}
+}
+
 // TestTONPollingFetchErrorConfirmsNothing mirrors crypto's
 // fetch-error test: a provider error aborts the poll round; the next tick
 // retries.
