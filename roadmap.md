@@ -135,13 +135,13 @@ i18n на 5 языках, immutable payment ledger (миграции 017–020) 
 | 4.3 | Coinbase Commerce / BTCPay (по запросу пользователей; NOWPayments покрывает основной спрос) | Medium | Средний |
 | 4.4 | Авто-рефанды через API провайдеров (сейчас — operator-driven, by design) | High | Средний |
 | 4.5 | Poller потерянных вебхуков YooKassa (сейчас покрыто ручным payment-review) | Medium | Средний |
-| 4.6 | Перетегировать factless-envelope аномалию `webhook_parse_failure` → `webhook_missing_payment_id` (осознанно post-merge: reason-строки зафиксированы тестовыми пинами свипа) | Low | Low |
+| 4.6 | ✅ Перетегировать factless-envelope аномалию `webhook_parse_failure` → `webhook_missing_payment_id` (осознанно post-merge: reason-строки зафиксированы тестовыми пинами свипа) — закрыто 20.09.2026, коммит `ee7f926` (ретег + пин `TestYooKassaWebhookFactlessEnvelopeRecordsMissingPaymentID`) | Low | Low |
 | 4.7 | Полное update-ctx propagation: ctx через весь middleware/handler chain (сейчас — per-handler 30s корни `handlerCtx`; chain type — `func(tgbotapi.Update)`) | Medium | Средний |
-| 4.8 | Покрытие ветки `out_of_stock_after_charge` на bot-слое (4 вебхука + Stars `successful_payment`; storage-уровень покрыт, bot-уровень — нет) | Low | Средний |
-| 4.9 | Double-guard для CLI TON-settle: правило `>=` живёт только в launcher (`providerCaptureSettleable`); при его дрейфе нет downstream-гейта против underpay (webhook-путь защищён shop-слоем) | Low | Средний |
-| 4.10 | Actionable ошибки amount-mismatch в `ingest-provider` для card-рельсов (сейчас общий «local preview failed» — `validatePaymentFact` падает до quarantine-классификации) | Low | Low |
-| 4.11 | Pin `payment_state` в bot-уровневом replay-тесте YooKassa-вебхука (`TestYooKassaWebhookReplayIsIdempotent`; storage-уровень уже покрыт) | Low | Low |
-| 4.12 | `ConvertUSDToNanoTON`: теоретический division-overflow residual (`usd=1e200` при `rate=1e-200`; rate — operator-configured, реальной конфигурации не существует) | Low | Low |
+| 4.8 | ✅ Покрытие ветки `out_of_stock_after_charge` на bot-слое (4 вебхука + Stars `successful_payment`; storage-уровень покрыт, bot-уровень — нет) — закрыто 20.09.2026, коммит `ee7f926` (5 bot-level legs, mutation-verified) | Low | Средний |
+| 4.9 | ✅ Double-guard для CLI TON-settle: правило `>=` живёт только в launcher (`providerCaptureSettleable`); при его дрейфе нет downstream-гейта против underpay (webhook-путь защищён shop-слоем) — закрыто 20.09.2026, коммит `10459c4` (правило single-sourced в storage `validatePaymentFact`; launcher-гейт остался безвредным дублем) | Low | Средний |
+| 4.10 | ✅ Actionable ошибки amount-mismatch в `ingest-provider` для card-рельсов (сейчас общий «local preview failed» — `validatePaymentFact` падает до quarantine-классификации) — закрыто 20.09.2026, коммит `10459c4` (sentinel-ошибки → сообщения с fact-vs-order суммами; exit-коды не изменились) | Low | Low |
+| 4.11 | ✅ Pin `payment_state` в bot-уровневом replay-тесте YooKassa-вебхука (`TestYooKassaWebhookReplayIsIdempotent`; storage-уровень уже покрыт) — закрыто 20.09.2026, коммит `ee7f926` (пин `payment_state=settled`) | Low | Low |
+| 4.12 | ✅ `ConvertUSDToNanoTON`: теоретический division-overflow residual (`usd=1e200` при `rate=1e-200`; rate — operator-configured, реальной конфигурации не существует) — закрыто 20.09.2026, план `docs/superpowers/plans/2026-09-20-backlog-followups.md` (NaN/±Inf-guard квотиента + test leg) | Low | Low |
 | 4.13 | Settle-path audit: `UpdateOrderStatusWithPaymentFact` не принимает actor — CLI-settle атрибутирован только неявно (quarantine-путь пишет `payment_ingress_audits`; то же ограничение у всех webhook/poller settles) | Medium | Low |
 
 ---
