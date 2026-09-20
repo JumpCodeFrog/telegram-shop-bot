@@ -714,6 +714,54 @@ func (b *Bot) NotifyPaymentOutcome(ctx context.Context, outcome *shop.PaymentOut
 	}
 }
 
+// AnnouncePaidOutcome delivers the full settlement announcement set for a
+// worker-path confirmed payment: the success metric, the buyer's
+// payment_success message, the loyalty/referral outcome messages
+// (NotifyPaymentOutcome), the admin notification and the outbound webhook.
+// The polling workers (TON — whose poller is the ONLY settlement path — and
+// the CryptoBot poller, a backup to its webhook) wire this as their notify
+// callback; the webhook handlers keep their own inline blocks.
+func (b *Bot) AnnouncePaidOutcome(ctx context.Context, outcome *shop.PaymentOutcome, provider string) {
+	if outcome == nil || outcome.Order == nil {
+		return
+	}
+	order := outcome.Order
+
+	if b.metrics != nil {
+		b.metrics.SuccessfulPayments.WithLabelValues(provider).Inc()
+	}
+
+	buyerLang := b.userLang(ctx, order.UserID)
+	b.send(tgbotapi.NewMessage(order.UserID, fmt.Sprintf(b.t(buyerLang, "payment_success"), order.ID)))
+
+	b.NotifyPaymentOutcome(ctx, outcome)
+
+	var adminText string
+	switch provider {
+	case storage.PaymentMethodTON:
+		adminText = fmt.Sprintf(b.t("en", "admin_order_paid_ton"), order.ID, order.UserID, formatTON(order.TotalTonNano))
+	case storage.PaymentMethodYooKassa:
+		adminText = fmt.Sprintf(b.t("en", "admin_order_paid_yookassa"), order.ID, order.UserID, order.TotalRUB)
+	case storage.PaymentMethodStripe:
+		adminText = fmt.Sprintf(b.t("en", "admin_order_paid_stripe"), order.ID, order.UserID, order.TotalUSD)
+	case storage.PaymentMethodNowpayments:
+		adminText = fmt.Sprintf(b.t("en", "admin_order_paid_nowpayments"), order.ID, order.UserID, order.TotalUSD)
+	default: // crypto and anything else
+		adminText = fmt.Sprintf(b.t("en", "admin_order_paid_crypto"), order.ID, order.UserID, order.TotalUSD)
+	}
+	b.notifyAdmins(ctx, AdminEventOrderPaid, adminText)
+
+	b.outWebhook.Send(service.OutboundWebhookEvent{
+		Event:      "order.paid",
+		OrderID:    order.ID,
+		UserID:     order.UserID,
+		TotalUSD:   order.TotalUSD,
+		TotalStars: order.TotalStars,
+		Method:     provider,
+		PaymentID:  order.PaymentID,
+	})
+}
+
 // userLang resolves a user's stored language by Telegram ID, falling back to "" (→ en).
 func (b *Bot) userLang(ctx context.Context, telegramID int64) string {
 	user, err := b.users.GetByTelegramID(ctx, telegramID)

@@ -231,8 +231,13 @@ func runBot() {
 	if cryptoPayments.Configured() {
 		// Confirm through the bot's OrderService so polled payments get the
 		// same loyalty/referral/cache side effects as webhook payments, and
-		// let the bot send the outcome messages.
-		pollingW := worker.NewCryptoBotPollingWorker(cryptoPayments, b.OrderService(), b.NotifyPaymentOutcome, 30*time.Second)
+		// announce the settlement with the full notification set (buyer
+		// payment_success, admin message, outbound webhook) — the poller is
+		// a backup to the webhook and must not deliver a degraded surface.
+		pollingW := worker.NewCryptoBotPollingWorker(cryptoPayments, b.OrderService(),
+			func(ctx context.Context, outcome *shop.PaymentOutcome) {
+				b.AnnouncePaidOutcome(ctx, outcome, storage.PaymentMethodCrypto)
+			}, 30*time.Second)
 		workers.Start(ctx, "cryptobot_polling", pollingW.Start)
 	} else {
 		slog.Warn("CryptoBot disabled, skipping polling worker")
@@ -246,7 +251,14 @@ func runBot() {
 	// from the bot's checkout-facing one, mirroring cryptoPayments.
 	tonPayments := payment.NewTONPayment(cfg.TONWalletAddress, cfg.TONAPIKey)
 	if tonPayments.Configured() && cfg.USDPerTON > 0 {
-		tonW := worker.NewTONPollingWorker(tonPayments, b.OrderService(), b.NotifyPaymentOutcome, 30*time.Second)
+		// This poller is TON's only settlement path, so its notify callback
+		// must deliver the full settlement announcements (buyer
+		// payment_success, admin message, outbound webhook), not just the
+		// loyalty/referral outcome messages.
+		tonW := worker.NewTONPollingWorker(tonPayments, b.OrderService(),
+			func(ctx context.Context, outcome *shop.PaymentOutcome) {
+				b.AnnouncePaidOutcome(ctx, outcome, storage.PaymentMethodTON)
+			}, 30*time.Second)
 		workers.Start(ctx, "ton_polling", tonW.Start)
 	} else {
 		slog.Warn("TON disabled, skipping polling worker")

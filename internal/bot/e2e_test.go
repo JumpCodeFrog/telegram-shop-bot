@@ -36,6 +36,7 @@ import (
 	"shop_bot/internal/config"
 	"shop_bot/internal/payment"
 	"shop_bot/internal/service"
+	"shop_bot/internal/shop"
 	"shop_bot/internal/storage"
 	"shop_bot/worker"
 )
@@ -1409,12 +1410,11 @@ func tonTxJSON(lt, hash, comment string, valueNano int64) string {
 // transfer settles nothing new → an underpaid transfer for a second order is
 // quarantined (needs_review, NOT paid).
 //
-// Worker-path notify surface (mirrors the CryptoBot polling worker, whose
-// notify is the same Bot.NotifyPaymentOutcome wired in main.go): the buyer
-// gets the loyalty outcome messages ONLY — the worker path sends NO
-// payment_success message, NO admin notification and fires NO outbound
-// webhook (those live in the webhook handlers, and TON has no webhook). The
-// test pins that actual surface instead of inventing new notify behavior.
+// Worker-path notify surface (mirrors the CryptoBot polling worker, which
+// shares the same main.go wiring): the settlement announcement delivers the
+// FULL notification set — buyer payment_success, loyalty outcome messages,
+// admin notification and the outbound webhook — because the polling worker
+// is TON's ONLY settlement path (there is no webhook to fall back on).
 func TestE2ETONPurchase(t *testing.T) {
 	out := newOutboundCapture(t)
 	chain := newToncenterE2EMock(t)
@@ -1476,10 +1476,13 @@ func TestE2ETONPurchase(t *testing.T) {
 
 	// The worker: a test-constructed adapter pointed at the mock toncenter,
 	// the bot's REAL OrderService, and the production notify wiring
-	// (Bot.NotifyPaymentOutcome — the same callback main.go installs).
+	// (Bot.AnnouncePaidOutcome — the same closure main.go installs).
 	tonAdapter := payment.NewTONPayment(tonTestWalletAddress, "")
 	tonAdapter.SetBaseURL(chain.srv.URL)
-	w := worker.NewTONPollingWorker(tonAdapter, e.bot.OrderService(), e.bot.NotifyPaymentOutcome, 30*time.Second)
+	notify := func(ctx context.Context, outcome *shop.PaymentOutcome) {
+		e.bot.AnnouncePaidOutcome(ctx, outcome, storage.PaymentMethodTON)
+	}
+	w := worker.NewTONPollingWorker(tonAdapter, e.bot.OrderService(), notify, 30*time.Second)
 
 	// One poll over a transfer whose memo and amount match the order exactly.
 	chain.setTransactions("[" + tonTxJSON("1720000000042", "e2ehash", fmt.Sprintf("order-%d", orderID), 2000000000) + "]")
@@ -1521,22 +1524,23 @@ func TestE2ETONPurchase(t *testing.T) {
 	if !findMessage(e.tg.since(before), buyer, pointsText) {
 		t.Fatalf("no loyalty_points_awarded message to buyer %d (lang %q):\n%s", buyer, lang, dumpCalls(e.tg.since(before)))
 	}
-	// Worker-path surface, pinned as-found: NO payment_success message, NO
-	// admin notification, NO outbound webhook (those live in the webhook
-	// handlers, and TON has no webhook).
+	// Worker-path settlement surface (fixed in Task 12b): the polling worker
+	// is TON's ONLY settlement path, so it must deliver the same notification
+	// set the webhook handlers own for the other providers — the buyer's
+	// payment_success, the admin notification and the outbound webhook — on
+	// top of the loyalty outcome asserted above.
 	successText := fmt.Sprintf(e.bot.t(lang, "payment_success"), orderID)
-	if findMessage(e.tg.since(before), buyer, successText) {
-		t.Fatalf("worker path sent a payment_success message (unexpected — notify is NotifyPaymentOutcome only):\n%s",
-			dumpCalls(e.tg.since(before)))
+	if !findMessage(e.tg.since(before), buyer, successText) {
+		t.Fatalf("no payment_success message to buyer %d (lang %q):\n%s", buyer, lang, dumpCalls(e.tg.since(before)))
 	}
-	for _, c := range e.tg.since(before) {
-		if c.Method == "sendMessage" && c.Params.Get("chat_id") == strconv.FormatInt(e2eAdminID, 10) {
-			t.Fatalf("worker path notified admin %d (unexpected — no admin_order_paid on the polling path): %q",
-				e2eAdminID, c.Params.Get("text"))
-		}
+	adminText := fmt.Sprintf(e.bot.t("en", "admin_order_paid_ton"), orderID, buyer, formatTON(2000000000))
+	if !findMessage(e.tg.since(before), e2eAdminID, adminText) {
+		t.Fatalf("no admin_order_paid_ton message to admin %d:\n%s", e2eAdminID, dumpCalls(e.tg.since(before)))
 	}
-	if !out.drained() {
-		t.Fatal("worker path fired an outbound webhook event (unexpected — the webhook handlers own that)")
+	ev := out.wait(t)
+	if ev.Event != "order.paid" || ev.OrderID != orderID || ev.UserID != buyer ||
+		ev.TotalUSD != 10 || ev.Method != storage.PaymentMethodTON || ev.PaymentID != "1720000000042:e2ehash" {
+		t.Fatalf("outbound event = %+v, want order.paid/ton for order %d", ev, orderID)
 	}
 
 	// Re-poll replay: the same transfer is re-read and re-replayed into the
