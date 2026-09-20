@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -393,6 +394,9 @@ func TestYooKassaNotConfiguredFailsClosed(t *testing.T) {
 	if _, err := client.GetPayment(context.Background(), "pay_1"); !errors.Is(err, ErrYooKassaNotConfigured) {
 		t.Fatalf("GetPayment: expected ErrYooKassaNotConfigured, got %v", err)
 	}
+	if _, _, err := client.ListPayments(context.Background(), "succeeded", time.Time{}, "", 50); !errors.Is(err, ErrYooKassaNotConfigured) {
+		t.Fatalf("ListPayments: expected ErrYooKassaNotConfigured, got %v", err)
+	}
 
 	for _, tc := range []struct {
 		shopID, secretKey, returnURL string
@@ -425,5 +429,209 @@ func TestYooKassaResponseSizeLimit(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "response is too large") {
 		t.Fatalf("expected response size error, got %q", err.Error())
+	}
+}
+
+func TestYooKassaListPaymentsSendsFiltersAndParsesItems(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Errorf("expected GET, got %s", r.Method)
+		}
+		if r.URL.Path != "/v3/payments" {
+			t.Errorf("expected path /v3/payments, got %s", r.URL.Path)
+		}
+		requireYooKassaBasicAuth(t, r)
+
+		q := r.URL.Query()
+		if got := q.Get("status"); got != "succeeded" {
+			t.Errorf("status = %q, want %q", got, "succeeded")
+		}
+		if got := q.Get("created_at.gte"); got != "2026-09-19T10:00:00Z" {
+			t.Errorf("created_at.gte = %q, want %q", got, "2026-09-19T10:00:00Z")
+		}
+		if got := q.Get("cursor"); got != "cursor_2" {
+			t.Errorf("cursor = %q, want %q", got, "cursor_2")
+		}
+		if got := q.Get("limit"); got != "50" {
+			t.Errorf("limit = %q, want %q", got, "50")
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"type":"list","items":[` +
+			`{"id":"pay_1","status":"succeeded","paid":true,` +
+			`"amount":{"value":"1999.00","currency":"RUB"},` +
+			`"metadata":{"order_id":"42"},` +
+			`"created_at":"2026-09-19T10:00:00Z","captured_at":"2026-09-19T10:01:00Z"}` +
+			`],"next_cursor":"cursor_3"}`))
+	}))
+	defer srv.Close()
+
+	client := newYookassaTestClient(srv)
+	createdAtGte := time.Date(2026, 9, 19, 10, 0, 0, 0, time.UTC)
+
+	items, nextCursor, err := client.ListPayments(context.Background(), "succeeded", createdAtGte, "cursor_2", 50)
+	if err != nil {
+		t.Fatalf("ListPayments returned error: %v", err)
+	}
+	if nextCursor != "cursor_3" {
+		t.Errorf("nextCursor = %q, want %q", nextCursor, "cursor_3")
+	}
+	want := Payment{
+		ID:         "pay_1",
+		Status:     "succeeded",
+		Paid:       true,
+		Amount:     "1999.00",
+		Currency:   "RUB",
+		OrderID:    42,
+		OccurredAt: time.Date(2026, 9, 19, 10, 1, 0, 0, time.UTC),
+	}
+	if len(items) != 1 || items[0] != want {
+		t.Fatalf("items = %+v, want [%+v]", items, want)
+	}
+
+	// A list item must build the same receipt as a refetched payment: the
+	// poller settles orders through the existing receipt path.
+	receipt, err := items[0].PaymentReceipt()
+	if err != nil {
+		t.Fatalf("PaymentReceipt returned error: %v", err)
+	}
+	if receipt.OrderID != 42 || receipt.Provider != storage.PaymentMethodYooKassa ||
+		receipt.ExternalID != "pay_1" || receipt.Currency != "RUB" ||
+		receipt.AmountMinor != 199900 || receipt.Scale != 2 ||
+		!receipt.OccurredAt.Equal(time.Date(2026, 9, 19, 10, 1, 0, 0, time.UTC)) {
+		t.Fatalf("receipt = %+v", receipt)
+	}
+}
+
+func TestYooKassaListPaymentsEmptyPage(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"type":"list","items":[]}`))
+	}))
+	defer srv.Close()
+
+	client := newYookassaTestClient(srv)
+
+	items, nextCursor, err := client.ListPayments(context.Background(), "succeeded", time.Time{}, "", 50)
+	if err != nil {
+		t.Fatalf("ListPayments returned error: %v", err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("items = %+v, want empty", items)
+	}
+	if nextCursor != "" {
+		t.Fatalf("nextCursor = %q, want empty at the end of the list", nextCursor)
+	}
+}
+
+func TestYooKassaListPaymentsOmitsEmptyOptionalFilters(t *testing.T) {
+	var got url.Values
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.URL.Query()
+		_, _ = w.Write([]byte(`{"type":"list","items":[]}`))
+	}))
+	defer srv.Close()
+
+	client := newYookassaTestClient(srv)
+
+	// A zero time omits the created_at filter (scanning the full history is
+	// the caller's choice); an empty cursor omits the cursor param (first page).
+	if _, _, err := client.ListPayments(context.Background(), "succeeded", time.Time{}, "", 10); err != nil {
+		t.Fatalf("ListPayments returned error: %v", err)
+	}
+	if _, ok := got["created_at.gte"]; ok {
+		t.Errorf("created_at.gte sent for a zero time: %v", got["created_at.gte"])
+	}
+	if _, ok := got["cursor"]; ok {
+		t.Errorf("cursor sent for an empty cursor: %v", got["cursor"])
+	}
+	if got.Get("status") != "succeeded" || got.Get("limit") != "10" {
+		t.Errorf("expected status and limit to survive, got %v", got)
+	}
+
+	// An empty status must not be sent as an empty filter value.
+	if _, _, err := client.ListPayments(context.Background(), "", time.Time{}, "", 10); err != nil {
+		t.Fatalf("ListPayments with empty status returned error: %v", err)
+	}
+	if _, ok := got["status"]; ok {
+		t.Errorf("status sent for an empty status: %v", got["status"])
+	}
+}
+
+func TestYooKassaListPaymentsClampsLimit(t *testing.T) {
+	var got url.Values
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.URL.Query()
+		_, _ = w.Write([]byte(`{"type":"list","items":[]}`))
+	}))
+	defer srv.Close()
+
+	client := newYookassaTestClient(srv)
+
+	for _, tc := range []struct {
+		name  string
+		limit int
+		want  string
+	}{
+		{name: "zero clamps to one", limit: 0, want: "1"},
+		{name: "oversized clamps to the YooKassa maximum", limit: 150, want: "100"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, _, err := client.ListPayments(context.Background(), "succeeded", time.Time{}, "", tc.limit); err != nil {
+				t.Fatalf("ListPayments returned error: %v", err)
+			}
+			if got.Get("limit") != tc.want {
+				t.Fatalf("limit = %q, want %q", got.Get("limit"), tc.want)
+			}
+		})
+	}
+}
+
+func TestYooKassaListPaymentsRejectsMalformedItem(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"type":"list","items":[{"id":"pay/1","status":"succeeded","paid":true}]}`))
+	}))
+	defer srv.Close()
+
+	client := newYookassaTestClient(srv)
+
+	_, _, err := client.ListPayments(context.Background(), "succeeded", time.Time{}, "", 50)
+	if !errors.Is(err, ErrInvalidYooKassaReceipt) {
+		t.Fatalf("expected ErrInvalidYooKassaReceipt for a malformed list item, got %v", err)
+	}
+}
+
+func TestYooKassaListPaymentsAPIError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"code":"invalid_parameter","description":"bad"}`))
+	}))
+	defer srv.Close()
+
+	client := newYookassaTestClient(srv)
+
+	_, _, err := client.ListPayments(context.Background(), "succeeded", time.Time{}, "", 50)
+	if err == nil {
+		t.Fatal("expected error from ListPayments on API error, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid_parameter") {
+		t.Fatalf("expected error to mention invalid_parameter, got %q", err.Error())
+	}
+
+	broken := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte("boom"))
+	}))
+	defer broken.Close()
+
+	brokenClient := newYookassaTestClient(broken)
+
+	_, _, err = brokenClient.ListPayments(context.Background(), "succeeded", time.Time{}, "", 50)
+	if err == nil {
+		t.Fatal("expected error from ListPayments on 5xx, got nil")
+	}
+	if !strings.Contains(err.Error(), "HTTP status 500") {
+		t.Fatalf("expected HTTP status error, got %q", err.Error())
 	}
 }

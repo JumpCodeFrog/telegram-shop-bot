@@ -168,6 +168,28 @@ without any upstream call. If the endpoint is abused, rate-limit it at the
 reverse proxy — settlement is still impossible without valid credentials and a
 matching order.
 
+### Lost-webhook backup poller
+
+The webhook is the primary settlement path; a background poller backs it up
+when notifications are lost (bot downtime, network partition). Every 60
+seconds it lists the shop's `succeeded` payments created within a rolling
+24-hour window (`GET /v3/payments`, cursor pagination: 50 per page, capped at
+20 pages per tick — a truncated tick logs one `page cap reached` warning and
+defers the tail to the next tick, which re-scans from the start) and replays
+each item through the same fail-closed receipt validation and ledger path the
+webhook uses. The poller is idempotent: an already-settled order is answered
+with a durable conflict no-op, and money that arrives after the stock sold out
+never settles — it is durably quarantined with the same
+`out_of_stock_after_charge` reason the webhook path uses (as a needs-review
+capture the review surface lists) and is never retried. What the poller does
+NOT cover: orders whose payment never succeeded at the
+provider (a non-succeeded payment never appears in the list) and quarantined
+cases, which stay in `payment-review` until an operator resolves them —
+operator escalation is unchanged (`make payment-review PROVIDER=yookassa` /
+`/payreview`). The worker starts only when YooKassa is fully configured and
+`USD_TO_RUB_RATE` is positive — the exact checkout-button predicate — and
+introduces no new environment variables.
+
 ### What quarantined YooKassa facts look like
 
 Quarantined facts are `payment_anomalies` rows with provider `yookassa` and the

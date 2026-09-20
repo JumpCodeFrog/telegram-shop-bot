@@ -27,6 +27,10 @@ var (
 
 const yookassaResponseLimit = 1 << 20
 
+// yookassaMaxPageLimit is the largest page size the YooKassa list endpoint
+// accepts; larger limits are rejected by the API.
+const yookassaMaxPageLimit = 100
+
 // YooKassaPayment handles RUB payments via the YooKassa API using redirect
 // confirmation. Webhooks are unsigned, so every notification is verified by
 // re-reading the payment from the API before it can settle an order.
@@ -94,6 +98,15 @@ type yookassaErrorResponse struct {
 	ID          string `json:"id"`
 	Code        string `json:"code"`
 	Description string `json:"description"`
+}
+
+// yookassaPaymentList is the envelope of GET /payments. Items are full
+// payment objects — the same shape GetPayment returns — and next_cursor is
+// absent or empty on the last page.
+type yookassaPaymentList struct {
+	Type       string                  `json:"type"`
+	Items      []yookassaPaymentObject `json:"items"`
+	NextCursor string                  `json:"next_cursor"`
 }
 
 // CreatePayment registers a redirect payment for the given order and returns
@@ -180,6 +193,74 @@ func (y *YooKassaPayment) GetPayment(ctx context.Context, paymentID string) (*Pa
 		return nil, fmt.Errorf("yookassa: parse payment response: %w", err)
 	}
 	return object.toPayment()
+}
+
+// ListPayments pages through payments matching the given filters. It backs
+// the lost-webhook poller: an authenticated API call over TLS, the same
+// authority class as GetPayment, so items are parsed by the same parser and
+// feed the same receipt validation.
+//
+// A zero createdAtGte omits the created_at filter — scanning the full history
+// is the caller's choice. An empty cursor omits the cursor param (first
+// page); the returned next cursor is empty on the last page. limit is clamped
+// to [1, 100], the page-size range the YooKassa API accepts.
+func (y *YooKassaPayment) ListPayments(ctx context.Context, status string, createdAtGte time.Time, cursor string, limit int) ([]Payment, string, error) {
+	if !y.Configured() {
+		return nil, "", ErrYooKassaNotConfigured
+	}
+
+	if limit < 1 {
+		limit = 1
+	}
+	if limit > yookassaMaxPageLimit {
+		limit = yookassaMaxPageLimit
+	}
+
+	query := url.Values{}
+	if status != "" {
+		query.Set("status", status)
+	}
+	if !createdAtGte.IsZero() {
+		query.Set("created_at.gte", createdAtGte.UTC().Format(time.RFC3339))
+	}
+	if cursor != "" {
+		query.Set("cursor", cursor)
+	}
+	query.Set("limit", strconv.Itoa(limit))
+
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, y.baseURL+"/payments?"+query.Encode(), nil)
+	if err != nil {
+		return nil, "", fmt.Errorf("yookassa: list payments request: %w", err)
+	}
+	req.Header.Set("Authorization", y.basicAuth())
+
+	rawBody, httpStatus, err := y.doJSON(req)
+	if err != nil {
+		return nil, "", err
+	}
+	if httpStatus < http.StatusOK || httpStatus >= http.StatusMultipleChoices {
+		return nil, "", yookassaAPIError(rawBody, httpStatus)
+	}
+
+	var list yookassaPaymentList
+	if err := json.Unmarshal(rawBody, &list); err != nil {
+		return nil, "", fmt.Errorf("yookassa: parse payment list response: %w", err)
+	}
+
+	items := make([]Payment, 0, len(list.Items))
+	for _, object := range list.Items {
+		payment, err := object.toPayment()
+		if err != nil {
+			// Fail closed: a malformed item means the API contract broke,
+			// and silently skipping payments could lose a settlement.
+			return nil, "", fmt.Errorf("yookassa: parse payment list item: %w", err)
+		}
+		items = append(items, *payment)
+	}
+	return items, list.NextCursor, nil
 }
 
 func (p yookassaPaymentObject) toPayment() (*Payment, error) {
