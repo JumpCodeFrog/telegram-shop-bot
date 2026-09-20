@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/csv"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -43,6 +44,81 @@ func (b *Bot) handleOrdersAll(msg *tgbotapi.Message) {
 			order.ID, order.UserID, order.TotalUSD, order.TotalStars, status))
 	}
 	b.send(tgbotapi.NewMessage(msg.Chat.ID, sb.String()))
+}
+
+// handleOrderCard renders the full admin card for one order: buyer, items,
+// every non-zero money snapshot, status, payment facts and timestamps.
+func (b *Bot) handleOrderCard(msg *tgbotapi.Message) {
+	if !b.isAdmin(msg.From.ID) {
+		return
+	}
+	lang := msg.From.LanguageCode
+	id, err := strconv.ParseInt(strings.TrimSpace(msg.CommandArguments()), 10, 64)
+	if err != nil {
+		b.send(tgbotapi.NewMessage(msg.Chat.ID, b.t(lang, "admin_order_usage")))
+		return
+	}
+
+	ctx, cancel := handlerCtx()
+	defer cancel()
+	order, err := b.order.GetOrder(ctx, id)
+	if err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			b.send(tgbotapi.NewMessage(msg.Chat.ID, fmt.Sprintf(b.t(lang, "admin_order_not_found"), id)))
+		} else {
+			b.logger.Error("get order card", "order_id", id, "error", err)
+			b.send(tgbotapi.NewMessage(msg.Chat.ID, b.t(lang, "admin_orders_load_failed")))
+		}
+		return
+	}
+	// The user row only adds the @username; a missing or unreadable row must
+	// not hide the order itself.
+	user, err := b.users.GetByTelegramID(ctx, order.UserID)
+	if err != nil {
+		b.logger.Error("load order card user", "order_id", id, "user_id", order.UserID, "error", err)
+		user = nil
+	}
+
+	b.send(tgbotapi.NewMessage(msg.Chat.ID, b.formatAdminOrderCard(lang, order, user)))
+}
+
+// formatAdminOrderCard renders the order card as plain text (no parse mode,
+// like /orders_all): product names and payment IDs are inserted verbatim.
+// Zero-valued RUB/TON snapshots and unset payment facts stay hidden.
+func (b *Bot) formatAdminOrderCard(lang string, order *storage.Order, user *storage.User) string {
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf(b.t(lang, "admin_order_card_title"), order.ID))
+	if user != nil && user.Username != "" {
+		sb.WriteString(fmt.Sprintf(b.t(lang, "admin_order_card_user_username"), order.UserID, user.Username))
+	} else {
+		sb.WriteString(fmt.Sprintf(b.t(lang, "admin_order_card_user"), order.UserID))
+	}
+	sb.WriteString(b.t(lang, "admin_order_card_items_header"))
+	for _, item := range order.Items {
+		sb.WriteString(fmt.Sprintf(b.t(lang, "admin_order_card_item"),
+			item.ProductName, item.Quantity, item.PriceUSD*float64(item.Quantity)))
+	}
+	sb.WriteString(fmt.Sprintf(b.t(lang, "admin_order_card_total"), order.TotalUSD, order.TotalStars))
+	if order.TotalRUB > 0 {
+		sb.WriteString(fmt.Sprintf(b.t(lang, "admin_order_card_total_rub"), order.TotalRUB))
+	}
+	if order.TotalTonNano > 0 {
+		sb.WriteString(fmt.Sprintf(b.t(lang, "admin_order_card_total_ton"), formatTON(order.TotalTonNano)))
+	}
+	status := storage.StatusDisplay[order.Status]
+	if status == "" {
+		status = order.Status
+	}
+	sb.WriteString(fmt.Sprintf(b.t(lang, "admin_order_card_status"), status))
+	if order.PaymentMethod != "" {
+		sb.WriteString(fmt.Sprintf(b.t(lang, "admin_order_card_method"), b.paymentMethodText(lang, order.PaymentMethod)))
+	}
+	if order.PaymentID != "" {
+		sb.WriteString(fmt.Sprintf(b.t(lang, "admin_order_card_payment_id"), order.PaymentID))
+	}
+	sb.WriteString(fmt.Sprintf(b.t(lang, "admin_order_card_created"), order.CreatedAt.Format("02.01.2006 15:04")))
+	sb.WriteString(fmt.Sprintf(b.t(lang, "admin_order_card_updated"), order.UpdatedAt.Format("02.01.2006 15:04")))
+	return sb.String()
 }
 
 func (b *Bot) handleSetDelivered(msg *tgbotapi.Message) {

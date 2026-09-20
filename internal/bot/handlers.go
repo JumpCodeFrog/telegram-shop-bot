@@ -111,6 +111,8 @@ func (b *Bot) routeMessage(msg *tgbotapi.Message) {
 		b.handleDeleteProduct(msg)
 	case "orders_all":
 		b.handleOrdersAll(msg)
+	case "order":
+		b.handleOrderCard(msg)
 	case "setdelivered":
 		b.handleSetDelivered(msg)
 	case "reviews":
