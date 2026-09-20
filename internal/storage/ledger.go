@@ -187,7 +187,7 @@ func (s *SQLPaymentLedgerStore) recordRefund(ctx context.Context, refund Refund,
 func (s *SQLPaymentLedgerStore) recordRefundAnomaly(ctx context.Context, refund Refund, reason string, audit *PaymentIngressAudit) error {
 	provider := normalizePaymentProvider(refund.Provider)
 	rawPayload := ""
-	if provider != PaymentMethodStars && provider != PaymentMethodCrypto && provider != PaymentMethodYooKassa && provider != PaymentMethodStripe && refund.OrderID > 0 {
+	if provider != PaymentMethodStars && provider != PaymentMethodCrypto && provider != PaymentMethodYooKassa && provider != PaymentMethodStripe && provider != PaymentMethodTON && provider != PaymentMethodNowpayments && refund.OrderID > 0 {
 		var orderProvider string
 		if err := s.db.QueryRowContext(ctx, `SELECT payment_method FROM orders WHERE id = ?`, refund.OrderID).Scan(&orderProvider); err == nil {
 			provider = normalizePaymentProvider(orderProvider)
@@ -235,7 +235,7 @@ func (s *SQLPaymentLedgerStore) recordRefundOnce(ctx context.Context, refund Ref
 		return ErrInvalidMoney
 	}
 	provider := normalizePaymentProvider(refund.Provider)
-	if (provider != PaymentMethodStars && provider != PaymentMethodCrypto && provider != PaymentMethodYooKassa && provider != PaymentMethodStripe) ||
+	if (provider != PaymentMethodStars && provider != PaymentMethodCrypto && provider != PaymentMethodYooKassa && provider != PaymentMethodStripe && provider != PaymentMethodTON && provider != PaymentMethodNowpayments) ||
 		refund.Scale < 0 || refund.Scale > 9 || strings.TrimSpace(refund.Currency) == "" {
 		return ErrPaymentReceiptMismatch
 	}

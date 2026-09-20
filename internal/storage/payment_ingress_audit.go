@@ -36,7 +36,7 @@ func appendPaymentIngressAudit(ctx context.Context, tx *sql.Tx, orderID int64, p
 	}
 	provider = normalizePaymentProvider(provider)
 	if orderID < 0 || targetID <= 0 ||
-		(provider != PaymentMethodStars && provider != PaymentMethodCrypto && provider != PaymentMethodYooKassa && provider != PaymentMethodStripe) ||
+		(provider != PaymentMethodStars && provider != PaymentMethodCrypto && provider != PaymentMethodYooKassa && provider != PaymentMethodStripe && provider != PaymentMethodTON && provider != PaymentMethodNowpayments) ||
 		(eventKind != PaymentEventCaptured && eventKind != PaymentEventRefunded) ||
 		(targetKind != PaymentIngressTargetEvent && targetKind != PaymentIngressTargetRefund && targetKind != PaymentIngressTargetAnomaly) {
 		return ErrPaymentReviewConflict

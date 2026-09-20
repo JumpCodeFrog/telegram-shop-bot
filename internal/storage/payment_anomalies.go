@@ -29,7 +29,7 @@ func (s *SQLOrderStore) recordPaymentAnomaly(ctx context.Context, anomaly Paymen
 	if anomaly.EventKind == "" {
 		anomaly.EventKind = PaymentEventCaptured
 	}
-	if (anomaly.Provider != PaymentMethodStars && anomaly.Provider != PaymentMethodCrypto && anomaly.Provider != PaymentMethodYooKassa && anomaly.Provider != PaymentMethodStripe) ||
+	if (anomaly.Provider != PaymentMethodStars && anomaly.Provider != PaymentMethodCrypto && anomaly.Provider != PaymentMethodYooKassa && anomaly.Provider != PaymentMethodStripe && anomaly.Provider != PaymentMethodTON && anomaly.Provider != PaymentMethodNowpayments) ||
 		(anomaly.EventKind != PaymentEventCaptured && anomaly.EventKind != PaymentEventRefunded) ||
 		anomaly.AmountMinor < 0 || anomaly.Scale < 0 || anomaly.Scale > 9 ||
 		(anomaly.AmountMinor == 0 && anomaly.RawAmount == "" && anomaly.RawPayload == "") ||

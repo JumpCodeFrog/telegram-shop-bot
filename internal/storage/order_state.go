@@ -66,6 +66,19 @@ func orderMoney(order Order, provider string) (amount int64, currency string, sc
 			return 0, "", 0, ErrInvalidMoney
 		}
 		return int64(math.Round(order.TotalUSD * 100)), "USD", 2, nil
+	case PaymentMethodTON:
+		// TotalTonNano is already an integer nanoton count, so the float
+		// NaN/Inf guards of the float-priced rails do not apply to this
+		// int64 column; the <= 0 guard suffices.
+		if order.TotalTonNano <= 0 {
+			return 0, "", 0, ErrInvalidMoney
+		}
+		return order.TotalTonNano, "TON", 9, nil
+	case PaymentMethodNowpayments:
+		if order.TotalUSD <= 0 || math.IsNaN(order.TotalUSD) || math.IsInf(order.TotalUSD, 0) {
+			return 0, "", 0, ErrInvalidMoney
+		}
+		return int64(math.Round(order.TotalUSD * 100)), "USD", 2, nil
 	default:
 		return 0, "", 0, fmt.Errorf("order store: unsupported payment provider %q", provider)
 	}
@@ -77,7 +90,13 @@ func validatePaymentFact(order Order, fact PaymentFact) (PaymentFact, error) {
 	if err != nil {
 		return PaymentFact{}, err
 	}
-	if fact.ExternalID == "" || fact.AmountMinor != expectedAmount || fact.Scale != expectedScale {
+	// Amount exactness is enforced for every rail except ton: TON settlement
+	// is overpay-tolerant at the receipt layer (ConfirmPaymentReceipt applies
+	// the >= rule), so this fact gate pins only the currency and scale for
+	// ton — mirroring how the card rails document their own split between
+	// fact validation and the payer rule.
+	if fact.ExternalID == "" || fact.Scale != expectedScale ||
+		(fact.Provider != PaymentMethodTON && fact.AmountMinor != expectedAmount) {
 		return PaymentFact{}, ErrPaymentReceiptMismatch
 	}
 	switch fact.Provider {
@@ -95,6 +114,20 @@ func validatePaymentFact(order Order, fact PaymentFact) (PaymentFact, error) {
 		}
 	case PaymentMethodStripe:
 		// Stripe has no Telegram payer identity, so only the money is
+		// validated; the payer rule lives in invalidProviderCapturePayer.
+		if fact.Currency != "USD" {
+			return PaymentFact{}, ErrPaymentReceiptMismatch
+		}
+	case PaymentMethodTON:
+		// On-chain TON transfers carry no Telegram payer identity, so no
+		// payer check applies here; the payer rule lives in
+		// invalidProviderCapturePayer. Amount exactness is deliberately not
+		// enforced at this layer either (see the shared gate above).
+		if fact.Currency != "TON" {
+			return PaymentFact{}, ErrPaymentReceiptMismatch
+		}
+	case PaymentMethodNowpayments:
+		// NOWPayments has no Telegram payer identity, so only the money is
 		// validated; the payer rule lives in invalidProviderCapturePayer.
 		if fact.Currency != "USD" {
 			return PaymentFact{}, ErrPaymentReceiptMismatch
