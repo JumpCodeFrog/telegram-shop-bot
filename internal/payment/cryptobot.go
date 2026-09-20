@@ -36,6 +36,18 @@ type Invoice struct {
 	InvoiceID string
 }
 
+// RefundResult is the shared outcome of a provider refund call: the provider's
+// refund object id and its status at creation time, passed through verbatim.
+// Like Invoice, the shape is identical across rails, so one type serves all
+// providers; per-provider snapshot types (StripeSession, Payment) exist only
+// where provider fields diverge. Status VALUES are provider-specific strings
+// (e.g. stripe "failed" vs yookassa "canceled") — callers branch on the value,
+// never on the type.
+type RefundResult struct {
+	ID     string
+	Status string
+}
+
 // WebhookPayload represents the parsed body of a CryptoBot webhook callback.
 type WebhookPayload struct {
 	InvoiceID       string

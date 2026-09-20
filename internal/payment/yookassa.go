@@ -109,6 +109,22 @@ type yookassaPaymentList struct {
 	NextCursor string                  `json:"next_cursor"`
 }
 
+// yookassaRefundRequest is the JSON body of POST /refunds. The amount value
+// is an exact two-decimal string built with formatMinorUnits (integer string
+// math, never float rounding); the refund API takes the currency lowercase.
+type yookassaRefundRequest struct {
+	Amount      yookassaAmount `json:"amount"`
+	Description string         `json:"description"`
+	PaymentID   string         `json:"payment_id"`
+}
+
+// yookassaRefundObject is the API's refund response: id (rf_...) plus status
+// ("succeeded"|"pending"|"canceled").
+type yookassaRefundObject struct {
+	ID     string `json:"id"`
+	Status string `json:"status"`
+}
+
 // CreatePayment registers a redirect payment for the given order and returns
 // its confirmation URL. A fresh idempotence key is used for every attempt:
 // the ledger quarantines a second successful charge for the same order, so a
@@ -160,6 +176,69 @@ func (y *YooKassaPayment) CreatePayment(ctx context.Context, orderID int64, amou
 		return nil, errors.New("yookassa: API returned an empty confirmation URL")
 	}
 	return &Invoice{PayURL: payment.Confirmation.ConfirmationURL, InvoiceID: payment.ID}, nil
+}
+
+// CreateRefund refunds a captured payment, in part or in full. amountMinor is
+// the exact refund amount in minor units (kopecks) and MUST be positive:
+// partial-or-full is the caller's math (and the ledger's bookkeeping) — the
+// adapter never guesses an amount, so unlike Stripe there is no omit-for-full
+// leg here.
+//
+// The returned status ("succeeded"|"pending"|"canceled") is passed through
+// verbatim; the CALLER decides what a non-succeeded refund means for the
+// order.
+//
+// Every call carries a fresh Idempotence-Key (YooKassa's spelling), mirroring
+// CreatePayment: two adapter calls are two distinct money-out operations and
+// the provider must never collapse the second into a replay of the first.
+// Cross-call dedup is the caller's job via the ledger.
+func (y *YooKassaPayment) CreateRefund(ctx context.Context, paymentID string, amountMinor int64, description string) (*RefundResult, error) {
+	if !y.Configured() {
+		return nil, ErrYooKassaNotConfigured
+	}
+	if !validYooKassaID(paymentID) || amountMinor <= 0 {
+		return nil, ErrInvalidYooKassaReceipt
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	reqBody := yookassaRefundRequest{
+		Amount:      yookassaAmount{Value: formatMinorUnits(amountMinor, 2), Currency: "rub"},
+		Description: description,
+		PaymentID:   paymentID,
+	}
+	body, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("yookassa: marshal refund request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, y.baseURL+"/refunds", bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("yookassa: create refund request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Idempotence-Key", uuid.NewString())
+	req.Header.Set("Authorization", y.basicAuth())
+
+	rawBody, status, err := y.doJSON(req)
+	if err != nil {
+		return nil, err
+	}
+	if status < http.StatusOK || status >= http.StatusMultipleChoices {
+		return nil, yookassaAPIError(rawBody, status)
+	}
+
+	var refund yookassaRefundObject
+	if err := json.Unmarshal(rawBody, &refund); err != nil {
+		return nil, fmt.Errorf("yookassa: parse refund response: %w", err)
+	}
+	if refund.ID == "" {
+		// Fail closed: recording an anonymous money-out movement is worse
+		// than an error.
+		return nil, errors.New("yookassa: API returned a refund without an id")
+	}
+	return &RefundResult{ID: refund.ID, Status: refund.Status}, nil
 }
 
 // GetPayment reads the authoritative payment state from the YooKassa API.

@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"shop_bot/internal/storage"
 )
 
@@ -245,6 +247,198 @@ func TestYooKassaGetPaymentFallsBackToCreatedAt(t *testing.T) {
 	}
 }
 
+func TestYooKassaCreateRefundSendsJSONRequest(t *testing.T) {
+	var idempotenceKeys []string
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("expected POST, got %s", r.Method)
+		}
+		if r.URL.Path != "/v3/refunds" {
+			t.Errorf("expected path /v3/refunds, got %s", r.URL.Path)
+		}
+		if r.Header.Get("Content-Type") != "application/json" {
+			t.Errorf("expected Content-Type application/json, got %q", r.Header.Get("Content-Type"))
+		}
+		requireYooKassaBasicAuth(t, r)
+
+		key := r.Header.Get("Idempotence-Key")
+		if key == "" {
+			t.Error("expected non-empty Idempotence-Key header")
+		} else if _, err := uuid.Parse(key); err != nil {
+			t.Errorf("Idempotence-Key %q is not a valid uuid: %v", key, err)
+		}
+		idempotenceKeys = append(idempotenceKeys, key)
+
+		raw, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("failed to read request body: %v", err)
+			return
+		}
+		var body map[string]any
+		if err := json.Unmarshal(raw, &body); err != nil {
+			t.Errorf("failed to parse request body %q: %v", raw, err)
+			return
+		}
+		if len(body) != 3 {
+			t.Errorf("body = %v, want exactly amount, description, payment_id", body)
+		}
+		amount, _ := body["amount"].(map[string]any)
+		if len(amount) != 2 {
+			t.Errorf("amount = %v, want exactly value and currency", amount)
+		}
+		// Minor units become an exact two-decimal string: 184908 → "1849.08".
+		if amount["value"] != "1849.08" {
+			t.Errorf("amount.value = %v, want %q", amount["value"], "1849.08")
+		}
+		if amount["currency"] != "rub" {
+			t.Errorf("amount.currency = %v, want %q", amount["currency"], "rub")
+		}
+		if body["description"] != "Refund for order 42" {
+			t.Errorf("description = %v, want %q", body["description"], "Refund for order 42")
+		}
+		if body["payment_id"] != "pay_1" {
+			t.Errorf("payment_id = %v, want %q", body["payment_id"], "pay_1")
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"rf_1","status":"succeeded"}`))
+	}))
+	defer srv.Close()
+
+	client := newYookassaTestClient(srv)
+
+	refund, err := client.CreateRefund(context.Background(), "pay_1", 184908, "Refund for order 42")
+	if err != nil {
+		t.Fatalf("CreateRefund returned error: %v", err)
+	}
+	if refund.ID != "rf_1" || refund.Status != "succeeded" {
+		t.Fatalf("refund = %+v, want {ID:rf_1 Status:succeeded}", refund)
+	}
+
+	// A second refund call must carry a fresh idempotence key: two adapter
+	// calls are two distinct money-out operations and the provider must never
+	// collapse the second into a replay of the first.
+	if _, err := client.CreateRefund(context.Background(), "pay_1", 184908, "Refund for order 42"); err != nil {
+		t.Fatalf("second CreateRefund returned error: %v", err)
+	}
+	if len(idempotenceKeys) != 2 {
+		t.Fatalf("expected 2 requests, got %d", len(idempotenceKeys))
+	}
+	if idempotenceKeys[0] == "" || idempotenceKeys[1] == "" {
+		t.Fatalf("expected both requests to carry an Idempotence-Key, got %v", idempotenceKeys)
+	}
+	if idempotenceKeys[0] == idempotenceKeys[1] {
+		t.Fatalf("second request reused Idempotence-Key %q", idempotenceKeys[0])
+	}
+}
+
+func TestYooKassaCreateRefundStatusPassthrough(t *testing.T) {
+	// Every status — including "canceled" — must come back verbatim: the
+	// adapter reports facts, the CALLER decides what a status means for the
+	// order and the ledger.
+	for _, status := range []string{"succeeded", "pending", "canceled"} {
+		t.Run(status, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"id":"rf_2","status":"` + status + `"}`))
+			}))
+			defer srv.Close()
+
+			refund, err := newYookassaTestClient(srv).CreateRefund(context.Background(), "pay_1", 199900, "Refund for order 42")
+			if err != nil {
+				t.Fatalf("CreateRefund returned error for status %q: %v", status, err)
+			}
+			if refund.ID != "rf_2" || refund.Status != status {
+				t.Fatalf("refund = %+v, want {ID:rf_2 Status:%s}", refund, status)
+			}
+		})
+	}
+}
+
+func TestYooKassaCreateRefundRejectsInvalidInput(t *testing.T) {
+	called := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		called = true
+	}))
+	defer srv.Close()
+
+	client := newYookassaTestClient(srv)
+
+	for _, tc := range []struct {
+		name        string
+		paymentID   string
+		amountMinor int64
+	}{
+		// Partial-or-full is the caller's math; the adapter never guesses an
+		// amount, so a non-positive amount is a hard rejection, not a full
+		// refund.
+		{name: "amount zero", paymentID: "pay_1", amountMinor: 0},
+		{name: "amount negative", paymentID: "pay_1", amountMinor: -1},
+		{name: "payment id empty", paymentID: "", amountMinor: 199900},
+		{name: "payment id with illegal characters", paymentID: "pay/1", amountMinor: 199900},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := client.CreateRefund(context.Background(), tc.paymentID, tc.amountMinor, "Refund for order 42")
+			if !errors.Is(err, ErrInvalidYooKassaReceipt) {
+				t.Fatalf("expected ErrInvalidYooKassaReceipt, got %v", err)
+			}
+		})
+	}
+	if called {
+		t.Fatal("CreateRefund made an HTTP call for invalid input")
+	}
+}
+
+func TestYooKassaCreateRefundAPIError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"code":"invalid_parameter","description":"bad"}`))
+	}))
+	defer srv.Close()
+
+	client := newYookassaTestClient(srv)
+
+	_, err := client.CreateRefund(context.Background(), "pay_1", 199900, "Refund for order 42")
+	if err == nil {
+		t.Fatal("expected error from CreateRefund on API error, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid_parameter") {
+		t.Fatalf("expected error to mention invalid_parameter, got %q", err.Error())
+	}
+
+	broken := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte("boom"))
+	}))
+	defer broken.Close()
+
+	brokenClient := newYookassaTestClient(broken)
+
+	_, err = brokenClient.CreateRefund(context.Background(), "pay_1", 199900, "Refund for order 42")
+	if err == nil {
+		t.Fatal("expected error from CreateRefund on 5xx, got nil")
+	}
+	if !strings.Contains(err.Error(), "HTTP status 500") {
+		t.Fatalf("expected HTTP status error, got %q", err.Error())
+	}
+}
+
+func TestYooKassaCreateRefundRejectsMissingRefundID(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"succeeded"}`))
+	}))
+	defer srv.Close()
+
+	// Fail closed: a refund response without an id broke the API contract,
+	// and recording an anonymous money-out movement is worse than an error.
+	if _, err := newYookassaTestClient(srv).CreateRefund(context.Background(), "pay_1", 199900, "Refund for order 42"); err == nil {
+		t.Fatal("expected error for a refund response without an id, got nil")
+	}
+}
+
 func TestYooKassaPaymentReceiptValidatesEverything(t *testing.T) {
 	valid := func() *Payment {
 		return &Payment{
@@ -396,6 +590,9 @@ func TestYooKassaNotConfiguredFailsClosed(t *testing.T) {
 	}
 	if _, _, err := client.ListPayments(context.Background(), "succeeded", time.Time{}, "", 50); !errors.Is(err, ErrYooKassaNotConfigured) {
 		t.Fatalf("ListPayments: expected ErrYooKassaNotConfigured, got %v", err)
+	}
+	if _, err := client.CreateRefund(context.Background(), "pay_1", 100, "Refund"); !errors.Is(err, ErrYooKassaNotConfigured) {
+		t.Fatalf("CreateRefund: expected ErrYooKassaNotConfigured, got %v", err)
 	}
 
 	for _, tc := range []struct {

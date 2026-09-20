@@ -84,6 +84,10 @@ type StripeSession struct {
 	AmountTotal   int64  // minor units (cents)
 	Currency      string // normalized to uppercase on read
 	OrderID       int64
+	// PaymentIntent is the id of the PaymentIntent backing the session
+	// (pi_...). It may be empty when the API omits it or sends null (unpaid
+	// sessions); parsing is tolerant and refunds need it only once paid.
+	PaymentIntent string
 }
 
 type stripeSessionObject struct {
@@ -94,6 +98,7 @@ type stripeSessionObject struct {
 	Currency          string            `json:"currency"`
 	Metadata          map[string]string `json:"metadata"`
 	ClientReferenceID string            `json:"client_reference_id"`
+	PaymentIntent     string            `json:"payment_intent"`
 }
 
 type stripeErrorResponse struct {
@@ -217,7 +222,72 @@ func (o stripeSessionObject) toSession() (*StripeSession, error) {
 		AmountTotal:   o.AmountTotal,
 		Currency:      strings.ToUpper(o.Currency),
 		OrderID:       orderID,
+		PaymentIntent: o.PaymentIntent,
 	}, nil
+}
+
+// CreateRefund refunds a captured PaymentIntent, in full or in part.
+// amountCents > 0 sends an explicit partial amount; amountCents <= 0 omits
+// the amount param, which refunds the full remaining balance. Partial-vs-full
+// is the caller's math (and the ledger's bookkeeping) — this method never
+// guesses an amount.
+//
+// A refund whose status is "failed" is NOT an HTTP error: Stripe created the
+// object but it did not move money. The result is returned verbatim and the
+// CALLER decides what a failed or pending refund means for the order.
+//
+// Every call carries a fresh Idempotency-Key (Stripe's header spelling for
+// this API), mirroring CreateCheckoutSession: two adapter calls are two
+// distinct money-out operations and the provider must never collapse the
+// second into a replay of the first. Cross-call dedup is the caller's job via
+// the ledger.
+func (s *StripePayment) CreateRefund(ctx context.Context, paymentIntentID string, amountCents int64) (*RefundResult, error) {
+	if !s.Configured() {
+		return nil, ErrStripeNotConfigured
+	}
+	if strings.TrimSpace(paymentIntentID) == "" {
+		return nil, errors.New("stripe: refund requires a payment intent id")
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	form := url.Values{}
+	form.Set("payment_intent", paymentIntentID)
+	if amountCents > 0 {
+		form.Set("amount", strconv.FormatInt(amountCents, 10))
+	}
+	form.Set("reason", "requested_by_customer")
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.baseURL+"/refunds", strings.NewReader(form.Encode()))
+	if err != nil {
+		return nil, fmt.Errorf("stripe: create refund request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Authorization", "Bearer "+s.secretKey)
+	req.Header.Set("Idempotency-Key", uuid.NewString())
+
+	rawBody, status, err := s.do(req)
+	if err != nil {
+		return nil, err
+	}
+	if status < http.StatusOK || status >= http.StatusMultipleChoices {
+		return nil, stripeAPIError(rawBody, status)
+	}
+
+	var refund struct {
+		ID     string `json:"id"`
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal(rawBody, &refund); err != nil {
+		return nil, fmt.Errorf("stripe: parse refund response: %w", err)
+	}
+	if refund.ID == "" {
+		// Fail closed: recording an anonymous money-out movement is worse
+		// than an error.
+		return nil, errors.New("stripe: API returned a refund without an id")
+	}
+	return &RefundResult{ID: refund.ID, Status: refund.Status}, nil
 }
 
 // VerifyWebhookSignature validates a Stripe-Signature header against the raw
