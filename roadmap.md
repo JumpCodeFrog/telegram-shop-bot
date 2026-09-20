@@ -130,10 +130,10 @@ Mini App, подписками, отзывами, мультифото, i18n н�
 
 | # | Задача | Сложность | Эффект |
 |---|---|---|---|
-| 4.1 | Topics-нотификации для админов (Supergroup Topics) | Low | Low |
-| 4.2 | Глубокая аналитика (топ-покупатели, отчёт по промокодам, фильтры CSV по датам) | Medium | Средний |
-| 4.3 | Coinbase Commerce / BTCPay (по запросу пользователей; NOWPayments покрывает основной спрос) | Medium | Средний |
-| 4.4 | Авто-рефанды через API провайдеров (сейчас — operator-driven, by design) | High | Средний |
+| 4.1 | ~~Topics-нотификации~~ ✅ уже реализовано (аудит 21.09: `internal/bot/notify.go` — AdminEvent + topicFor + threadID) | — | — |
+| 4.2 | ~~Глубокая аналитика~~ ✅ уже реализовано (аудит 21.09: TopBuyers/PromoUsage/GetPaymentMethodStats в `storage/analytics.go` + экран /analytics; диапазон дат в /export_orders) | — | — |
+| 4.3 | Coinbase Commerce / BTCPay — **отложено решением**: NOWPayments покрывает 300+ монет (включая всё, что дал бы Coinbase); BTCPay — self-hosted ниша. Вернуться при явном спросе | — | — |
+| 4.4 | Рефанды из админки: `/refund <order_id>` с two-tap confirm — Stars (refundStarPayment), Stripe (/v1/refunds), YooKassa (/v3/refunds), баланс (кредит); crypto/TON/NOWPayments — вручную (нет API), команда подсказывает. Запись в ledger через IngestProviderRefund. **Без авто-триггеров** (оператор решает) | High | Высокий |
 | 4.5 | ✅ Poller потерянных вебхуков YooKassa (сейчас покрыто ручным payment-review) — закрыто 21.09.2026, план `docs/superpowers/plans/2026-09-20-yookassa-poller.md` (ListPayments-адаптер `87e48c0`, worker+wiring `108b7d2`: 60s тик, 24h окно, курсорная пагинация 50/страница с капом 20 страниц + warn об усечении, идемпотентные реплеи, out-of-stock-карантин как в вебхук-пути) | Medium | Средний |
 | 4.6 | ✅ Перетегировать factless-envelope аномалию `webhook_parse_failure` → `webhook_missing_payment_id` (осознанно post-merge: reason-строки зафиксированы тестовыми пинами свипа) — закрыто 20.09.2026, коммит `ee7f926` (ретег + пин `TestYooKassaWebhookFactlessEnvelopeRecordsMissingPaymentID`) | Low | Low |
 | 4.7 | Полное update-ctx propagation: ctx через весь middleware/handler chain (сейчас — per-handler 30s корни `handlerCtx`; chain type — `func(tgbotapi.Update)`) | Medium | Средний |
