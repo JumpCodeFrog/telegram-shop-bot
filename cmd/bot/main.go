@@ -264,9 +264,28 @@ func runBot() {
 		slog.Warn("TON disabled, skipping polling worker")
 	}
 
+	// Lost-webhook backup for RUB card payments: the YooKassa webhook stays
+	// the primary settlement path, so a slower cadence than crypto/TON (60s)
+	// is enough and each tick just re-scans a bounded window where replays
+	// are ledger no-ops. The rate guard is the exact checkout-button
+	// predicate (bot.go: yooKassaPaymentsEnabled): without a positive
+	// USDToRUBRate checkout never snapshots orders.total_rub, so no RUB
+	// receipt can ever settle. Separate instance from the webapi-facing one
+	// below, mirroring cryptoPayments/tonPayments.
+	yookassaPollerPayments := payment.NewYooKassaPayment(cfg.YooKassaShopID, cfg.YooKassaSecretKey, cfg.YooKassaReturnURL)
+	if yookassaPollerPayments.Configured() && cfg.USDToRUBRate > 0 {
+		yookassaW := worker.NewYooKassaPollingWorker(yookassaPollerPayments, b.OrderService(),
+			func(ctx context.Context, outcome *shop.PaymentOutcome) {
+				b.AnnouncePaidOutcome(ctx, outcome, storage.PaymentMethodYooKassa)
+			}, 60*time.Second)
+		workers.Start(ctx, "yookassa_polling", yookassaW.Start)
+	} else {
+		slog.Warn("YooKassa disabled, skipping polling worker")
+	}
+
 	// RUB card payments for the Mini App checkout. Separate instance from the
 	// bot's own (main owns the webapi deps, mirroring crypto); settlement is
-	// webhook-driven, so there is no polling worker.
+	// webhook-driven, backed up by the lost-webhook poller above.
 	yookassaPayments := payment.NewYooKassaPayment(cfg.YooKassaShopID, cfg.YooKassaSecretKey, cfg.YooKassaReturnURL)
 
 	// USD card payments for the Mini App checkout. Separate instance from the
