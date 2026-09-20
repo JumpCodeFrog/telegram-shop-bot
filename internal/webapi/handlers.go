@@ -144,6 +144,17 @@ type Deps struct {
 	TON         TONLinker
 	Nowpayments NowpaymentsInvoicer
 	Files       FileURLResolver
+
+	// The *Available flags are the config-level rail availability rendered
+	// into the cart payload as *_enabled booleans. main computes them with
+	// the same predicates as the bot's payment keyboard (bot.go:
+	// yooKassaPaymentsEnabled & co.) — Configured(), plus a positive
+	// USD_TO_RUB_RATE / USD_PER_TON for the converted rails. They steer
+	// rendering only; POST /api/checkout re-validates every guard.
+	YooKassaAvailable    bool
+	StripeAvailable      bool
+	TONAvailable         bool
+	NowpaymentsAvailable bool
 }
 
 type cachedFileURL struct {
@@ -391,10 +402,19 @@ func (s *Server) handleProduct(w http.ResponseWriter, r *http.Request, _ *AuthRe
 	s.writeJSON(w, http.StatusOK, resp)
 }
 
-// cartJSON renders a CartView.
-func cartJSON(view *shop.CartView) map[string]any {
+// cartJSON renders a CartView. The *_enabled flags tell the Mini App which
+// payment buttons to render; they mirror the bot's payment keyboard
+// (handlers_checkout.go): a rail is offered when it is available (Deps, from
+// config), the cart holds no subscription product (those are Stars-only),
+// and — for the converted rails — the converted total is positive. Rendering
+// aid only: POST /api/checkout re-checks every guard server-side.
+func (s *Server) cartJSON(view *shop.CartView) map[string]any {
 	items := make([]map[string]any, 0, len(view.Items))
+	sub := false
 	for _, it := range view.Items {
+		if it.Product.SubPeriodDays > 0 {
+			sub = true
+		}
 		items = append(items, map[string]any{
 			"product_id":  it.Product.ID,
 			"name":        it.Product.Name,
@@ -405,9 +425,15 @@ func cartJSON(view *shop.CartView) map[string]any {
 		})
 	}
 	return map[string]any{
-		"items":       items,
-		"total_usd":   view.TotalUSD,
-		"total_stars": view.TotalStars,
+		"items":               items,
+		"total_usd":           view.TotalUSD,
+		"total_stars":         view.TotalStars,
+		"total_rub":           view.TotalRUB,
+		"total_ton_nano":      view.TotalTONNano,
+		"yookassa_enabled":    s.deps.YooKassaAvailable && !sub && view.TotalRUB > 0,
+		"stripe_enabled":      s.deps.StripeAvailable && !sub,
+		"ton_enabled":         s.deps.TONAvailable && !sub && view.TotalTONNano > 0,
+		"nowpayments_enabled": s.deps.NowpaymentsAvailable && !sub,
 	}
 }
 
@@ -418,7 +444,7 @@ func (s *Server) respondCart(w http.ResponseWriter, r *http.Request, userID int6
 		s.writeError(w, http.StatusInternalServerError, "webapp_err_internal")
 		return
 	}
-	s.writeJSON(w, http.StatusOK, cartJSON(view))
+	s.writeJSON(w, http.StatusOK, s.cartJSON(view))
 }
 
 // GET /api/cart — items and totals.
