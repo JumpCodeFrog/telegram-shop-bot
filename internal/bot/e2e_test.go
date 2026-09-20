@@ -211,6 +211,32 @@ func newE2EEnvWithConfig(t *testing.T, mutate func(*config.Config)) *e2eEnv {
 	return env
 }
 
+// failingAnomalyOrderStore wraps the production SQL order store and fails
+// ONLY the RecordPaymentAnomaly quarantine write with err. Every other
+// capability (order reads, settlement, fact recording) is promoted from the
+// embedded store unchanged, so webhook tests can isolate the
+// 500-on-quarantine-failure path without disturbing the rest of the flow.
+type failingAnomalyOrderStore struct {
+	*storage.SQLOrderStore
+	err error
+}
+
+func (f failingAnomalyOrderStore) RecordPaymentAnomaly(context.Context, storage.PaymentAnomaly) error {
+	return f.err
+}
+
+// failAnomalyRecording rewires the bot's order service so the quarantine
+// write fails with err while every other store capability keeps hitting the
+// real database. Call it AFTER placing orders: the swap is process-local and
+// instantaneous, existing rows stay readable through e.db.
+func (e *e2eEnv) failAnomalyRecording(err error) {
+	e.t.Helper()
+	e.bot.order = shop.NewOrderService(
+		failingAnomalyOrderStore{SQLOrderStore: storage.NewSQLOrderStore(e.db), err: err},
+		storage.NewCartStore(e.db.Conn()), storage.NewSQLProductStore(e.db),
+		shop.PaymentDeps{}, e.bot.logger)
+}
+
 func (e *e2eEnv) seedCatalog() {
 	e.t.Helper()
 	conn := e.db.Conn()
@@ -895,10 +921,12 @@ func cryptoSign(body string) string {
 const yookassaE2EConfirmationURL = "https://checkout.example/pay/e2e"
 
 // yookassaE2EAPIMock is a fake YooKassa API covering both routes of the full
-// purchase journey: POST /payments (payment creation from the RUB pay button)
-// and GET /payments/{id} (the authoritative refetch triggered by a webhook).
-// Hits are counted per route; the refetch body is seeded after checkout so
-// the response can carry the REAL order id in metadata.
+// purchase journey: POST /v3/payments (payment creation from the RUB pay
+// button) and GET /v3/payments/{id} (the authoritative refetch triggered by a
+// webhook). Both routes pin the request method and path — any other call
+// fails the test and gets a 404 that breaks the flow. Hits are counted per
+// route; the refetch body is seeded after checkout so the response can carry
+// the REAL order id in metadata.
 type yookassaE2EAPIMock struct {
 	mu          sync.Mutex
 	srv         *httptest.Server
@@ -913,7 +941,7 @@ func newYookassaE2EAPIMock(t *testing.T) *yookassaE2EAPIMock {
 	m := &yookassaE2EAPIMock{}
 	m.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		if r.Method == http.MethodPost && r.URL.Path == "/payments" {
+		if r.Method == http.MethodPost && r.URL.Path == "/v3/payments" {
 			var body map[string]any
 			_ = json.NewDecoder(r.Body).Decode(&body)
 			m.mu.Lock()
@@ -934,6 +962,13 @@ func newYookassaE2EAPIMock(t *testing.T) *yookassaE2EAPIMock {
 				"metadata":   body["metadata"],
 				"created_at": "2026-09-19T10:00:00Z",
 			})
+			return
+		}
+		// The only other legitimate call is the authoritative refetch.
+		if r.Method != http.MethodGet || !strings.HasPrefix(r.URL.Path, "/v3/payments/") {
+			t.Errorf("yookassa e2e mock: unexpected request %s %s, want GET /v3/payments/{id}", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"type":"error","id":"err-1","code":"not_found","description":"unexpected request"}`))
 			return
 		}
 		m.mu.Lock()
@@ -977,7 +1012,9 @@ func TestE2EYooKassaPurchase(t *testing.T) {
 		enableYooKassa(c)
 		c.OutboundWebhookURL = out.srv.URL
 	})
-	e.bot.yookassa.SetBaseURL(api.srv.URL)
+	// The mock pins the production /v3 path prefix, so the adapter's base
+	// URL carries it exactly like https://api.yookassa.ru/v3 would.
+	e.bot.yookassa.SetBaseURL(api.srv.URL + "/v3")
 	const buyer = int64(5001)
 
 	// $19.99 at the 92.5 rate → 1849.075 → 1849.08 RUB (half-kopeck rounds up).

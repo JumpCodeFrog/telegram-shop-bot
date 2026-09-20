@@ -8,6 +8,7 @@ package bot
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -39,9 +40,11 @@ func yookassaCounterValue(t *testing.T, metrics *service.MetricsService) float64
 
 // --- fake YooKassa API for the refetch ---
 
-// yookassaWebhookAPIMock answers GET /payments/{id} with a canned payment
+// yookassaWebhookAPIMock answers GET /v3/payments/{id} with a canned payment
 // object (or an HTTP error) and counts every hit so tests can prove whether
-// the handler consulted the API at all.
+// the handler consulted the API at all. The method and path are pinned
+// (mirroring the payment-package fixture): the ONLY legitimate call is the
+// authoritative refetch, so any other method or path fails the test.
 type yookassaWebhookAPIMock struct {
 	mu     sync.Mutex
 	srv    *httptest.Server
@@ -53,7 +56,13 @@ type yookassaWebhookAPIMock struct {
 func newYookassaWebhookAPIMock(t *testing.T, status int, body string) *yookassaWebhookAPIMock {
 	t.Helper()
 	m := &yookassaWebhookAPIMock{status: status, body: body}
-	m.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	m.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Errorf("yookassa API mock: method = %s, want GET (the only call is the payment refetch)", r.Method)
+		}
+		if !strings.HasPrefix(r.URL.Path, "/v3/payments/") {
+			t.Errorf("yookassa API mock: path = %q, want a /v3/payments/ prefix", r.URL.Path)
+		}
 		m.mu.Lock()
 		m.hits++
 		body, status := m.body, m.status
@@ -91,6 +100,18 @@ func yookassaRefetchJSON(id, status, amount string, paid bool, orderID int64) st
 		`"metadata":{"order_id":"%d"},`+
 		`"created_at":"2026-09-19T10:00:00Z","captured_at":"2026-09-19T10:01:00Z"}`,
 		id, status, paid, amount, orderID)
+}
+
+// yookassaRefetchNoOrderJSON builds an authoritative PAID+SUCCEEDED payment
+// whose metadata carries no order reference: the payment itself is terminal
+// and well-formed, but PaymentReceipt must refuse to build an order receipt
+// from it (webhook_invalid_receipt quarantine).
+func yookassaRefetchNoOrderJSON(id, amount string) string {
+	return fmt.Sprintf(`{"id":%q,"status":"succeeded","paid":true,`+
+		`"amount":{"value":%q,"currency":"RUB"},`+
+		`"metadata":{"note":"no order reference here"},`+
+		`"created_at":"2026-09-19T10:00:00Z","captured_at":"2026-09-19T10:01:00Z"}`,
+		id, amount)
 }
 
 // --- outbound webhook capture ---
@@ -150,7 +171,9 @@ func newYooKassaWebhookEnv(t *testing.T, api *yookassaWebhookAPIMock, out *outbo
 			c.OutboundWebhookURL = out.srv.URL
 		}
 	})
-	e.bot.yookassa.SetBaseURL(api.srv.URL)
+	// The mock pins the production /v3 path prefix, so the adapter's base
+	// URL carries it exactly like https://api.yookassa.ru/v3 would.
+	e.bot.yookassa.SetBaseURL(api.srv.URL + "/v3")
 	return e
 }
 
@@ -452,6 +475,87 @@ func TestYooKassaWebhookGarbageBodyQuarantines(t *testing.T) {
 	}
 	if got := e.qInt(`SELECT COUNT(*) FROM payment_anomalies WHERE provider='yookassa'`); got != 1 {
 		t.Fatalf("anomalies after oversized body = %d, want still 1", got)
+	}
+}
+
+func TestYooKassaWebhookInvalidReceiptQuarantines(t *testing.T) {
+	api := newYookassaWebhookAPIMock(t, http.StatusOK, "")
+	e := newYooKassaWebhookEnv(t, api, nil)
+	const buyer = int64(7701)
+	orderID := placeRUBOrder(e, buyer)
+
+	// The refetched payment is terminal and paid, but carries no order
+	// reference: no receipt can be built, so the provider fact is quarantined
+	// (webhook_invalid_receipt) and ACKed — never settled.
+	api.setBody(yookassaRefetchNoOrderJSON("pay_noref", "1849.08"))
+
+	before := e.tg.count()
+	rec := postYooKassaWebhook(t, e.bot, yookassaNotificationBody("payment.succeeded", "pay_noref"))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (the invalid receipt is durably quarantined) (%s)", rec.Code, rec.Body.String())
+	}
+	if got := api.count(); got != 1 {
+		t.Fatalf("refetch calls = %d, want 1", got)
+	}
+	var reason, externalID string
+	var proposed int64
+	if err := e.db.Conn().QueryRow(`SELECT reason, external_id, proposed_order_id FROM payment_anomalies
+		WHERE provider='yookassa'`).Scan(&reason, &externalID, &proposed); err != nil {
+		t.Fatalf("no yookassa anomaly recorded for the invalid receipt: %v", err)
+	}
+	if reason != "webhook_invalid_receipt" || externalID != "pay_noref" || proposed != 0 {
+		t.Fatalf("anomaly reason=%q external_id=%q proposed_order_id=%d, want webhook_invalid_receipt / pay_noref / 0",
+			reason, externalID, proposed)
+	}
+	if got := e.qStr(`SELECT status FROM orders WHERE id = ?`, orderID); got != storage.OrderStatusPending {
+		t.Fatalf("order status = %q, want pending (nothing settled)", got)
+	}
+	if got := e.qStr(`SELECT payment_state FROM orders WHERE id = ?`, orderID); got != storage.PaymentStatePending {
+		t.Fatalf("payment_state = %q, want pending (an orphan fact touches no order)", got)
+	}
+	if got := e.qInt(`SELECT COUNT(*) FROM payment_attempts WHERE provider='yookassa'`); got != 0 {
+		t.Fatalf("payment attempts = %d, want 0", got)
+	}
+	if got := e.tg.count() - before; got != 0 {
+		t.Fatalf("messages sent = %d, want 0:\n%s", got, dumpCalls(e.tg.since(before)))
+	}
+}
+
+func TestYooKassaWebhookQuarantineFailureWithholdsACK(t *testing.T) {
+	api := newYookassaWebhookAPIMock(t, http.StatusOK, "")
+	e := newYooKassaWebhookEnv(t, api, nil)
+	const buyer = int64(7702)
+	orderID := placeRUBOrder(e, buyer)
+	api.setBody(yookassaRefetchNoOrderJSON("pay_noref", "1849.08"))
+
+	// The quarantine write itself fails: the handler must NOT acknowledge a
+	// provider fact it could not durably record — 500 so YooKassa retries.
+	e.failAnomalyRecording(errors.New("injected quarantine write failure"))
+
+	before := e.tg.count()
+	rec := postYooKassaWebhook(t, e.bot, yookassaNotificationBody("payment.succeeded", "pay_noref"))
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 so YooKassa retries (%s)", rec.Code, rec.Body.String())
+	}
+	if got := api.count(); got != 1 {
+		t.Fatalf("refetch calls = %d, want 1", got)
+	}
+	if got := e.qStr(`SELECT status FROM orders WHERE id = ?`, orderID); got != storage.OrderStatusPending {
+		t.Fatalf("order status = %q, want pending (nothing settled)", got)
+	}
+	if got := e.qStr(`SELECT payment_state FROM orders WHERE id = ?`, orderID); got != storage.PaymentStatePending {
+		t.Fatalf("payment_state = %q, want pending (the failed write left no marker)", got)
+	}
+	if got := e.qInt(`SELECT COUNT(*) FROM payment_anomalies`); got != 0 {
+		t.Fatalf("anomalies = %d, want 0 (no partial quarantine write)", got)
+	}
+	if got := e.qInt(`SELECT COUNT(*) FROM payment_attempts WHERE provider='yookassa'`); got != 0 {
+		t.Fatalf("payment attempts = %d, want 0", got)
+	}
+	if got := e.tg.count() - before; got != 0 {
+		t.Fatalf("messages sent = %d, want 0:\n%s", got, dumpCalls(e.tg.since(before)))
 	}
 }
 

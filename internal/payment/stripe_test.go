@@ -282,10 +282,14 @@ func TestStripeVerifyWebhookSignature(t *testing.T) {
 	})
 
 	t.Run("multiple v1 one matches", func(t *testing.T) {
+		// A non-hex v1 entry must be SKIPPED (hex.DecodeString error →
+		// continue), not fatal: place v1=zz BEFORE the valid signature so the
+		// verifier only succeeds by skipping over it (with the valid entry
+		// first, a reject-on-undecodable regression would go unnoticed).
 		valid := stripeSignatureHeader(t, stripeTestWebhookSecret, now, body)
-		header := valid + ",v1=zz,v1=" + strings.Repeat("0", 64)
+		header := strings.Replace(valid, ",v1=", ",v1=zz,v1=", 1)
 		if err := client.VerifyWebhookSignature(header, body); err != nil {
-			t.Fatalf("expected any matching v1 to accept, got %v", err)
+			t.Fatalf("expected a non-hex v1 entry to be skipped in favor of the later valid one, got %v", err)
 		}
 	})
 
