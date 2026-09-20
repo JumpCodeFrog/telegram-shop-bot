@@ -1631,6 +1631,259 @@ func TestE2ETONPurchase(t *testing.T) {
 	}
 }
 
+// TestE2EBalancePurchase walks the internal-balance journey end to end: the
+// admin grants the buyer $25 via /setbalance (audited in balance_txs with the
+// acting admin's id), the buyer's checkout offers the balance row, and the tap
+// settles the order SYNCHRONOUSLY — no invoice, no provider round-trip —
+// through the same fact path as the external rails (provider "balance",
+// deterministic payment id "balance:<orderID>"). Stock is decremented once,
+// the buyer and the admin are notified, the outbound webhook fires, and a
+// replayed tap settles and debits nothing more.
+func TestE2EBalancePurchase(t *testing.T) {
+	out := newOutboundCapture(t)
+	e := newE2EEnvWithConfig(t, func(c *config.Config) { c.OutboundWebhookURL = out.srv.URL })
+	const buyer = int64(9101)
+	e.cmd(buyer, "/start", "en")
+
+	// Admin grant: /setbalance <buyer> 25.00 with a reason. The echo confirms
+	// the new balance and the adjustment is audited in balance_txs.
+	calls := e.cmd(e2eAdminID, fmt.Sprintf("/setbalance %d 25.00 welcome grant", buyer), "en")
+	requireRender(t, calls, "25.00")
+	if got := e.qStr(`SELECT printf('%.2f', balance_usd) FROM users WHERE telegram_id = ?`, buyer); got != "25.00" {
+		t.Fatalf("balance after grant = %s, want 25.00", got)
+	}
+	var grantType, grantRef string
+	var grantAmount float64
+	if err := e.db.Conn().QueryRow(`SELECT type, amount_usd, COALESCE(ref_id, '') FROM balance_txs`).
+		Scan(&grantType, &grantAmount, &grantRef); err != nil {
+		t.Fatalf("grant balance_txs row: %v", err)
+	}
+	if grantType != "admin_adjust: welcome grant" || grantAmount != 25.00 ||
+		grantRef != strconv.FormatInt(e2eAdminID, 10) {
+		t.Fatalf("grant row: type=%q amount=%v ref=%q, want admin_adjust: welcome grant / 25 / %d",
+			grantType, grantAmount, grantRef, e2eAdminID)
+	}
+
+	// The buyer adds to the cart, checks out, and the pay screen offers the
+	// balance row next to the other rails.
+	e.cb(buyer, fmt.Sprintf("cart:add:%d", e.prodReg), "en")
+	e.cb(buyer, "cart:checkout", "en")
+	calls = e.cb(buyer, "order:confirm", "en")
+	orderID := e.qInt(`SELECT MAX(id) FROM orders WHERE user_id = ?`, buyer)
+	payScreen := requireRender(t, calls, fmt.Sprintf("pay:stars:%d", orderID))
+	if !strings.Contains(payScreen.markup(), fmt.Sprintf("pay:balance:%d", orderID)) {
+		t.Fatalf("balance pay button missing from the checkout screen: %s", payScreen.markup())
+	}
+
+	// The tap settles the $10.00 order synchronously.
+	before := e.tg.count()
+	e.cb(buyer, fmt.Sprintf("pay:balance:%d", orderID), "en")
+	if got := e.qStr(`SELECT status FROM orders WHERE id = ?`, orderID); got != storage.OrderStatusPaid {
+		t.Fatalf("order status = %q, want paid", got)
+	}
+	if got := e.qStr(`SELECT payment_method FROM orders WHERE id = ?`, orderID); got != storage.PaymentMethodBalance {
+		t.Fatalf("payment_method = %q, want balance", got)
+	}
+	if got := e.qStr(`SELECT payment_id FROM orders WHERE id = ?`, orderID); got != fmt.Sprintf("balance:%d", orderID) {
+		t.Fatalf("payment_id = %q, want balance:%d", got, orderID)
+	}
+	if got := e.qStr(`SELECT printf('%.2f', balance_usd) FROM users WHERE telegram_id = ?`, buyer); got != "15.00" {
+		t.Fatalf("balance after payment = %s, want 15.00", got)
+	}
+	if got := e.qInt(`SELECT COUNT(*) FROM payment_attempts
+		WHERE provider='balance' AND external_id=? AND payer_id=? AND amount_minor=1000
+		  AND currency='USD' AND scale=2 AND status='succeeded'`,
+		fmt.Sprintf("balance:%d", orderID), buyer); got != 1 {
+		t.Fatalf("settled balance attempts = %d, want 1", got)
+	}
+	// Stock decremented exactly once: 5 → 4.
+	if got := e.qInt(`SELECT stock FROM products WHERE id = ?`, e.prodReg); got != 4 {
+		t.Fatalf("stock = %d, want 4", got)
+	}
+	// The audit trail holds exactly the grant and the order debit.
+	if got := e.qInt(`SELECT COUNT(*) FROM balance_txs`); got != 2 {
+		t.Fatalf("balance_txs rows = %d, want 2 (grant + debit)", got)
+	}
+	var debitType string
+	var debitAmount float64
+	if err := e.db.Conn().QueryRow(`SELECT type, amount_usd FROM balance_txs WHERE amount_usd < 0`).
+		Scan(&debitType, &debitAmount); err != nil {
+		t.Fatalf("debit balance_txs row: %v", err)
+	}
+	if debitType != fmt.Sprintf("order_payment:%d", orderID) || debitAmount != -10.00 {
+		t.Fatalf("debit row: type=%q amount=%v, want order_payment:%d / -10", debitType, debitAmount, orderID)
+	}
+
+	// Notification surface: buyer payment_success, admin balance message,
+	// outbound order.paid with method balance.
+	calls = e.tg.since(before)
+	lang := e.qStr(`SELECT COALESCE(language_code, '') FROM users WHERE telegram_id = ?`, buyer)
+	if !findMessage(calls, buyer, fmt.Sprintf(e.bot.t(lang, "payment_success"), orderID)) {
+		t.Fatalf("no payment_success message to buyer %d (lang %q):\n%s", buyer, lang, dumpCalls(calls))
+	}
+	adminWant := fmt.Sprintf(e.bot.t("en", "admin_order_paid_balance"), orderID, buyer, 10.0)
+	if !findMessage(calls, e2eAdminID, adminWant) {
+		t.Fatalf("no admin_order_paid_balance message to admin %d:\n%s", e2eAdminID, dumpCalls(calls))
+	}
+	ev := out.wait(t)
+	if ev.Event != "order.paid" || ev.OrderID != orderID || ev.UserID != buyer ||
+		ev.Method != storage.PaymentMethodBalance || ev.PaymentID != fmt.Sprintf("balance:%d", orderID) {
+		t.Fatalf("outbound event = %+v, want order.paid/balance for order %d", ev, orderID)
+	}
+
+	// Replay: a second tap answers the order_already_paid alert only — no
+	// second settle, no second debit, no second webhook.
+	beforeReplay := e.tg.count()
+	e.cb(buyer, fmt.Sprintf("pay:balance:%d", orderID), "en")
+	if got := e.qStr(`SELECT printf('%.2f', balance_usd) FROM users WHERE telegram_id = ?`, buyer); got != "15.00" {
+		t.Fatalf("balance after replay = %s, want still 15.00", got)
+	}
+	if got := e.qInt(`SELECT COUNT(*) FROM payment_attempts WHERE order_id = ?`, orderID); got != 1 {
+		t.Fatalf("attempts after replay = %d, want 1", got)
+	}
+	if got := e.qInt(`SELECT COUNT(*) FROM balance_txs`); got != 2 {
+		t.Fatalf("balance_txs after replay = %d, want still 2", got)
+	}
+	if got := e.qInt(`SELECT stock FROM products WHERE id = ?`, e.prodReg); got != 4 {
+		t.Fatalf("stock after replay = %d, want still 4", got)
+	}
+	if got := e.tg.count() - beforeReplay; got != 1 { // exactly the order_already_paid alert
+		t.Fatalf("replay produced %d calls, want 1:\n%s", got, dumpCalls(e.tg.since(beforeReplay)))
+	}
+	if !out.drained() {
+		t.Fatal("replay fired another outbound webhook event")
+	}
+}
+
+// TestE2EPayreviewFlow drives the admin payment-review queue end to end. A
+// duplicate YooKassa capture quarantines an already-paid order through the
+// real webhook ingress: the second succeeded payment is a validated provider
+// fact that cannot be applied (the order is already paid), so it lands as a
+// needs_review second charge. The duplicate is refunded at the provider and
+// the refund is recorded through the ledger's refund ingestion path (refunds
+// stay operator-driven; no provider pushes them to the bot). The admin then
+// resolves the case from the bot — /payreview list → case card → settle
+// preview → confirm — returning the order to a settled projection and
+// emptying the queue.
+func TestE2EPayreviewFlow(t *testing.T) {
+	api := newYookassaWebhookAPIMock(t, http.StatusOK, "")
+	e := newYooKassaWebhookEnv(t, api, nil)
+	const buyer = int64(9201)
+	orderID := placeRUBOrder(e, buyer)
+
+	// The genuine capture settles the order through the real webhook flow.
+	api.setBody(yookassaRefetchJSON("pay_pr1", "succeeded", "1849.08", true, orderID))
+	if rec := postYooKassaWebhook(t, e.bot, yookassaNotificationBody("payment.succeeded", "pay_pr1")); rec.Code != http.StatusOK {
+		t.Fatalf("first webhook status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+	if got := e.qStr(`SELECT status FROM orders WHERE id = ?`, orderID); got != storage.OrderStatusPaid {
+		t.Fatalf("order status = %q, want paid", got)
+	}
+	if got := e.qStr(`SELECT payment_id FROM orders WHERE id = ?`, orderID); got != "pay_pr1" {
+		t.Fatalf("payment_id = %q, want pay_pr1", got)
+	}
+
+	// A second, distinct succeeded payment for the same order: authoritative
+	// per the refetch but inapplicable — quarantined as a second charge.
+	api.setBody(yookassaRefetchJSON("pay_pr2", "succeeded", "1849.08", true, orderID))
+	before := e.tg.count()
+	if rec := postYooKassaWebhook(t, e.bot, yookassaNotificationBody("payment.succeeded", "pay_pr2")); rec.Code != http.StatusOK {
+		t.Fatalf("second webhook status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+	if got := e.qStr(`SELECT status FROM orders WHERE id = ?`, orderID); got != storage.OrderStatusPaid {
+		t.Fatalf("order status after second charge = %q, want still paid", got)
+	}
+	if got := e.qStr(`SELECT payment_state FROM orders WHERE id = ?`, orderID); got != storage.PaymentStateNeedsReview {
+		t.Fatalf("payment_state after second charge = %q, want needs_review", got)
+	}
+	if got := e.qInt(`SELECT COUNT(*) FROM payment_attempts
+		WHERE provider='yookassa' AND external_id='pay_pr2' AND status='needs_review'`); got != 1 {
+		t.Fatalf("quarantined duplicate attempts = %d, want 1", got)
+	}
+	if got := e.qInt(`SELECT COUNT(*) FROM payment_events
+		WHERE provider='yookassa' AND external_id='pay_pr2' AND disposition='needs_review'`); got != 1 {
+		t.Fatalf("quarantined duplicate events = %d, want 1", got)
+	}
+	if got := e.tg.count() - before; got != 0 {
+		t.Fatalf("quarantine sent %d messages, want 0:\n%s", got, dumpCalls(e.tg.since(before)))
+	}
+
+	// The operator refunds the duplicate at the provider and records the
+	// refund in the ledger ($1849.08 = 184908 kopecks, scale 2).
+	ledger := storage.NewSQLPaymentLedgerStore(e.db)
+	if err := ledger.RecordRefund(context.Background(), storage.Refund{
+		OrderID: orderID, Provider: storage.PaymentMethodYooKassa,
+		ExternalID: "refund-pr2", PaymentExternalID: "pay_pr2",
+		AmountMinor: 184908, Currency: "RUB", Scale: 2,
+	}); err != nil {
+		t.Fatalf("record refund of the duplicate capture: %v", err)
+	}
+
+	// The queue lists the case across all providers.
+	calls := e.cmd(e2eAdminID, "/payreview", "en")
+	if len(calls) != 1 || calls[0].Method != "sendMessage" {
+		t.Fatalf("list calls=%+v", calls)
+	}
+	cardData := fmt.Sprintf("admin:payrev:yookassa:%d", orderID)
+	if text := calls[0].Params.Get("text"); !strings.Contains(text, fmt.Sprintf("#%d", orderID)) ||
+		!strings.Contains(text, "yookassa") || !strings.Contains(text, "needs_review") {
+		t.Fatalf("list text missing the case: %q", text)
+	}
+	if !strings.Contains(calls[0].markup(), cardData) {
+		t.Fatalf("list markup missing %s: %s", cardData, calls[0].markup())
+	}
+
+	// The card shows the payment state and both quarantined targets.
+	calls = e.cb(e2eAdminID, cardData, "en")
+	if text := tgText(calls); !strings.Contains(text, "needs_review") ||
+		!strings.Contains(text, "event_captured") || !strings.Contains(text, "event_refunded") {
+		t.Fatalf("card text=%q", text)
+	}
+	if !tgHasCall(calls, fmt.Sprintf("admin:payrev:settle:yookassa:%d", orderID)) {
+		t.Fatalf("card offers no settle action:\n%s", dumpCalls(calls))
+	}
+
+	// Settle is a two-tap flow: the first tap previews and writes nothing.
+	calls = e.cb(e2eAdminID, fmt.Sprintf("admin:payrev:settle:yookassa:%d", orderID), "en")
+	confirmData := fmt.Sprintf("admin:payrevdo:settle:yookassa:%d", orderID)
+	if !tgHasCall(calls, confirmData) {
+		t.Fatalf("preview offers no confirm button:\n%s", dumpCalls(calls))
+	}
+	if got := e.qInt(`SELECT COUNT(*) FROM payment_resolutions`); got != 0 {
+		t.Fatalf("preview wrote %d resolutions, want 0", got)
+	}
+	if got := e.qStr(`SELECT payment_state FROM orders WHERE id = ?`, orderID); got != storage.PaymentStateNeedsReview {
+		t.Fatalf("payment_state after preview = %q, want still needs_review", got)
+	}
+
+	// The second tap applies: both targets resolved (compensated capture +
+	// accepted refund), the order projection returns to settled.
+	calls = e.cb(e2eAdminID, confirmData, "en")
+	if got := e.qStr(`SELECT payment_state FROM orders WHERE id = ?`, orderID); got != storage.PaymentStateSettled {
+		t.Fatalf("payment_state after confirm = %q, want settled", got)
+	}
+	if got := e.qStr(`SELECT status FROM orders WHERE id = ?`, orderID); got != storage.OrderStatusPaid {
+		t.Fatalf("order status after confirm = %q, want still paid", got)
+	}
+	if got := e.qStr(`SELECT payment_id FROM orders WHERE id = ?`, orderID); got != "pay_pr1" {
+		t.Fatalf("payment_id after confirm = %q, want still pay_pr1", got)
+	}
+	if got := e.qInt(`SELECT COUNT(*) FROM payment_resolutions
+		WHERE order_id = ? AND provider = 'yookassa'
+		  AND decision IN ('compensated', 'accepted_refund')`, orderID); got != 2 {
+		t.Fatalf("resolutions = %d, want 2 (compensated + accepted_refund)", got)
+	}
+	if want := e.bot.i18n.Tf("en", "admin_payrev_resolved", orderID, storage.PaymentStateSettled); !strings.Contains(tgText(calls), want) {
+		t.Fatalf("resolved text=%q want %q", tgText(calls), want)
+	}
+
+	// The queue is empty again.
+	calls = e.cmd(e2eAdminID, "/payreview", "en")
+	if got := tgText(calls); !strings.Contains(got, e.bot.t("en", "admin_payreview_empty")) {
+		t.Fatalf("queue not empty after resolve: %q", got)
+	}
+}
+
 // TestE2ENowpaymentsPurchase walks the full NOWPayments hosted-invoice
 // journey, mirroring TestE2EStripePurchase: /start → catalog → product card →
 // cart → checkout → confirm (the crypto button is offered because NOWPayments
