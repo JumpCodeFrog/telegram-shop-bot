@@ -349,7 +349,7 @@ func TestStripeCreateRefundSendsFormEncodedRequest(t *testing.T) {
 
 	client := newStripeTestClient(srv)
 
-	refund, err := client.CreateRefund(context.Background(), "pi_test_1", 50000)
+	refund, err := client.CreateRefund(context.Background(), "pi_test_1", 50000, "")
 	if err != nil {
 		t.Fatalf("CreateRefund returned error: %v", err)
 	}
@@ -360,7 +360,7 @@ func TestStripeCreateRefundSendsFormEncodedRequest(t *testing.T) {
 	// A second refund call must carry a fresh idempotency key: two adapter
 	// calls are two distinct money-out operations and the provider must never
 	// collapse the second into a replay of the first.
-	if _, err := client.CreateRefund(context.Background(), "pi_test_1", 50000); err != nil {
+	if _, err := client.CreateRefund(context.Background(), "pi_test_1", 50000, ""); err != nil {
 		t.Fatalf("second CreateRefund returned error: %v", err)
 	}
 	if len(idempotencyKeys) != 2 {
@@ -371,6 +371,37 @@ func TestStripeCreateRefundSendsFormEncodedRequest(t *testing.T) {
 	}
 	if idempotencyKeys[0] == idempotencyKeys[1] {
 		t.Fatalf("second request reused Idempotency-Key %q", idempotencyKeys[0])
+	}
+}
+
+// TestStripeCreateRefundIdempotencyKeyPassthrough pins the caller-supplied
+// key contract: a non-empty idempotencyKey is sent verbatim as the
+// Idempotency-Key header (the bot's deterministic refund key), and two calls
+// with the SAME key repeat it — that is exactly the provider-side dedup the
+// refund flow relies on after a ledger-recording failure.
+func TestStripeCreateRefundIdempotencyKeyPassthrough(t *testing.T) {
+	var idempotencyKeys []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		idempotencyKeys = append(idempotencyKeys, r.Header.Get("Idempotency-Key"))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"re_test_9","status":"succeeded"}`))
+	}))
+	defer srv.Close()
+
+	client := newStripeTestClient(srv)
+	const key = "refund:42:1250:cs_test_1"
+	for i := 0; i < 2; i++ {
+		if _, err := client.CreateRefund(context.Background(), "pi_test_1", 1250, key); err != nil {
+			t.Fatalf("CreateRefund returned error: %v", err)
+		}
+	}
+	if len(idempotencyKeys) != 2 {
+		t.Fatalf("expected 2 requests, got %d", len(idempotencyKeys))
+	}
+	for _, got := range idempotencyKeys {
+		if got != key {
+			t.Fatalf("Idempotency-Key = %q, want the caller-supplied %q", got, key)
+		}
 	}
 }
 
@@ -392,7 +423,7 @@ func TestStripeCreateRefundFullRefundOmitsAmount(t *testing.T) {
 	// amountCents <= 0 means "refund the full remaining balance": the amount
 	// param must be omitted entirely, never sent as 0 or a negative value.
 	for _, amountCents := range []int64{0, -1} {
-		if _, err := client.CreateRefund(context.Background(), "pi_test_1", amountCents); err != nil {
+		if _, err := client.CreateRefund(context.Background(), "pi_test_1", amountCents, ""); err != nil {
 			t.Fatalf("CreateRefund(%d) returned error: %v", amountCents, err)
 		}
 	}
@@ -425,7 +456,7 @@ func TestStripeCreateRefundStatusPassthrough(t *testing.T) {
 			}))
 			defer srv.Close()
 
-			refund, err := newStripeTestClient(srv).CreateRefund(context.Background(), "pi_test_1", 0)
+			refund, err := newStripeTestClient(srv).CreateRefund(context.Background(), "pi_test_1", 0, "")
 			if err != nil {
 				t.Fatalf("CreateRefund returned error for status %q: %v", status, err)
 			}
@@ -446,7 +477,7 @@ func TestStripeCreateRefundAPIError(t *testing.T) {
 
 	client := newStripeTestClient(srv)
 
-	_, err := client.CreateRefund(context.Background(), "pi_test_1", 0)
+	_, err := client.CreateRefund(context.Background(), "pi_test_1", 0, "")
 	if err == nil {
 		t.Fatal("expected error from CreateRefund on API error, got nil")
 	}
@@ -471,7 +502,7 @@ func TestStripeCreateRefundRejectsEmptyPaymentIntent(t *testing.T) {
 	client := newStripeTestClient(srv)
 
 	for _, intent := range []string{"", "   "} {
-		_, err := client.CreateRefund(context.Background(), intent, 50000)
+		_, err := client.CreateRefund(context.Background(), intent, 50000, "")
 		if err == nil {
 			t.Fatalf("intent %q: expected error, got nil", intent)
 		}
@@ -493,7 +524,7 @@ func TestStripeCreateRefundRejectsMissingRefundID(t *testing.T) {
 
 	// Fail closed: a refund response without an id broke the API contract,
 	// and recording an anonymous money-out movement is worse than an error.
-	if _, err := newStripeTestClient(srv).CreateRefund(context.Background(), "pi_test_1", 0); err == nil {
+	if _, err := newStripeTestClient(srv).CreateRefund(context.Background(), "pi_test_1", 0, ""); err == nil {
 		t.Fatal("expected error for a refund response without an id, got nil")
 	}
 }
@@ -758,7 +789,7 @@ func TestStripeNotConfiguredFailsClosed(t *testing.T) {
 	if _, err := client.GetCheckoutSession(context.Background(), "cs_test_1"); !errors.Is(err, ErrStripeNotConfigured) {
 		t.Fatalf("GetCheckoutSession: expected ErrStripeNotConfigured, got %v", err)
 	}
-	if _, err := client.CreateRefund(context.Background(), "pi_test_1", 100); !errors.Is(err, ErrStripeNotConfigured) {
+	if _, err := client.CreateRefund(context.Background(), "pi_test_1", 100, ""); !errors.Is(err, ErrStripeNotConfigured) {
 		t.Fatalf("CreateRefund: expected ErrStripeNotConfigured, got %v", err)
 	}
 	// An empty webhook secret would make every forged signature valid, so

@@ -51,6 +51,20 @@ func (c sanitizedTelegramClient) Do(request *http.Request) (*http.Response, erro
 	return nil, errTelegramTransport
 }
 
+// payLedgerStore is the payment-ledger surface the admin flows use. A narrow
+// interface — implemented by *storage.SQLPaymentLedgerStore — so tests can
+// fail exactly one step (e.g. only the refund ingest, mirroring the
+// failing-store pattern of failAnomalyRecording) while the rest of the flow
+// keeps hitting the real database.
+type payLedgerStore interface {
+	ListPaymentReviews(ctx context.Context, provider string) ([]storage.PaymentReviewCase, error)
+	PreviewPaymentReviewResolution(ctx context.Context, resolution storage.PaymentReviewResolution) (*storage.PaymentReviewCase, error)
+	ResolvePaymentReview(ctx context.Context, resolution storage.PaymentReviewResolution) error
+	ListRefunds(ctx context.Context, orderID int64) ([]storage.Refund, error)
+	PreviewProviderRefundIngress(ctx context.Context, refund storage.Refund) (string, error)
+	IngestProviderRefund(ctx context.Context, refund storage.Refund, audit storage.PaymentIngressAudit) error
+}
+
 // Bot is the main Telegram bot that routes updates to handlers.
 type Bot struct {
 	api             *tgbotapi.BotAPI
@@ -64,7 +78,7 @@ type Bot struct {
 	analytics       storage.AnalyticsStore
 	photos          storage.ProductPhotoStore
 	reviews         storage.ReviewStore
-	payLedger       *storage.SQLPaymentLedgerStore
+	payLedger       payLedgerStore
 	balances        storage.BalanceStore
 	referrals       *storage.ReferralStore
 	referralService *service.ReferralService
@@ -90,6 +104,11 @@ type Bot struct {
 	// uiStyles is an in-memory cache of button style overrides loaded from DB.
 	// Invalidated and reloaded whenever an admin changes a button style.
 	uiStyles sync.Map
+
+	// refundMu serializes admin refund confirm executions (see
+	// onAdminRefundConfirm): a double-tap arrives as two concurrent updates,
+	// and the balance rail's credit has no provider-side dedup.
+	refundMu sync.Mutex
 
 	// handler is the fully-chained update handler (used for both polling and webhook).
 	handler func(tgbotapi.Update)

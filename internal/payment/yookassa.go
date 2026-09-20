@@ -188,11 +188,14 @@ func (y *YooKassaPayment) CreatePayment(ctx context.Context, orderID int64, amou
 // verbatim; the CALLER decides what a non-succeeded refund means for the
 // order.
 //
-// Every call carries a fresh Idempotence-Key (YooKassa's spelling), mirroring
+// idempotencyKey is sent verbatim as the Idempotence-Key header (YooKassa's
+// spelling). An EMPTY key falls back to a fresh uuid, mirroring
 // CreatePayment: two adapter calls are two distinct money-out operations and
-// the provider must never collapse the second into a replay of the first.
-// Cross-call dedup is the caller's job via the ledger.
-func (y *YooKassaPayment) CreateRefund(ctx context.Context, paymentID string, amountMinor int64, description string) (*RefundResult, error) {
+// the provider must never collapse the second into a replay of the first. A
+// money-out CALLER that needs cross-call dedup — the admin /refund flow
+// re-running after a ledger-recording failure — passes its own deterministic
+// key so YooKassa collapses the repeat into the original refund.
+func (y *YooKassaPayment) CreateRefund(ctx context.Context, paymentID string, amountMinor int64, description string, idempotencyKey string) (*RefundResult, error) {
 	if !y.Configured() {
 		return nil, ErrYooKassaNotConfigured
 	}
@@ -217,8 +220,12 @@ func (y *YooKassaPayment) CreateRefund(ctx context.Context, paymentID string, am
 	if err != nil {
 		return nil, fmt.Errorf("yookassa: create refund request: %w", err)
 	}
+	key := strings.TrimSpace(idempotencyKey)
+	if key == "" {
+		key = uuid.NewString()
+	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Idempotence-Key", uuid.NewString())
+	req.Header.Set("Idempotence-Key", key)
 	req.Header.Set("Authorization", y.basicAuth())
 
 	rawBody, status, err := y.doJSON(req)

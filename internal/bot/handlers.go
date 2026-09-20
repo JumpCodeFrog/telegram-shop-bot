@@ -144,6 +144,10 @@ func (b *Bot) routeMessage(msg *tgbotapi.Message) {
 	case "payreview":
 		b.handlePayReview(msg)
 
+	// Admin refunds.
+	case "refund":
+		b.handleRefundCommand(msg)
+
 	// Payment provider status.
 	case "paystatus":
 		b.handlePayStatus(msg)
@@ -296,6 +300,12 @@ func (b *Bot) handleCallback(cb *tgbotapi.CallbackQuery) {
 		b.ack(cb.ID)
 		if b.isAdmin(userID) {
 			b.onAdminPayReviewCallback(chatID, msgID, userID, data, lang)
+		}
+
+	case strings.HasPrefix(data, "admin:refund:"):
+		b.ack(cb.ID)
+		if b.isAdmin(userID) {
+			b.onAdminRefundCallback(chatID, msgID, userID, data, lang)
 		}
 
 	case strings.HasPrefix(data, "analytics:"):

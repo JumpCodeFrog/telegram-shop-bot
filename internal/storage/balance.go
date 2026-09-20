@@ -49,6 +49,24 @@ func (s *SQLBalanceStore) OrderBalanceNet(ctx context.Context, userID, orderID i
 	return net, nil
 }
 
+// BalanceTxExists reports whether the user already has a balance_txs audit
+// row of exactly this type string. The admin refund flow uses it to make the
+// balance-rail refund credit idempotent per deterministic
+// "order_refund:<orderID>" type: after a ledger-recording failure the re-run
+// finds the prior credit and skips it, mirroring the crash-window
+// idempotency OrderBalanceNet gives the checkout debit. An unknown user has
+// no rows and reports false without error.
+func (s *SQLBalanceStore) BalanceTxExists(ctx context.Context, userID int64, txType string) (bool, error) {
+	var exists int
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT EXISTS(SELECT 1 FROM balance_txs
+		 WHERE user_id = (SELECT id FROM users WHERE telegram_id = ?) AND type = ?)`,
+		userID, txType).Scan(&exists); err != nil {
+		return false, fmt.Errorf("balance store: tx exists: %w", err)
+	}
+	return exists == 1, nil
+}
+
 // AdjustBalance moves the balance by deltaUSD and appends the audit row in
 // ONE transaction. Money math happens in integer cents at the boundary:
 // round(delta*100) — a sub-cent or zero delta is rejected as meaningless,

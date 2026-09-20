@@ -236,12 +236,14 @@ func (o stripeSessionObject) toSession() (*StripeSession, error) {
 // object but it did not move money. The result is returned verbatim and the
 // CALLER decides what a failed or pending refund means for the order.
 //
-// Every call carries a fresh Idempotency-Key (Stripe's header spelling for
-// this API), mirroring CreateCheckoutSession: two adapter calls are two
-// distinct money-out operations and the provider must never collapse the
-// second into a replay of the first. Cross-call dedup is the caller's job via
-// the ledger.
-func (s *StripePayment) CreateRefund(ctx context.Context, paymentIntentID string, amountCents int64) (*RefundResult, error) {
+// idempotencyKey is sent verbatim as the Idempotency-Key header (Stripe's
+// spelling for this API). An EMPTY key falls back to a fresh uuid, mirroring
+// CreateCheckoutSession: two adapter calls are two distinct money-out
+// operations and the provider must never collapse the second into a replay of
+// the first. A money-out CALLER that needs cross-call dedup — the admin
+// /refund flow re-running after a ledger-recording failure — passes its own
+// deterministic key so Stripe collapses the repeat into the original refund.
+func (s *StripePayment) CreateRefund(ctx context.Context, paymentIntentID string, amountCents int64, idempotencyKey string) (*RefundResult, error) {
 	if !s.Configured() {
 		return nil, ErrStripeNotConfigured
 	}
@@ -263,9 +265,13 @@ func (s *StripePayment) CreateRefund(ctx context.Context, paymentIntentID string
 	if err != nil {
 		return nil, fmt.Errorf("stripe: create refund request: %w", err)
 	}
+	key := strings.TrimSpace(idempotencyKey)
+	if key == "" {
+		key = uuid.NewString()
+	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Authorization", "Bearer "+s.secretKey)
-	req.Header.Set("Idempotency-Key", uuid.NewString())
+	req.Header.Set("Idempotency-Key", key)
 
 	rawBody, status, err := s.do(req)
 	if err != nil {

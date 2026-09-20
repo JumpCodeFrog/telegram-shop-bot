@@ -308,7 +308,7 @@ func TestYooKassaCreateRefundSendsJSONRequest(t *testing.T) {
 
 	client := newYookassaTestClient(srv)
 
-	refund, err := client.CreateRefund(context.Background(), "pay_1", 184908, "Refund for order 42")
+	refund, err := client.CreateRefund(context.Background(), "pay_1", 184908, "Refund for order 42", "")
 	if err != nil {
 		t.Fatalf("CreateRefund returned error: %v", err)
 	}
@@ -319,7 +319,7 @@ func TestYooKassaCreateRefundSendsJSONRequest(t *testing.T) {
 	// A second refund call must carry a fresh idempotence key: two adapter
 	// calls are two distinct money-out operations and the provider must never
 	// collapse the second into a replay of the first.
-	if _, err := client.CreateRefund(context.Background(), "pay_1", 184908, "Refund for order 42"); err != nil {
+	if _, err := client.CreateRefund(context.Background(), "pay_1", 184908, "Refund for order 42", ""); err != nil {
 		t.Fatalf("second CreateRefund returned error: %v", err)
 	}
 	if len(idempotenceKeys) != 2 {
@@ -330,6 +330,38 @@ func TestYooKassaCreateRefundSendsJSONRequest(t *testing.T) {
 	}
 	if idempotenceKeys[0] == idempotenceKeys[1] {
 		t.Fatalf("second request reused Idempotence-Key %q", idempotenceKeys[0])
+	}
+}
+
+// TestYooKassaCreateRefundIdempotenceKeyPassthrough pins the caller-supplied
+// key contract: a non-empty idempotencyKey is sent verbatim as the
+// Idempotence-Key header (YooKassa's spelling; the bot's deterministic refund
+// key), and two calls with the SAME key repeat it — that is exactly the
+// provider-side dedup the refund flow relies on after a ledger-recording
+// failure.
+func TestYooKassaCreateRefundIdempotenceKeyPassthrough(t *testing.T) {
+	var idempotenceKeys []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		idempotenceKeys = append(idempotenceKeys, r.Header.Get("Idempotence-Key"))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"rf_9","status":"succeeded"}`))
+	}))
+	defer srv.Close()
+
+	client := newYookassaTestClient(srv)
+	const key = "refund:42:184908:pay_1"
+	for i := 0; i < 2; i++ {
+		if _, err := client.CreateRefund(context.Background(), "pay_1", 184908, "Refund for order 42", key); err != nil {
+			t.Fatalf("CreateRefund returned error: %v", err)
+		}
+	}
+	if len(idempotenceKeys) != 2 {
+		t.Fatalf("expected 2 requests, got %d", len(idempotenceKeys))
+	}
+	for _, got := range idempotenceKeys {
+		if got != key {
+			t.Fatalf("Idempotence-Key = %q, want the caller-supplied %q", got, key)
+		}
 	}
 }
 
@@ -345,7 +377,7 @@ func TestYooKassaCreateRefundStatusPassthrough(t *testing.T) {
 			}))
 			defer srv.Close()
 
-			refund, err := newYookassaTestClient(srv).CreateRefund(context.Background(), "pay_1", 199900, "Refund for order 42")
+			refund, err := newYookassaTestClient(srv).CreateRefund(context.Background(), "pay_1", 199900, "Refund for order 42", "")
 			if err != nil {
 				t.Fatalf("CreateRefund returned error for status %q: %v", status, err)
 			}
@@ -379,7 +411,7 @@ func TestYooKassaCreateRefundRejectsInvalidInput(t *testing.T) {
 		{name: "payment id with illegal characters", paymentID: "pay/1", amountMinor: 199900},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := client.CreateRefund(context.Background(), tc.paymentID, tc.amountMinor, "Refund for order 42")
+			_, err := client.CreateRefund(context.Background(), tc.paymentID, tc.amountMinor, "Refund for order 42", "")
 			if !errors.Is(err, ErrInvalidYooKassaReceipt) {
 				t.Fatalf("expected ErrInvalidYooKassaReceipt, got %v", err)
 			}
@@ -400,7 +432,7 @@ func TestYooKassaCreateRefundAPIError(t *testing.T) {
 
 	client := newYookassaTestClient(srv)
 
-	_, err := client.CreateRefund(context.Background(), "pay_1", 199900, "Refund for order 42")
+	_, err := client.CreateRefund(context.Background(), "pay_1", 199900, "Refund for order 42", "")
 	if err == nil {
 		t.Fatal("expected error from CreateRefund on API error, got nil")
 	}
@@ -416,7 +448,7 @@ func TestYooKassaCreateRefundAPIError(t *testing.T) {
 
 	brokenClient := newYookassaTestClient(broken)
 
-	_, err = brokenClient.CreateRefund(context.Background(), "pay_1", 199900, "Refund for order 42")
+	_, err = brokenClient.CreateRefund(context.Background(), "pay_1", 199900, "Refund for order 42", "")
 	if err == nil {
 		t.Fatal("expected error from CreateRefund on 5xx, got nil")
 	}
@@ -434,7 +466,7 @@ func TestYooKassaCreateRefundRejectsMissingRefundID(t *testing.T) {
 
 	// Fail closed: a refund response without an id broke the API contract,
 	// and recording an anonymous money-out movement is worse than an error.
-	if _, err := newYookassaTestClient(srv).CreateRefund(context.Background(), "pay_1", 199900, "Refund for order 42"); err == nil {
+	if _, err := newYookassaTestClient(srv).CreateRefund(context.Background(), "pay_1", 199900, "Refund for order 42", ""); err == nil {
 		t.Fatal("expected error for a refund response without an id, got nil")
 	}
 }
@@ -591,7 +623,7 @@ func TestYooKassaNotConfiguredFailsClosed(t *testing.T) {
 	if _, _, err := client.ListPayments(context.Background(), "succeeded", time.Time{}, "", 50); !errors.Is(err, ErrYooKassaNotConfigured) {
 		t.Fatalf("ListPayments: expected ErrYooKassaNotConfigured, got %v", err)
 	}
-	if _, err := client.CreateRefund(context.Background(), "pay_1", 100, "Refund"); !errors.Is(err, ErrYooKassaNotConfigured) {
+	if _, err := client.CreateRefund(context.Background(), "pay_1", 100, "Refund", ""); !errors.Is(err, ErrYooKassaNotConfigured) {
 		t.Fatalf("CreateRefund: expected ErrYooKassaNotConfigured, got %v", err)
 	}
 

@@ -110,6 +110,11 @@ type BalanceStore interface {
 	// returned (an orphan debit from a crash between debit and settle);
 	// net >= 0 means no live debit covers the order.
 	OrderBalanceNet(ctx context.Context, userID, orderID int64) (float64, error)
+	// BalanceTxExists reports whether the user already has a balance_txs
+	// audit row of exactly this type string (e.g. the admin refund flow's
+	// deterministic "order_refund:<orderID>" credit). It answers false
+	// without error for an unknown user.
+	BalanceTxExists(ctx context.Context, userID int64, txType string) (bool, error)
 }
 
 // UISettingsStore is declared in ui_settings.go to keep all its code in one file.

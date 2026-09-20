@@ -418,9 +418,14 @@ type mockBalanceStore struct {
 	balance   float64
 	adjusts   []float64
 	net       float64
+	txTypes   map[string]bool
 	getErr    error
 	adjustErr error
 	netErr    error
+}
+
+func (m *mockBalanceStore) BalanceTxExists(_ context.Context, _ int64, txType string) (bool, error) {
+	return m.txTypes[txType], nil
 }
 
 func (m *mockBalanceStore) OrderBalanceNet(_ context.Context, _, _ int64) (float64, error) {
