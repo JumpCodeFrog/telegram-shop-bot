@@ -1,9 +1,12 @@
 package worker
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -361,8 +364,20 @@ func TestYooKassaPollingListErrorConfirmsNothing(t *testing.T) {
 
 // TestYooKassaPollingPageCap: a provider stuck handing out non-empty cursors
 // must never spin the tick — exactly yookassaPollMaxPages (20) pages are
-// fetched, threading each page's next_cursor into the following call.
+// fetched, threading each page's next_cursor into the following call — and
+// the truncation is observable: exactly one page-cap Warn per truncated tick
+// (a >cap backlog is an operator-scale event per the constant's comment),
+// while a tick that completes inside the cap never warns. The worker package
+// logs through the global slog and no worker-local capture mechanism exists,
+// so the test swaps in a buffer-backed TextHandler via slog.SetDefault — the
+// same stdlib pattern the internal/bot middleware tests use — and restores
+// the previous default on cleanup (no test in this package runs in parallel).
 func TestYooKassaPollingPageCap(t *testing.T) {
+	prev := slog.Default()
+	var logs bytes.Buffer
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
 	pages := make([]yookassaListPage, 0, 25)
 	for i := 1; i <= 25; i++ {
 		pages = append(pages, yookassaListPage{nextCursor: fmt.Sprintf("c%d", i)})
@@ -383,6 +398,22 @@ func TestYooKassaPollingPageCap(t *testing.T) {
 		if call.cursor != wantCursor {
 			t.Fatalf("call %d cursor=%q, want %q (next_cursor threading)", i, call.cursor, wantCursor)
 		}
+	}
+	if got := strings.Count(logs.String(), "page cap reached"); got != 1 {
+		t.Fatalf("page-cap warnings=%d, want exactly 1 per truncated tick; logs:\n%s", got, logs.String())
+	}
+	if !strings.Contains(logs.String(), "level=WARN") ||
+		!strings.Contains(logs.String(), "pages=20") ||
+		!strings.Contains(logs.String(), "cursor=c20") {
+		t.Fatalf("warn line missing WARN level / pages / live cursor fields; logs:\n%s", logs.String())
+	}
+
+	// A tick that finishes inside the cap (empty cursor) must stay silent.
+	logs.Reset()
+	finishing := &stubYooKassaLister{pages: []yookassaListPage{{nextCursor: ""}}}
+	NewYooKassaPollingWorker(finishing, &recordingConfirmer{}, nil, time.Minute).poll(context.Background())
+	if got := strings.Count(logs.String(), "page cap reached"); got != 0 {
+		t.Fatalf("page-cap warnings=%d on a complete tick, want 0; logs:\n%s", got, logs.String())
 	}
 }
 

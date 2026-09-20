@@ -104,6 +104,14 @@ func (w *YooKassaPollingWorker) poll(ctx context.Context) {
 		}
 		cursor = nextCursor
 	}
+	// Reaching this point means the cap was exhausted while a live cursor
+	// remained: the backlog is truncated for this tick. Self-heal semantics
+	// are unchanged — the next tick re-scans from cursor "" and picks the
+	// tail up — but a >cap backlog is an operator-scale event per
+	// yookassaPollMaxPages, so make it observable: exactly one Warn per
+	// truncated tick, never one per page.
+	slog.Warn("yookassa poller: page cap reached, tail deferred to next tick",
+		"pages", yookassaPollMaxPages, "cursor", cursor)
 }
 
 func (w *YooKassaPollingWorker) processPayment(ctx context.Context, item *payment.Payment) {
