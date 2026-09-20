@@ -144,6 +144,10 @@ func (b *Bot) routeMessage(msg *tgbotapi.Message) {
 	case "payreview":
 		b.handlePayReview(msg)
 
+	// Payment provider status.
+	case "paystatus":
+		b.handlePayStatus(msg)
+
 	// Balance adjustments.
 	case "setbalance":
 		b.handleSetBalance(msg)
