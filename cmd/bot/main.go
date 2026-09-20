@@ -238,6 +238,20 @@ func runBot() {
 		slog.Warn("CryptoBot disabled, skipping polling worker")
 	}
 
+	// TON on-chain settlement is 100% worker-side: there is no webhook, so
+	// this poller is the only path turning wallet transfers into paid
+	// orders. The rate guard matters as much as the wallet — TON amounts
+	// are meaningless without USDPerTON (checkout only snapshots
+	// orders.total_ton_nano when the rate is positive). Separate instance
+	// from the bot's checkout-facing one, mirroring cryptoPayments.
+	tonPayments := payment.NewTONPayment(cfg.TONWalletAddress, cfg.TONAPIKey)
+	if tonPayments.Configured() && cfg.USDPerTON > 0 {
+		tonW := worker.NewTONPollingWorker(tonPayments, b.OrderService(), b.NotifyPaymentOutcome, 30*time.Second)
+		workers.Start(ctx, "ton_polling", tonW.Start)
+	} else {
+		slog.Warn("TON disabled, skipping polling worker")
+	}
+
 	// RUB card payments for the Mini App checkout. Separate instance from the
 	// bot's own (main owns the webapi deps, mirroring crypto); settlement is
 	// webhook-driven, so there is no polling worker.
