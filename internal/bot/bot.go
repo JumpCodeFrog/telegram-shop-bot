@@ -64,6 +64,7 @@ type Bot struct {
 	analytics       storage.AnalyticsStore
 	photos          storage.ProductPhotoStore
 	reviews         storage.ReviewStore
+	payLedger       *storage.SQLPaymentLedgerStore
 	referrals       *storage.ReferralStore
 	referralService *service.ReferralService
 	stars           *payment.StarsPayment
@@ -189,6 +190,7 @@ func NewWithAPI(cfg *config.Config, api *tgbotapi.BotAPI, db *storage.DB, metric
 		uiSettings:      storage.NewSQLUISettingsStore(db.Conn()),
 		photos:          storage.NewSQLProductPhotoStore(db),
 		reviews:         storage.NewSQLReviewStore(db),
+		payLedger:       storage.NewSQLPaymentLedgerStore(db),
 		subs:            storage.NewSQLSubscriptionStore(db),
 	}
 	b.reloadButtonStyles(context.Background())

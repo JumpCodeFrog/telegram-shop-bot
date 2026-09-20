@@ -138,6 +138,10 @@ func (b *Bot) routeMessage(msg *tgbotapi.Message) {
 	case "analytics":
 		b.handleAnalytics(msg)
 
+	// Payment review queue.
+	case "payreview":
+		b.handlePayReview(msg)
+
 	// Export.
 	case "export_orders":
 		b.handleExportOrders(msg)
@@ -267,6 +271,18 @@ func (b *Bot) handleCallback(cb *tgbotapi.CallbackQuery) {
 		b.ack(cb.ID)
 		if b.isAdmin(userID) {
 			b.onAdminPhotoAdd(chatID, userID, data, lang)
+		}
+
+	case strings.HasPrefix(data, "admin:payrevdo:"):
+		b.ack(cb.ID)
+		if b.isAdmin(userID) {
+			b.onAdminPayReviewCallback(chatID, msgID, userID, data, lang)
+		}
+
+	case strings.HasPrefix(data, "admin:payrev:"):
+		b.ack(cb.ID)
+		if b.isAdmin(userID) {
+			b.onAdminPayReviewCallback(chatID, msgID, userID, data, lang)
 		}
 
 	case strings.HasPrefix(data, "analytics:"):
