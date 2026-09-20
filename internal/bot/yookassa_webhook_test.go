@@ -411,6 +411,11 @@ func TestYooKassaWebhookReplayIsIdempotent(t *testing.T) {
 		WHERE provider='yookassa' AND external_id='pay_1'`); got != 1 {
 		t.Fatalf("payment_attempts after replay = %d, want 1", got)
 	}
+	// The replay leaves the ledger projection exactly as the first settlement
+	// wrote it (the storage level pins settled; pin it at the bot level too).
+	if got := e.qStr(`SELECT payment_state FROM orders WHERE id = ?`, orderID); got != storage.PaymentStateSettled {
+		t.Fatalf("payment_state after replay = %q, want settled", got)
+	}
 	if got := e.tg.count() - before; got != 0 {
 		t.Fatalf("replay sent %d messages, want 0:\n%s", got, dumpCalls(e.tg.since(before)))
 	}
@@ -475,6 +480,43 @@ func TestYooKassaWebhookGarbageBodyQuarantines(t *testing.T) {
 	}
 	if got := e.qInt(`SELECT COUNT(*) FROM payment_anomalies WHERE provider='yookassa'`); got != 1 {
 		t.Fatalf("anomalies after oversized body = %d, want still 1", got)
+	}
+}
+
+// TestYooKassaWebhookFactlessEnvelopeRecordsMissingPaymentID pins the
+// factless-envelope branch: a body that parses cleanly into a valid envelope
+// but carries NO payment id is not a parse failure — its anomaly reason is
+// webhook_missing_payment_id (the deliberate roadmap-4.6 retag from the
+// sweep-era webhook_parse_failure). True parse failures keep
+// webhook_parse_failure, pinned by TestYooKassaWebhookGarbageBodyQuarantines.
+func TestYooKassaWebhookFactlessEnvelopeRecordsMissingPaymentID(t *testing.T) {
+	api := newYookassaWebhookAPIMock(t, http.StatusOK, "{}")
+	e := newYooKassaWebhookEnv(t, api, nil)
+
+	rec := postYooKassaWebhook(t, e.bot,
+		`{"event":"payment.waiting_for_capture","object":{"status":"waiting_for_capture"}}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("factless status = %d, want 200 (valid envelope, no payment id: nothing to do) (%s)",
+			rec.Code, rec.Body.String())
+	}
+
+	var count int
+	var reason, rawPayload, externalID string
+	if err := e.db.Conn().QueryRow(`SELECT COUNT(*), reason, raw_payload, external_id
+		FROM payment_anomalies WHERE provider='yookassa'`).Scan(&count, &reason, &rawPayload, &externalID); err != nil {
+		t.Fatalf("no yookassa anomaly recorded for the factless envelope: %v", err)
+	}
+	if count != 1 || reason != "webhook_missing_payment_id" {
+		t.Fatalf("anomaly count=%d reason=%q, want 1 / webhook_missing_payment_id", count, reason)
+	}
+	if !strings.HasPrefix(rawPayload, "sha256:") {
+		t.Fatalf("raw_payload was not safely digested: %q", rawPayload)
+	}
+	if externalID != "" {
+		t.Fatalf("external_id = %q, want empty (the envelope carried no payment id)", externalID)
+	}
+	if got := api.count(); got != 0 {
+		t.Fatalf("factless body triggered %d API calls, want 0 (nothing to refetch)", got)
 	}
 }
 

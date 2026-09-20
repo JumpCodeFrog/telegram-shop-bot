@@ -97,12 +97,17 @@ func validatePaymentFact(order Order, fact PaymentFact) (PaymentFact, error) {
 	if err != nil {
 		return PaymentFact{}, err
 	}
-	// Amount exactness is enforced for every rail except ton: TON settlement
-	// is overpay-tolerant at the receipt layer (ConfirmPaymentReceipt applies
-	// the >= rule), so this fact gate pins only the currency and scale for
-	// ton — mirroring how the card rails document their own split between
-	// fact validation and the payer rule.
+	// Amount rule, single-sourced at this gate for every caller: the card
+	// and IPN rails enforce exact minor-unit equality against the frozen
+	// order money, while ton enforces the overpay-tolerant >= rule — an
+	// on-chain transfer of at least the snapshot is real money received,
+	// so overpay passes and underpay is rejected HERE (the former split,
+	// where the fact gate skipped ton amounts and only the receipt layer
+	// applied >=, is closed). Shop's ConfirmPaymentReceipt keeps its own
+	// >= check as defense-in-depth, and the launcher's
+	// providerCaptureSettleable mirrors the rule for CLI path selection.
 	if fact.ExternalID == "" || fact.Scale != expectedScale ||
+		(fact.Provider == PaymentMethodTON && fact.AmountMinor < expectedAmount) ||
 		(fact.Provider != PaymentMethodTON && fact.AmountMinor != expectedAmount) {
 		return PaymentFact{}, ErrPaymentReceiptMismatch
 	}
@@ -128,8 +133,11 @@ func validatePaymentFact(order Order, fact PaymentFact) (PaymentFact, error) {
 	case PaymentMethodTON:
 		// On-chain TON transfers carry no Telegram payer identity, so no
 		// payer check applies here; the payer rule lives in
-		// invalidProviderCapturePayer. Amount exactness is deliberately not
-		// enforced at this layer either (see the shared gate above).
+		// invalidProviderCapturePayer. The overpay-tolerant amount rule
+		// (fact >= the frozen nanoton snapshot) lives in the shared gate
+		// above: storage rejects underpaying ton facts for every caller,
+		// and the receipt layer (ConfirmPaymentReceipt) keeps its own >=
+		// check as defense-in-depth.
 		if fact.Currency != "TON" {
 			return PaymentFact{}, ErrPaymentReceiptMismatch
 		}

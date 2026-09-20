@@ -83,8 +83,9 @@ func (s *ExchangeService) ConvertUSDToNanoTON(amountUSD float64) int64 {
 
 // ConvertUSDToNanoTON converts a USD amount to integer nanotons (TON minor
 // units, scale 9) at the given USD-per-TON rate. Returns 0 for non-positive,
-// NaN or infinite inputs so a bad rate lookup can never produce a negative
-// or runaway amount.
+// NaN or infinite inputs, and for finite inputs whose product or quotient
+// overflows float64, so a bad rate lookup can never produce a negative or
+// runaway amount.
 //
 // Load-bearing: this is the ONLY float boundary for TON money — everything
 // downstream carries integer nanotons (int64). usd*1e9 stays far below 2^53
@@ -100,5 +101,15 @@ func ConvertUSDToNanoTON(usd, usdPerTon float64) int64 {
 		math.IsInf(usd*1e9, 0) {
 		return 0
 	}
-	return int64(math.Round(usd * 1e9 / usdPerTon))
+	q := usd * 1e9 / usdPerTon
+	// Defense against absurd operator configs: even with both operands (and
+	// the product above) finite, the quotient itself can overflow — e.g.
+	// usd=1e200 at usdPerTon=1e-200 gives +Inf — and int64(+Inf) is platform
+	// garbage, not a runaway amount we can ship. NaN is unreachable for
+	// finite positive operands; guarded anyway so the conversion can never
+	// emit a non-number.
+	if math.IsNaN(q) || math.IsInf(q, 0) {
+		return 0
+	}
+	return int64(math.Round(q))
 }

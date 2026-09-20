@@ -221,9 +221,31 @@ func runPaymentReviewIngestProvider(ctx context.Context, args []string, opts Pay
 			}
 		}
 	}
+	// Actionable operator errors: when the storage gate rejected the fact's
+	// money, name both numbers — the fact the operator supplied and the
+	// order's frozen expectation. The preview loaded the order before the
+	// sentinel (a missing order surfaces as ErrNotFound), so the same
+	// read-only handle derives the expected amount.
+	previewErrMsg := ""
+	switch {
+	case errors.Is(err, storage.ErrPaymentReceiptMismatch):
+		if order, orderErr := previewStore.GetOrder(ctx, *orderID); orderErr == nil {
+			if expected, ok := expectedProviderCaptureAmount(order, normalizedProvider); ok {
+				previewErrMsg = fmt.Sprintf("Provider ingress: amount mismatch: fact %d %s vs order expected %d %s",
+					fact.AmountMinor, rail.currency, expected, rail.currency)
+			}
+		}
+	case errors.Is(err, storage.ErrInvalidMoney):
+		previewErrMsg = fmt.Sprintf("Provider ingress: order %d has no valid frozen total for the %s rail",
+			*orderID, normalizedProvider)
+	}
 	_ = previewDB.Close()
 	if err != nil {
-		fmt.Fprintln(paymentReviewOut(opts), "Provider ingress: local preview failed")
+		if previewErrMsg == "" {
+			fmt.Fprintln(paymentReviewOut(opts), "Provider ingress: local preview failed")
+		} else {
+			fmt.Fprintln(paymentReviewOut(opts), previewErrMsg)
+		}
 		return 1
 	}
 	fmt.Fprintf(paymentReviewOut(opts), "Provider ingress preview: kind=capture provider=%s order=%d amount=%d outcome=%s why=%s\n",
@@ -282,6 +304,35 @@ func runPaymentReviewIngestProvider(ctx context.Context, args []string, opts Pay
 	return 1
 }
 
+// expectedProviderCaptureAmount derives the order's frozen provider amount
+// in minor units for the payerless rails, mirroring storage's orderMoney
+// derivation: ton reads the integer nanoton snapshot, yookassa rounds the
+// RUB snapshot to kopecks, and stripe/nowpayments round the USD snapshot to
+// cents. ok is false when the frozen total is missing or invalid, or the
+// provider is not a payerless rail. It only ever builds an operator-facing
+// diagnostic — the authoritative money gate is storage's
+// validatePaymentFact.
+func expectedProviderCaptureAmount(order *storage.Order, provider string) (int64, bool) {
+	switch provider {
+	case storage.PaymentMethodYooKassa:
+		if order.TotalRUB <= 0 || math.IsNaN(order.TotalRUB) || math.IsInf(order.TotalRUB, 0) {
+			return 0, false
+		}
+		return int64(math.Round(order.TotalRUB * 100)), true
+	case storage.PaymentMethodStripe, storage.PaymentMethodNowpayments:
+		if order.TotalUSD <= 0 || math.IsNaN(order.TotalUSD) || math.IsInf(order.TotalUSD, 0) {
+			return 0, false
+		}
+		return int64(math.Round(order.TotalUSD * 100)), true
+	case storage.PaymentMethodTON:
+		if order.TotalTonNano <= 0 {
+			return 0, false
+		}
+		return order.TotalTonNano, true
+	}
+	return 0, false
+}
+
 // providerCaptureSettleable reports whether a fresh payerless-rail fact would
 // settle the pending order, mirroring the receipt-layer rail rules
 // (OrderService.ConfirmPaymentReceipt): exact frozen money on the card/IPN
@@ -304,6 +355,10 @@ func providerCaptureSettleable(order *storage.Order, fact storage.PaymentFact) (
 			return false, "amount_mismatch"
 		}
 	case storage.PaymentMethodTON:
+		// Redundant with the storage gate: validatePaymentFact now enforces
+		// the same >= rule (underpaying ton facts never reach this check —
+		// the preview rejects them). Kept as a harmless double guard that
+		// also supplies the why= label for the CLI preview line.
 		if order.TotalTonNano <= 0 || fact.AmountMinor < order.TotalTonNano {
 			return false, "amount_below_order_total"
 		}

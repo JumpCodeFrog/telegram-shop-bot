@@ -159,7 +159,16 @@ func TestPaymentReviewIngestProviderTONSettlesAndReplays(t *testing.T) {
 	assertProviderIngressSettledFact(t, dbPath, orderID, productID, 1, 7)
 }
 
-func TestPaymentReviewIngestProviderTONUnderpayQuarantines(t *testing.T) {
+// TestPaymentReviewIngestProviderTONUnderpayRejectedAtStorage pins the
+// closed split (roadmap 4.9 + 4.10): an underpaying ton fact is rejected by
+// the storage fact gate itself (validatePaymentFact enforces >= the frozen
+// snapshot for every caller), so the CLI preview fails with an actionable
+// amount-mismatch message naming both numbers, exit code 1, and NOTHING is
+// written — no quarantine evidence, order untouched. (Formerly the fact
+// gate waved underpay through and the CLI quarantined it as durable review
+// evidence; the automatic ton polling worker still records underpaid
+// on-chain transfers as shop-layer anomalies.)
+func TestPaymentReviewIngestProviderTONUnderpayRejectedAtStorage(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "provider-ton-underpay.db")
 	db, orderID, productID := seedPayerlessCLIOrder(t, dbPath, storage.PaymentMethodTON, 0, 0, 1_500_000_000)
@@ -169,10 +178,10 @@ func TestPaymentReviewIngestProviderTONUnderpayQuarantines(t *testing.T) {
 	envPath := writeIngressCLIEnv(t, dir, dbPath)
 	underpayID := "1700000000002:fedcba9876543210"
 	base := providerIngressArgs(orderID, "ton", "1499999999", "TON", underpayID, "1700000000")
+	wantMismatch := "amount mismatch: fact 1499999999 TON vs order expected 1500000000 TON"
 
 	previewOut, previewCode := runIngressCLI(t, envPath, dir, nil, base)
-	if previewCode != 0 || !strings.Contains(previewOut, "outcome=quarantine") ||
-		!strings.Contains(previewOut, "No changes applied") {
+	if previewCode != 1 || !strings.Contains(previewOut, wantMismatch) {
 		t.Fatalf("preview code=%d output=%q", previewCode, previewOut)
 	}
 	assertIngressCLISecretsRedacted(t, previewOut, underpayID, testToken)
@@ -183,29 +192,49 @@ func TestPaymentReviewIngestProviderTONUnderpayQuarantines(t *testing.T) {
 
 	applyArgs := append(append([]string{}, base...), "--apply", "--confirm-order", strconv.FormatInt(orderID, 10))
 	applyOut, applyCode := runIngressCLI(t, envPath, dir, nil, applyArgs)
-	if applyCode != 1 || !strings.Contains(applyOut, "Provider ingress quarantined") {
+	if applyCode != 1 || !strings.Contains(applyOut, wantMismatch) ||
+		strings.Contains(applyOut, "quarantined") {
 		t.Fatalf("apply code=%d output=%q", applyCode, applyOut)
 	}
 	assertIngressCLISecretsRedacted(t, applyOut, underpayID, testToken)
-	assertProviderIngressOrderState(t, dbPath, orderID, storage.OrderStatusPending, storage.PaymentStateNeedsReview)
-	assertProviderIngressQuarantineEvidence(t, dbPath, orderID, productID, 1_499_999_999)
+	// The rejected fact leaves the order exactly as it was: pending, with
+	// no attempt, event, audit, or stock movement.
+	assertProviderIngressOrderState(t, dbPath, orderID, storage.OrderStatusPending, storage.PaymentStatePending)
+	assertProviderIngressSettledFact(t, dbPath, orderID, productID, 0, 9)
+}
 
-	// An exact re-apply of the still-unresolved quarantine is a replay no-op
-	// (mirroring the stars flow): it neither settles nor duplicates the
-	// durable evidence.
-	repeatOut, repeatCode := runIngressCLI(t, envPath, dir, nil, applyArgs)
-	if repeatCode != 0 || !strings.Contains(repeatOut, "outcome=replay") {
-		t.Fatalf("repeat code=%d output=%q", repeatCode, repeatOut)
+// TestPaymentReviewIngestProviderPreviewOperationalErrors pins the remaining
+// sentinel mappings of the ingest-provider preview error path (roadmap
+// 4.10): ErrInvalidMoney names the rail whose frozen order total is missing
+// or non-positive, and a non-money operational error (unknown order) keeps
+// the generic message. Both exit 1 without writing anything.
+func TestPaymentReviewIngestProviderPreviewOperationalErrors(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "provider-preview-errors.db")
+	// TotalTonNano 0: an order created while TON was disabled carries no
+	// valid frozen total for the ton rail.
+	db, orderID, _ := seedPayerlessCLIOrder(t, dbPath, storage.PaymentMethodTON, 0, 0, 0)
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
 	}
-	assertProviderIngressQuarantineEvidence(t, dbPath, orderID, productID, 1_499_999_999)
+	envPath := writeIngressCLIEnv(t, dir, dbPath)
 
-	// The quarantined fact joins the standard payment-review inbox.
-	listOut, listCode := runIngressCLI(t, envPath, dir, nil, []string{"list", "--provider", "ton"})
-	if listCode != 1 || !strings.Contains(listOut, "provider=ton") ||
-		!strings.Contains(listOut, "event_ids=") || !strings.Contains(listOut, "order="+strconv.FormatInt(orderID, 10)) {
-		t.Fatalf("list code=%d output=%q", listCode, listOut)
+	invalidMoney := providerIngressArgs(orderID, "ton", "1500000000", "TON", providerIngressTONExternalID, "1700000000")
+	out, code := runIngressCLI(t, envPath, dir, nil, invalidMoney)
+	if code != 1 || !strings.Contains(out, "no valid frozen total for the ton rail") {
+		t.Fatalf("invalid money code=%d output=%q", code, out)
 	}
-	assertIngressCLISecretsRedacted(t, listOut, underpayID, testToken)
+	assertIngressCLISecretsRedacted(t, out, providerIngressTONExternalID, testToken)
+	if attempts := providerIngressAttemptCount(t, dbPath, orderID); attempts != 0 {
+		t.Fatalf("invalid money wrote attempts=%d", attempts)
+	}
+
+	missingOrder := providerIngressArgs(999999, "ton", "1500000000", "TON", providerIngressTONExternalID, "1700000000")
+	out, code = runIngressCLI(t, envPath, dir, nil, missingOrder)
+	if code != 1 || !strings.Contains(out, "local preview failed") {
+		t.Fatalf("missing order code=%d output=%q", code, out)
+	}
+	assertIngressCLISecretsRedacted(t, out, providerIngressTONExternalID, testToken)
 }
 
 func TestPaymentReviewIngestProviderYooKassaAmountMismatchRejected(t *testing.T) {
@@ -220,7 +249,8 @@ func TestPaymentReviewIngestProviderYooKassaAmountMismatchRejected(t *testing.T)
 	mismatch := providerIngressArgs(orderID, "yookassa", "184907", "RUB", yooID, "1700000000")
 
 	previewOut, previewCode := runIngressCLI(t, envPath, dir, nil, mismatch)
-	if previewCode != 1 || !strings.Contains(previewOut, "local preview failed") {
+	if previewCode != 1 ||
+		!strings.Contains(previewOut, "amount mismatch: fact 184907 RUB vs order expected 184908 RUB") {
 		t.Fatalf("mismatch preview code=%d output=%q", previewCode, previewOut)
 	}
 	assertIngressCLISecretsRedacted(t, previewOut, yooID, testToken)
@@ -376,38 +406,5 @@ func assertProviderIngressSettledFact(t *testing.T, dbPath string, orderID, prod
 		!occurredAt.Equal(time.Unix(ingressProviderUnix, 0).UTC()) || paymentID != providerIngressTONExternalID {
 		t.Fatalf("payer=%d amount=%d currency=%s scale=%d status=%s occurred_at=%s payment_id=%q",
 			payerID, amount, currency, scale, status, occurredAt, paymentID)
-	}
-}
-
-func assertProviderIngressQuarantineEvidence(t *testing.T, dbPath string, orderID, productID int64, wantAmount int64) {
-	t.Helper()
-	db, err := storage.OpenReadOnly(dbPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	var stock, attempts, events, audits int
-	var attemptStatus, disposition string
-	var amount int64
-	if err := db.Conn().QueryRow(`SELECT stock FROM products WHERE id=?`, productID).Scan(&stock); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Conn().QueryRow(`SELECT COUNT(*), MIN(status), MIN(amount_minor) FROM payment_attempts
-		WHERE order_id=?`, orderID).Scan(&attempts, &attemptStatus, &amount); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Conn().QueryRow(`SELECT COUNT(*), MIN(disposition) FROM payment_events
-		WHERE order_id=? AND event_kind='captured'`, orderID).Scan(&events, &disposition); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Conn().QueryRow(`SELECT COUNT(*) FROM payment_ingress_audits
-		WHERE order_id=? AND event_kind='captured' AND actor='operator:test' AND reason='provider-only capture'`, orderID).Scan(&audits); err != nil {
-		t.Fatal(err)
-	}
-	if stock != 9 || attempts != 1 || events != 1 || audits != 1 ||
-		attemptStatus != storage.PaymentStateNeedsReview || disposition != storage.PaymentDispositionNeedsReview ||
-		amount != wantAmount {
-		t.Fatalf("stock=%d attempts=%d status=%s events=%d disposition=%s audits=%d amount=%d",
-			stock, attempts, attemptStatus, events, disposition, audits, amount)
 	}
 }

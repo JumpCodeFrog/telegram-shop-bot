@@ -65,6 +65,11 @@ func TestConvertUSDToNanoTON(t *testing.T) {
 		// Finite but absurd: usd*1e9 overflows to +Inf before the result
 		// guard can run, and int64(+Inf) is platform garbage, not 0.
 		{name: "overflowing product", usd: 1e300, usdPerTon: 5.13, want: 0},
+		// Finite operands AND a finite product (1e200*1e9 = 1e209 passes the
+		// product guard), but the quotient overflows: 1e209/1e-200 = +Inf, and
+		// int64(+Inf) is platform garbage, not 0. No real rate configuration
+		// does this; the guard is defense against absurd operator configs.
+		{name: "overflowing quotient", usd: 1e200, usdPerTon: 1e-200, want: 0},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

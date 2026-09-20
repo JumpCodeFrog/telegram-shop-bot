@@ -544,11 +544,11 @@ func TestNormalizePaymentProviderNowpayments(t *testing.T) {
 
 // TestValidatePaymentFactTON pins the ton fact gate: currency and scale are
 // exact, no payer check applies (on-chain transfers carry no Telegram
-// identity), and amount exactness is deliberately NOT enforced here — TON
-// settlement is overpay-tolerant at the receipt layer
-// (ConfirmPaymentReceipt applies the >= rule), so an overpaying fact still
-// passes this gate. The split mirrors how the stripe/yookassa cases document
-// their own division between fact validation and the payer rule.
+// identity), and the overpay-tolerant amount rule is enforced HERE, at the
+// single-source storage gate: a ton fact must carry at least the order's
+// nanoton snapshot (>=), so an overpaying fact passes and an underpaying
+// fact is rejected for every caller. The receipt layer
+// (ConfirmPaymentReceipt) keeps its own >= check as defense-in-depth.
 func TestValidatePaymentFactTON(t *testing.T) {
 	order := Order{UserID: 42, TotalTonNano: 1_500_000_000}
 	fact := PaymentFact{
@@ -563,12 +563,21 @@ func TestValidatePaymentFactTON(t *testing.T) {
 		t.Fatalf("provider=%q, want %q", validated.Provider, PaymentMethodTON)
 	}
 
-	// Overpay tolerance split: amount exactness is a receipt-layer rule, so
-	// a larger-than-order fact passes this fact gate.
+	// Overpay tolerance: the ton gate enforces >= the frozen snapshot, so
+	// a larger-than-order fact (real money received on-chain) passes.
 	overpay := fact
 	overpay.AmountMinor = 2_000_000_000
 	if _, err := validatePaymentFact(order, overpay); err != nil {
 		t.Fatalf("overpaying ton fact must pass the fact gate: %v", err)
+	}
+
+	// Underpay is rejected at the fact gate: the former split — exactness
+	// skipped here, >= enforced only at the receipt layer — is closed, so
+	// EVERY caller of the storage gate rejects an underpaying ton fact.
+	underpay := fact
+	underpay.AmountMinor = 1_499_999_999
+	if _, err := validatePaymentFact(order, underpay); !errors.Is(err, ErrPaymentReceiptMismatch) {
+		t.Fatalf("underpaying ton fact: err=%v, want ErrPaymentReceiptMismatch", err)
 	}
 
 	wrongCurrency := fact

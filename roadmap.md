@@ -1,20 +1,20 @@
 # Roadmap — Telegram Shop Bot
 
 > Актуализированный план развития проекта.
-> Дата ревизии: 19 сентября 2026 (заменяет анализ от апреля 2026).
+> Дата ревизии: 20 сентября 2026 (заменяет анализ от апреля 2026).
 
 ---
 
 ## 1. Статус проекта
 
-Проект — **production-ready Telegram-магазин** с платёжной матрицей из трёх провайдеров
-(Telegram Stars, CryptoBot, YooKassa), Mini App, подписками, отзывами, мультифото,
-i18n на 5 языках, immutable payment ledger (миграции 017–020) и E2E-регрессией
-всего buyer journey.
+Проект — **production-ready Telegram-магазин** с платёжной матрицей из семи рельсов
+(Telegram Stars, CryptoBot, YooKassa ₽, Stripe $, TON, NOWPayments, внутренний баланс),
+Mini App, подписками, отзывами, мультифото, i18n на 5 языков, immutable payment ledger
+(миграции 017–022) и E2E-регрессией всего buyer journey.
 
 Почти весь технический долг апрельского анализа закрыт (см. §2). Текущая оценка: **9 / 10**.
-Оставшиеся системные направления: расширение платёжной матрицы (Stripe, крипто),
-полное управление из админки, точечный quality-долг.
+Программа «Roadmap Zero» (§3) завершена: Stripe, TON+NOWPayments, полное управление
+из админки и quality sweep — все четыре стадии смержены. Остался точечный бэклог (§4).
 
 ---
 
@@ -26,11 +26,11 @@ i18n на 5 языках, immutable payment ledger (миграции 017–020) 
 | 1.2 Дедупликация wishlist-уведомлений | ✅ | миграция `009_wishlist_notif_tracking.sql` |
 | 1.3 Хардкод русских строк в webhook | ✅ | i18n-ключи, `b.t(...)` во всех вебхуках |
 | 1.4 golangci-lint в CI | ✅ | `.golangci.yml` + workflow step |
-| 1.5 HTTP-таймауты + лимит тела | ✅ | `cmd/bot/main.go:311-313`, `MaxBytesReader` во всех вебхуках и webapi |
-| 2.1 Разбить handlers.go (1543 строки) | ✅ | тематические `handlers_*.go`; handlers.go = 428 строк |
+| 1.5 HTTP-таймауты + лимит тела | ✅ | `cmd/bot/main.go` (HTTP-сервер: ReadTimeout/WriteTimeout/IdleTimeout), `MaxBytesReader` во всех вебхуках и webapi |
+| 2.1 Разбить handlers.go (1543 строки) | ✅ | тематические `handlers_*.go`; handlers.go = 466 строк |
 | 2.4 CryptoBot polling cursor | ✅ | `worker/polling.go`: windowed fetcher с continuation (`GetInvoicesWindow`) |
 | 2.3 Воркеры на интерфейсы | ✅ | `worker/polling.go` — `InvoiceFetcher`/`PaymentConfirmer`; воркеры покрыты тестами |
-| 2.6 Загрузка фото через бот | ✅ | wizard `StepPhoto`, `admin.go:135+` |
+| 2.6 Загрузка фото через бот | ✅ | wizard `StepPhoto`, `admin_photos.go` / `admin_products.go` (после Stage-C сплита) |
 | 2.7 `updated_at` автообновление | ✅ | миграция `010_orders_updated_at.sql` |
 | 2.8 Inline-режим каталога | ✅ | `internal/bot/handlers_inline.go` |
 | 3.1 Telegram Mini App | ✅ | `web/app/` + `internal/webapi/` |
@@ -58,7 +58,7 @@ i18n на 5 языках, immutable payment ledger (миграции 017–020) 
 отдельный SDD-план (`docs/superpowers/plans/`), TDD, ревью на каждую задачу,
 локальный мерж в main после финального ревью.
 
-### Этап A — Stripe (USD, международные карты)
+### Этап A — Stripe (USD, международные карты) ✅ (смержен 20.09.2026, ветка `feat/stripe-provider`)
 
 - Checkout Sessions (hosted page, redirect — как YooKassa), raw HTTP без SDK.
 - Подписанные вебхуки `Stripe-Signature` (HMAC-SHA256, `t.v1` схема, constant-time compare) —
@@ -71,7 +71,7 @@ i18n на 5 языках, immutable payment ledger (миграции 017–020) 
   `invalidProviderCapturePayer` обобщается и ужесточается до `== 0`
   (carry-over из финального ревью YooKassa-ветки).
 
-### Этап B — Крипто-расширение (TON + NOWPayments)
+### Этап B — Крипто-расширение (TON + NOWPayments) ✅ (смержен 20.09.2026, ветка `feat/crypto-expansion`)
 
 - **TON** — нативная для Telegram крипта: прямые переводы на адрес магазина,
   идентификация по memo=order_id, подтверждение polling-воркером через публичный API
@@ -84,7 +84,7 @@ i18n на 5 языках, immutable payment ledger (миграции 017–020) 
   (batch, чтобы не пересобирать таблицы дважды).
 - Полный контур для каждого: бот, вебхук/воркер, webapi, ops, локали, E2E, docs.
 
-### Этап C — Полное управление из админки
+### Этап C — Полное управление из админки ✅ (смержен 20.09.2026, ветка `feat/admin-management`)
 
 - **Разбивка `admin.go` (1094 строки)** на тематические файлы по образцу handlers_*:
   products/categories, photo-wizard, orders, analytics, promos, btn-styles, payments.
@@ -135,13 +135,13 @@ i18n на 5 языках, immutable payment ledger (миграции 017–020) 
 | 4.3 | Coinbase Commerce / BTCPay (по запросу пользователей; NOWPayments покрывает основной спрос) | Medium | Средний |
 | 4.4 | Авто-рефанды через API провайдеров (сейчас — operator-driven, by design) | High | Средний |
 | 4.5 | Poller потерянных вебхуков YooKassa (сейчас покрыто ручным payment-review) | Medium | Средний |
-| 4.6 | Перетегировать factless-envelope аномалию `webhook_parse_failure` → `webhook_missing_payment_id` (осознанно post-merge: reason-строки зафиксированы тестовыми пинами свипа) | Low | Low |
+| 4.6 | ✅ Перетегировать factless-envelope аномалию `webhook_parse_failure` → `webhook_missing_payment_id` (осознанно post-merge: reason-строки зафиксированы тестовыми пинами свипа) — закрыто 20.09.2026, коммит `ee7f926` (ретег + пин `TestYooKassaWebhookFactlessEnvelopeRecordsMissingPaymentID`) | Low | Low |
 | 4.7 | Полное update-ctx propagation: ctx через весь middleware/handler chain (сейчас — per-handler 30s корни `handlerCtx`; chain type — `func(tgbotapi.Update)`) | Medium | Средний |
-| 4.8 | Покрытие ветки `out_of_stock_after_charge` на bot-слое (4 вебхука + Stars `successful_payment`; storage-уровень покрыт, bot-уровень — нет) | Low | Средний |
-| 4.9 | Double-guard для CLI TON-settle: правило `>=` живёт только в launcher (`providerCaptureSettleable`); при его дрейфе нет downstream-гейта против underpay (webhook-путь защищён shop-слоем) | Low | Средний |
-| 4.10 | Actionable ошибки amount-mismatch в `ingest-provider` для card-рельсов (сейчас общий «local preview failed» — `validatePaymentFact` падает до quarantine-классификации) | Low | Low |
-| 4.11 | Pin `payment_state` в bot-уровневом replay-тесте YooKassa-вебхука (`TestYooKassaWebhookReplayIsIdempotent`; storage-уровень уже покрыт) | Low | Low |
-| 4.12 | `ConvertUSDToNanoTON`: теоретический division-overflow residual (`usd=1e200` при `rate=1e-200`; rate — operator-configured, реальной конфигурации не существует) | Low | Low |
+| 4.8 | ✅ Покрытие ветки `out_of_stock_after_charge` на bot-слое (4 вебхука + Stars `successful_payment`; storage-уровень покрыт, bot-уровень — нет) — закрыто 20.09.2026, коммит `ee7f926` (5 bot-level legs, mutation-verified) | Low | Средний |
+| 4.9 | ✅ Double-guard для CLI TON-settle: правило `>=` живёт только в launcher (`providerCaptureSettleable`); при его дрейфе нет downstream-гейта против underpay (webhook-путь защищён shop-слоем) — закрыто 20.09.2026, коммит `10459c4` (правило single-sourced в storage `validatePaymentFact`; launcher-гейт остался безвредным дублем) | Low | Средний |
+| 4.10 | ✅ Actionable ошибки amount-mismatch в `ingest-provider` для card-рельсов (сейчас общий «local preview failed» — `validatePaymentFact` падает до quarantine-классификации) — закрыто 20.09.2026, коммит `10459c4` (sentinel-ошибки → сообщения с fact-vs-order суммами; exit-коды не изменились) | Low | Low |
+| 4.11 | ✅ Pin `payment_state` в bot-уровневом replay-тесте YooKassa-вебхука (`TestYooKassaWebhookReplayIsIdempotent`; storage-уровень уже покрыт) — закрыто 20.09.2026, коммит `ee7f926` (пин `payment_state=settled`) | Low | Low |
+| 4.12 | ✅ `ConvertUSDToNanoTON`: теоретический division-overflow residual (`usd=1e200` при `rate=1e-200`; rate — operator-configured, реальной конфигурации не существует) — закрыто 20.09.2026, план `docs/superpowers/plans/2026-09-20-backlog-followups.md` (NaN/±Inf-guard квотиента + test leg) | Low | Low |
 | 4.13 | Settle-path audit: `UpdateOrderStatusWithPaymentFact` не принимает actor — CLI-settle атрибутирован только неявно (quarantine-путь пишет `payment_ingress_audits`; то же ограничение у всех webhook/poller settles) | Medium | Low |
 
 ---

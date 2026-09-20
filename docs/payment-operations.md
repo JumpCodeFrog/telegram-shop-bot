@@ -176,8 +176,10 @@ order in `needs_review`:
 | Reason | Meaning |
 |---|---|
 | `webhook_parse_failure` | Unparseable webhook body, stored as a sha256 digest only |
+| `webhook_missing_payment_id` | Envelope that parsed cleanly but carried no payment id, stored as a sha256 digest only |
 | `webhook_invalid_receipt` | Refetched payment cannot produce a valid receipt |
 | `receipt_mismatch` | Valid receipt that disagrees with the order's money tuple |
+| `out_of_stock_after_charge` | Paid payment whose product went out of stock before fulfillment |
 
 YooKassa facts carry no payer id (the provider has no Telegram payer
 identity), so payer checks compare money and order linkage only.
@@ -335,16 +337,18 @@ telegram-shop-bot payment-review ingest-provider \
 
 `--amount-minor` is the ACTUAL received nanoton (scale 9) and
 `--occurred-at` accepts unix seconds or RFC3339. The same overpay-tolerant
-`>=` rule as the polling worker applies: an underpay previews
-`outcome=quarantine` and, if applied, becomes durable review evidence
-instead of settling; an exact re-run is a replay no-op. A settle through
-this CLI is identical to a polling tick for the ledger and stock, but the
-bot-runtime side effects (buyer notification, loyalty, referral) do not
-fire — confirm with the buyer in their thread. The same subcommand serves
-the other payerless rails with their rail currency and exact frozen order
-amount (`yookassa` RUB, `stripe` USD, `nowpayments` USD). `stars` keeps its
-authenticated `ingest-stars` flow; `balance` is rejected — its captures are
-synthetic admin-panel facts, never provider statements.
+`>=` rule as the polling worker applies, now enforced by the storage fact
+gate itself: an underpay is rejected at the preview with an actionable
+amount-mismatch error (exit `1`, nothing written) instead of being recorded
+— durable review evidence for underpaid transfers remains the polling
+worker's `receipt_mismatch` quarantine; an exact re-run is a replay no-op.
+A settle through this CLI is identical to a polling tick for the ledger and
+stock, but the bot-runtime side effects (buyer notification, loyalty,
+referral) do not fire — confirm with the buyer in their thread. The same
+subcommand serves the other payerless rails with their rail currency and
+exact frozen order amount (`yookassa` RUB, `stripe` USD, `nowpayments` USD).
+`stars` keeps its authenticated `ingest-stars` flow; `balance` is rejected
+— its captures are synthetic admin-panel facts, never provider statements.
 
 ### Overpay-tolerant settlement, rate snapshot
 
