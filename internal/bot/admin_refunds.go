@@ -18,8 +18,9 @@ package bot
 // itself rejecting a second refund of the same charge.
 //
 // Rails without a refund API (crypto, ton, nowpayments) get an informational
-// card: the refund is issued manually at the provider dashboard and recorded
-// afterwards through the launcher's refund-recording CLI.
+// card: the refund is issued manually at the provider dashboard and stays
+// dashboard-visible — in-ledger recording for these rails is a known follow-up
+// (the launcher's refund-recording CLI covers stars only today).
 
 import (
 	"context"
@@ -42,12 +43,18 @@ import (
 // the order and re-derives everything from it (TOCTOU discipline).
 const refundCallbackPrefix = "admin:refund:"
 
-// refundCLIRecordLine is quoted verbatim from the launcher's
-// printPaymentReviewUsage: the payment-review refund-recording CLI. NOTE: it
-// authenticates the fact against Telegram's star transactions, so it records
-// stars refunds; the manual rails currently have no dedicated refund-
-// recording CLI (flagged in the task report for the docs task).
-const refundCLIRecordLine = "telegram-shop-bot payment-review ingest-stars --kind capture|refund --transaction ID --order N --actor NAME --reason TEXT [--apply --confirm-order N]"
+// refundCLIRecordLine is the launcher's payment-review ingest-stars usage
+// line (printPaymentReviewUsage), narrowed to --kind refund. NOTE: the CLI
+// authenticates facts against Telegram's star transactions, so it records
+// STARS refunds ONLY. It is quoted in exactly one message — the stars
+// ledger-failure recovery (admin_refund_ledger_failed_stars) — where it is
+// the truthful remedy: a /refund re-run can never record a stars refund
+// (Telegram rejects the repeat refundStarPayment), while the CLI records it
+// with Telegram's authoritative OccurredAt. The manual rails (crypto, ton,
+// nowpayments) have NO refund-recording CLI today: their refunds stay
+// dashboard-visible and in-ledger recording is a known follow-up, stated as
+// such by the admin_refund_manual card (which must never quote this line).
+const refundCLIRecordLine = "telegram-shop-bot payment-review ingest-stars --kind refund --transaction ID --order N --actor NAME --reason TEXT [--apply --confirm-order N]"
 
 // Sentinel errors classifying a refund build failure for message mapping.
 var (
@@ -84,8 +91,8 @@ func refundPaymentStateLabel(order *storage.Order) string {
 }
 
 // refundIsManualRail reports whether the rail has no refund API in this bot:
-// the refund happens manually at the provider dashboard and is recorded via
-// the CLI afterwards.
+// the refund happens manually at the provider dashboard; in-ledger recording
+// is a known follow-up (no refund-recording CLI exists for these rails).
 func refundIsManualRail(rail string) bool {
 	switch rail {
 	case storage.PaymentMethodCrypto, storage.PaymentMethodTON, storage.PaymentMethodNowpayments:
@@ -233,7 +240,7 @@ func (b *Bot) handleRefundCommand(msg *tgbotapi.Message) {
 	}
 	rail := storage.CanonicalPaymentProvider(order.PaymentMethod)
 	if refundIsManualRail(rail) {
-		send(b.i18n.Tf(lang, "admin_refund_manual", rail, refundCLIRecordLine))
+		send(b.i18n.Tf(lang, "admin_refund_manual", rail))
 		return
 	}
 	fullMinor, currency, scale, ok := refundRailMoney(order, rail)
@@ -320,7 +327,7 @@ func (b *Bot) onAdminRefundConfirm(chatID int64, msgID int, adminID, orderID, am
 	if refundIsManualRail(rail) {
 		// The card never offers a confirm button for manual rails; a crafted
 		// callback re-renders the instructions and executes nothing.
-		render(b.i18n.Tf(lang, "admin_refund_manual", rail, refundCLIRecordLine))
+		render(b.i18n.Tf(lang, "admin_refund_manual", rail))
 		return
 	}
 	// Replay BEFORE the refundable gate: a successful first confirm flips the
@@ -380,13 +387,22 @@ func (b *Bot) onAdminRefundConfirm(chatID int64, msgID int, adminID, orderID, am
 	}
 	if err := b.payLedger.IngestProviderRefund(ctx, plan.fact, audit); err != nil &&
 		!errors.Is(err, storage.ErrPaymentNeedsReview) {
-		// The money has LEFT. Never silent: the re-run is safe because the
-		// deterministic idempotency key (card rails), the order_refund audit
-		// row (balance) or Telegram's own already-refunded rejection (stars)
-		// make the provider step a no-op — only the ledger record is retried.
+		// The money has LEFT. Never silent — and the remedy is RAIL-AWARE:
+		// stripe/yookassa collapse a re-run into the original refund via the
+		// deterministic idempotency key and balance skips the credit when the
+		// order_refund audit row exists, so for them the /refund re-run only
+		// completes the ledger record. Stars have NO safe re-run: Telegram
+		// rejects the repeat refundStarPayment, and the flow would falsely
+		// report "nothing recorded, order unchanged" while the money is out.
+		// The stars recovery is the ingest-stars CLI, which records the
+		// refund with Telegram's authoritative OccurredAt.
 		b.logger.Error("refund: LEDGER RECORDING FAILED AFTER PROVIDER SUCCESS",
 			"order_id", orderID, "rail", rail, "refund_id", refundID, "error", err)
-		render(b.i18n.Tf(lang, "admin_refund_ledger_failed_rerun", refundID, orderID, err.Error(), orderID))
+		if rail == storage.PaymentMethodStars {
+			render(b.i18n.Tf(lang, "admin_refund_ledger_failed_stars", refundID, orderID, err.Error(), refundCLIRecordLine))
+		} else {
+			render(b.i18n.Tf(lang, "admin_refund_ledger_failed_rerun", refundID, orderID, err.Error(), orderID))
+		}
 		return
 	}
 	// ErrPaymentNeedsReview from the ingest means the refund row committed but

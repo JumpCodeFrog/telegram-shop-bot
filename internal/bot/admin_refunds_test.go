@@ -24,6 +24,8 @@ import (
 	"testing"
 	"time"
 
+	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+
 	"shop_bot/internal/storage"
 )
 
@@ -507,8 +509,19 @@ func TestAdminRefundPreviewCards(t *testing.T) {
 			orderID := seedRefundOrder(t, e, tc.provider, tc.paymentID)
 			calls := e.cmd(e2eAdminID, fmt.Sprintf("/refund %d", orderID), "en")
 			text := tgText(calls)
-			if !strings.Contains(text, "payment-review ingest-stars --kind capture|refund") {
-				t.Fatalf("%s card misses the refund CLI line: %q", tc.provider, text)
+			// The card tells the TRUTH: it never quotes the stars-only
+			// ingest CLI (which cannot record this rail's refund, ever) and
+			// names the dashboard execution plus the known in-ledger
+			// recording follow-up.
+			want := e.bot.i18n.Tf("en", "admin_refund_manual", tc.provider)
+			if text != want {
+				t.Fatalf("%s card text = %q, want %q", tc.provider, text, want)
+			}
+			if strings.Contains(text, "ingest-stars") {
+				t.Fatalf("%s card quotes the stars-only CLI: %q", tc.provider, text)
+			}
+			if !strings.Contains(text, "known follow-up") || !strings.Contains(text, "Telegram Stars only") {
+				t.Fatalf("%s card misses the truthful follow-up wording: %q", tc.provider, text)
 			}
 			for _, c := range calls {
 				if strings.Contains(c.markup(), "admin:refund:") {
@@ -519,10 +532,10 @@ func TestAdminRefundPreviewCards(t *testing.T) {
 				t.Fatalf("%s card wrote %d refunds", tc.provider, got)
 			}
 			// A crafted confirm callback for a manual rail stays inert: the
-			// informational card re-renders, no ledger write.
+			// same truthful informational card re-renders, no ledger write.
 			calls = e.cb(e2eAdminID, refundCBData(orderID, refundFullUSD), "en")
-			if !strings.Contains(tgText(calls), "payment-review ingest-stars") {
-				t.Fatalf("%s confirm text = %q", tc.provider, tgText(calls))
+			if got := tgText(calls); got != want || strings.Contains(got, "ingest-stars") {
+				t.Fatalf("%s confirm text = %q, want %q", tc.provider, got, want)
 			}
 			if got := e.qInt(`SELECT COUNT(*) FROM refunds`); got != 0 {
 				t.Fatalf("%s confirm wrote %d refunds", tc.provider, got)
@@ -856,6 +869,42 @@ func TestAdminRefundLedgerFailureAfterProviderSuccessStripe(t *testing.T) {
 	}
 }
 
+// TestAdminRefundLedgerFailureAfterProviderSuccessStars pins the rail-aware
+// recovery guidance (review Minor 6): a /refund re-run can NEVER record a
+// stars refund — Telegram rejects the repeat refundStarPayment and the flow
+// would falsely report "no refund, order unchanged" while the money is out —
+// so the message must instead quote the ingest-stars --kind refund CLI, which
+// records the refund with Telegram's authoritative transaction.
+func TestAdminRefundLedgerFailureAfterProviderSuccessStars(t *testing.T) {
+	e := newE2EEnv(t)
+	orderID := seedRefundOrder(t, e, storage.PaymentMethodStars, refundStarsCharge)
+	ledger := &failingRefundLedger{payLedgerStore: e.bot.payLedger, failIngest: true}
+	e.bot.payLedger = ledger
+
+	calls := e.cb(e2eAdminID, refundCBData(orderID, refundFullStars), "en")
+	// The money LEFT at Telegram exactly once...
+	if got := tgCountMethod(calls, "refundStarPayment"); got != 1 {
+		t.Fatalf("refundStarPayment calls = %d, want 1", got)
+	}
+	// ...and the message tells the truth: the stars-specific recovery with
+	// the ingest-stars CLI line, NOT the impossible re-run promise.
+	want := e.bot.i18n.Tf("en", "admin_refund_ledger_failed_stars",
+		refundStarsCharge, orderID, "mock ledger ingest failure", refundCLIRecordLine)
+	if got := tgText(calls); got != want {
+		t.Fatalf("loud text = %q, want %q", got, want)
+	}
+	if !strings.Contains(tgText(calls), "ingest-stars --kind refund") {
+		t.Fatalf("stars ledger-failure text misses the CLI recovery line: %q", tgText(calls))
+	}
+	if got := e.qInt(`SELECT COUNT(*) FROM refunds`); got != 0 {
+		t.Fatalf("failed ingest wrote %d refunds", got)
+	}
+	assertRefundAudit(t, e, orderID, 0)
+	if got := e.qStr(`SELECT payment_state FROM orders WHERE id=?`, orderID); got != storage.PaymentStateSettled {
+		t.Fatalf("state = %s, want settled (unchanged — money out, unrecorded)", got)
+	}
+}
+
 // TestAdminRefundLedgerFailureAfterProviderSuccessBalance pins the amendment's
 // recovery guarantee on the rail with NO provider-side dedup: the re-run after
 // a ledger failure must find the deterministic order_refund audit row and skip
@@ -907,6 +956,93 @@ func TestAdminRefundLedgerFailureAfterProviderSuccessBalance(t *testing.T) {
 		fmt.Sprintf("balance-refund:%d", orderID), orderID, storage.PaymentStateRefunded)
 	if got := tgText(calls); got != want {
 		t.Fatalf("recovery text = %q, want %q", got, want)
+	}
+}
+
+// TestAdminRefundConfirmBalanceConcurrentDoubleTap exercises the refundMu
+// serialization under real contention on the rail with the WEAKEST dedup:
+// balance has no provider API — the deterministic order_refund balance_txs
+// row (a check-then-act, protected ONLY by the mutex) is its sole double-mint
+// protection. Two confirms for the same card fire simultaneously; exactly one
+// credit, one audit row and one ledger refund row may exist afterwards.
+func TestAdminRefundConfirmBalanceConcurrentDoubleTap(t *testing.T) {
+	e := newE2EEnv(t)
+	e.cmd(refundBuyer, "/start", "en") // the credit needs the users row
+	orderID := seedRefundOrder(t, e, storage.PaymentMethodBalance, "")
+	balances := storage.NewSQLBalanceStore(e.db.Conn())
+	if _, err := balances.AdjustBalance(context.Background(), refundBuyer, 12.50, "grant", e2eAdminID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := balances.AdjustBalance(context.Background(), refundBuyer, -12.50,
+		fmt.Sprintf("order_payment:%d", orderID), 0); err != nil {
+		t.Fatal(err)
+	}
+
+	// The same confirm callback delivered as two concurrent updates (the
+	// double-tap). Updates are built by hand — the e.cb helper's shared
+	// updSeq counter is not goroutine-safe.
+	update := func(id int) tgbotapi.Update {
+		return tgbotapi.Update{
+			UpdateID: id,
+			CallbackQuery: &tgbotapi.CallbackQuery{
+				ID:   fmt.Sprintf("cb-%d", id),
+				Data: refundCBData(orderID, refundFullUSD),
+				From: &tgbotapi.User{ID: e2eAdminID, FirstName: "A", LanguageCode: "en"},
+				Message: &tgbotapi.Message{
+					MessageID: 10_000,
+					Chat:      &tgbotapi.Chat{ID: e2eAdminID, Type: "private"},
+				},
+			},
+		}
+	}
+	before := e.tg.count()
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	wg.Add(2)
+	for i := range 2 {
+		go func(i int) {
+			defer wg.Done()
+			<-start // release both goroutines at the same instant
+			e.handle(update(900_000 + i))
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	// The mutex makes the outcome deterministic: whoever wins executes the
+	// credit + ledger record; the loser reloads, finds the recorded refund
+	// (replay) and never reaches the balance store.
+	txType := fmt.Sprintf("order_refund:%d", orderID)
+	if got := e.qInt(`SELECT COUNT(*) FROM balance_txs WHERE type=?`, txType); got != 1 {
+		t.Fatalf("concurrent confirms minted %d order_refund credits, want exactly 1", got)
+	}
+	if got := e.qStr(`SELECT printf('%.2f', balance_usd) FROM users WHERE telegram_id=?`, refundBuyer); got != "12.50" {
+		t.Fatalf("balance = %s, want 12.50 (single credit)", got)
+	}
+	if got := e.qInt(`SELECT COUNT(*) FROM refunds WHERE order_id=?`, orderID); got != 1 {
+		t.Fatalf("concurrent confirms wrote %d ledger refund rows, want exactly 1", got)
+	}
+	assertRefundRow(t, e, orderID, "balance", fmt.Sprintf("balance-refund:%d", orderID),
+		fmt.Sprintf("balance:%d", orderID), refundBuyer, refundFullUSD, "USD", 2)
+	assertRefundAudit(t, e, orderID, 1)
+	if got := e.qStr(`SELECT payment_state FROM orders WHERE id=?`, orderID); got != storage.PaymentStateRefunded {
+		t.Fatalf("state = %s, want refunded (exactly once)", got)
+	}
+	// Both taps answer with the SAME truthful done message: the executor's
+	// and the replay's renderings are identical.
+	done := e.bot.i18n.Tf("en", "admin_refund_done",
+		fmt.Sprintf("balance-refund:%d", orderID), orderID, storage.PaymentStateRefunded)
+	renders := 0
+	for _, c := range e.tg.since(before) {
+		if c.Method == "sendMessage" || c.Method == "editMessageText" {
+			renders++
+			if got := c.Params.Get("text"); got != done {
+				t.Fatalf("concurrent render %d text = %q, want done %q", renders, got, done)
+			}
+		}
+	}
+	if renders != 2 {
+		t.Fatalf("concurrent confirms rendered %d messages, want 2 (executor + replay)", renders)
 	}
 }
 
