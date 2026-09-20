@@ -52,7 +52,7 @@ i18n на 5 языках, immutable payment ledger (миграции 017–020) 
 
 ---
 
-## 3. Программа «Roadmap Zero» (в работе, ночь 19–20.09.2026)
+## 3. Программа «Roadmap Zero» (завершена, ночь 19–20.09.2026)
 
 Порядок выполнения — от денежных рельсов к управлению к качеству. Каждый этап —
 отдельный SDD-план (`docs/superpowers/plans/`), TDD, ревью на каждую задачу,
@@ -98,20 +98,31 @@ i18n на 5 языках, immutable payment ledger (миграции 017–020) 
   **оплата балансом** в checkout (provider `'balance'`, синхронный сеттлмент).
 - **Статус провайдеров** в админке (doctor-lite: какие рельсы сконфигурированы).
 
-### Этап D — Quality sweep
+### Этап D — Quality sweep ✅ (закрыт 20.09.2026, ветка `chore/quality-sweep`)
 
-- `context.Background()` → propagated/timeout context в bot-хендлерах (~50 сайтов).
-- Carry-over из YooKassa-ledger (quality-батч): покрытие веток GetPayment;
-  `url.Parse` вместо `HasPrefix("https://")`; shared-хелпер миграционных тестов;
-  replay-leg `payment_state` re-assert; восстановить потерянный attempts-count assert
-  (`payment_receipt_test.go:587`); удалить dead `drained()`; покрыть quarantine-ветку
-  invalid-receipt (приоритет — security boundary) и out-of-stock на bot-слое;
-  pin mock `GET /v3/payments/{id}`.
-- Text-pass: устаревшие «USD→Stars» комментарии в `exchange.go`, YooKassa-раздел в
-  `docs/faq.md`, квалификатор поверхности «кнопка скрыта при rate=0» (bot vs webapp).
-- Webapp follow-up: `total_rub`/availability в cartJSON + условная RUB/USD-card кнопка.
-- `math/rand` → `crypto/rand` в реферальных кодах (P6).
-- Post-merge: перетегировать factless-envelope аномалию (`webhook_missing_payment_id`).
+- ✅ `context.Background()` → propagated/timeout context в bot-хендлерах: 54 сайта →
+  per-handler 30s `b.handlerCtx()`, `r.Context()` в вебхуках, ctx-factory в
+  auth-middleware; осталось 4 задокументированных lifetime-critical корня в `bot.go`.
+- ✅ Carry-over из YooKassa-ledger (quality-батч): ветки GetPayment покрыты;
+  `url.Parse` вместо `HasPrefix("https://")` (shared `isHTTPSURL`, RFC-корректный
+  uppercase-scheme); shared-хелпер миграционных тестов (−501 строка дублей);
+  replay-leg `payment_state` re-assert; восстановлены attempts-count asserts (×4,
+  `payment_receipt_test.go`); `drained()` проверен — живой (9 callsites), не тронут;
+  quarantine-ветки invalid-receipt + 500-on-quarantine-failure покрыты для всех
+  подписанных рельсов; mock-пины `GET /v3/payments/{id}` (method+path).
+  Out-of-stock на bot-слое не вошёл → §4 (4.8).
+- ✅ Text-pass: «USD→Stars» комментарии в `exchange.go` (все три rail'а),
+  провайдер-разделы в `docs/faq.md`, квалификатор поверхности «кнопка скрыта при
+  rate=0» (теперь правда и для Mini App), architecture.md notification truth,
+  `.env.example` плейсхолдеры опустошены.
+- ✅ Webapp follow-up: `total_rub`/`total_ton_nano` + per-rail `*_enabled` в
+  cartJSON; условные кнопки yookassa/stripe/ton/nowpayments в Mini App.
+- ✅ Generic ingress CLI: `payment-review ingest-provider` для
+  yookassa/stripe/ton/nowpayments (preview → `--apply --confirm-order`); memo-less
+  TON теперь разрешим оператором (docs §7).
+- ✅ `math/rand` → `crypto/rand` в реферальных кодах (P6) — верифицировано:
+  уже было закрыто ранее, оба использования на `crypto/rand`.
+- Post-merge пункт (перетегировать `webhook_missing_payment_id`) и остатки свипа → §4.
 
 ---
 
@@ -124,6 +135,14 @@ i18n на 5 языках, immutable payment ledger (миграции 017–020) 
 | 4.3 | Coinbase Commerce / BTCPay (по запросу пользователей; NOWPayments покрывает основной спрос) | Medium | Средний |
 | 4.4 | Авто-рефанды через API провайдеров (сейчас — operator-driven, by design) | High | Средний |
 | 4.5 | Poller потерянных вебхуков YooKassa (сейчас покрыто ручным payment-review) | Medium | Средний |
+| 4.6 | Перетегировать factless-envelope аномалию `webhook_parse_failure` → `webhook_missing_payment_id` (осознанно post-merge: reason-строки зафиксированы тестовыми пинами свипа) | Low | Low |
+| 4.7 | Полное update-ctx propagation: ctx через весь middleware/handler chain (сейчас — per-handler 30s корни `handlerCtx`; chain type — `func(tgbotapi.Update)`) | Medium | Средний |
+| 4.8 | Покрытие ветки `out_of_stock_after_charge` на bot-слое (4 вебхука + Stars `successful_payment`; storage-уровень покрыт, bot-уровень — нет) | Low | Средний |
+| 4.9 | Double-guard для CLI TON-settle: правило `>=` живёт только в launcher (`providerCaptureSettleable`); при его дрейфе нет downstream-гейта против underpay (webhook-путь защищён shop-слоем) | Low | Средний |
+| 4.10 | Actionable ошибки amount-mismatch в `ingest-provider` для card-рельсов (сейчас общий «local preview failed» — `validatePaymentFact` падает до quarantine-классификации) | Low | Low |
+| 4.11 | Pin `payment_state` в bot-уровневом replay-тесте YooKassa-вебхука (`TestYooKassaWebhookReplayIsIdempotent`; storage-уровень уже покрыт) | Low | Low |
+| 4.12 | `ConvertUSDToNanoTON`: теоретический division-overflow residual (`usd=1e200` при `rate=1e-200`; rate — operator-configured, реальной конфигурации не существует) | Low | Low |
+| 4.13 | Settle-path audit: `UpdateOrderStatusWithPaymentFact` не принимает actor — CLI-settle атрибутирован только неявно (quarantine-путь пишет `payment_ingress_audits`; то же ограничение у всех webhook/poller settles) | Medium | Low |
 
 ---
 
