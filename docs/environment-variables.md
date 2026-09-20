@@ -72,6 +72,12 @@ When available, Redis is used for:
 | `STRIPE_SECRET_KEY` | _(empty)_ | Stripe API secret key for USD card payments; must start with `sk_live_` or `sk_test_`. Must be set together with `STRIPE_WEBHOOK_SECRET` and `STRIPE_RETURN_URL`; leave all three empty to disable USD card payments. |
 | `STRIPE_WEBHOOK_SECRET` | _(empty)_ | Signing secret of the `<WEBHOOK_URL>/stripe-webhook` endpoint (Stripe Dashboard → Developers → Webhooks); must start with `whsec_`. Set only together with the other Stripe variables. |
 | `STRIPE_RETURN_URL` | _(empty)_ | Public **HTTPS** page the buyer returns to after paying on Stripe's hosted Checkout page. Set only together with the other Stripe variables. |
+| `TON_WALLET_ADDRESS` | _(empty)_ | 48-character base64url friendly address of the shop's TON wallet receiving on-chain payments. Must be set together with `USD_PER_TON`; leave both empty to disable TON payments. |
+| `USD_PER_TON` | `0` | USD per 1 TON used to price TON payments, e.g. `5.25`. The USD price converts at this rate and the nanoton total is snapshotted on the order at checkout. With the default `0` (or a missing wallet address) the TON button stays hidden. |
+| `TON_API_KEY` | _(empty)_ | Optional toncenter API key. Without one the polling worker is just rate-limited harder; an empty key is valid. |
+| `NOWPAYMENTS_API_KEY` | _(empty)_ | NOWPayments API key for hosted crypto invoices (300+ coins, priced in USD). Must be set together with `NOWPAYMENTS_IPN_SECRET` and `NOWPAYMENTS_RETURN_URL`; leave all three empty to disable. |
+| `NOWPAYMENTS_IPN_SECRET` | _(empty)_ | IPN signing secret from the NOWPayments dashboard; verifies the HMAC-SHA512 `x-nowpayments-sig` header over the canonicalized IPN body. Set only together with the other NOWPayments variables. Confirm with one live test payment before enabling in production. |
+| `NOWPAYMENTS_RETURN_URL` | _(empty)_ | Public **HTTPS** page the buyer returns to after paying the hosted invoice. Set only together with the other NOWPayments variables. |
 
 ---
 
@@ -84,7 +90,7 @@ When available, Redis is used for:
 
 > When `WEBHOOK_URL` is empty the bot uses **long polling** — recommended for local development.
 
-If CryptoBot is enabled, configure its callback as `<WEBHOOK_URL>/cryptobot-webhook`. If YooKassa is enabled, register `<WEBHOOK_URL>/yookassa-webhook` as the notification URL in the YooKassa merchant cabinet. If Stripe is enabled, register `<WEBHOOK_URL>/stripe-webhook` in the Stripe dashboard (Developers → Webhooks) for `checkout.session.completed` and copy its signing secret into `STRIPE_WEBHOOK_SECRET`.
+If CryptoBot is enabled, configure its callback as `<WEBHOOK_URL>/cryptobot-webhook`. If YooKassa is enabled, register `<WEBHOOK_URL>/yookassa-webhook` as the notification URL in the YooKassa merchant cabinet. If Stripe is enabled, register `<WEBHOOK_URL>/stripe-webhook` in the Stripe dashboard (Developers → Webhooks) for `checkout.session.completed` and copy its signing secret into `STRIPE_WEBHOOK_SECRET`. If NOWPayments is enabled, register `<WEBHOOK_URL>/nowpayments-webhook` as the IPN callback URL in the NOWPayments dashboard. TON has no webhook: its polling worker settles payments by reading the watched wallet's transactions from toncenter, so TON works in long-polling deployments too.
 
 ---
 

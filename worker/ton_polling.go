@@ -69,6 +69,12 @@ func (w *TONPollingWorker) Start(ctx context.Context) {
 	}
 }
 
+// PollOnce runs a single poll pass synchronously. Exported test seam:
+// same-package tests drive the unexported poll directly, while cross-package
+// E2E tests (internal/bot) need one exported entry into the exact same code
+// path. Production scheduling lives in Start; nothing else calls this.
+func (w *TONPollingWorker) PollOnce(ctx context.Context) { w.poll(ctx) }
+
 func (w *TONPollingWorker) poll(ctx context.Context) {
 	transactions, err := w.ton.GetTransactions(ctx, tonPollWindow)
 	if err != nil {

@@ -128,7 +128,7 @@ Stop it with `docker compose down`.
 3. Run `./telegram-shop-bot doctor` on Linux or `.\telegram-shop-bot.exe doctor` on Windows before starting.
 4. Start the service and verify `/health` and `/metrics`.
 
-`WEBHOOK_URL` is the public base URL. Telegram posts to `<WEBHOOK_URL>/telegram-webhook`; CryptoBot, when enabled, uses `<WEBHOOK_URL>/cryptobot-webhook`; YooKassa, when enabled, uses `<WEBHOOK_URL>/yookassa-webhook` (register it in the YooKassa merchant cabinet); Stripe, when enabled, uses `<WEBHOOK_URL>/stripe-webhook` (register it in the Stripe dashboard and copy its signing secret into `STRIPE_WEBHOOK_SECRET`).
+`WEBHOOK_URL` is the public base URL. Telegram posts to `<WEBHOOK_URL>/telegram-webhook`; CryptoBot, when enabled, uses `<WEBHOOK_URL>/cryptobot-webhook`; YooKassa, when enabled, uses `<WEBHOOK_URL>/yookassa-webhook` (register it in the YooKassa merchant cabinet); Stripe, when enabled, uses `<WEBHOOK_URL>/stripe-webhook` (register it in the Stripe dashboard and copy its signing secret into `STRIPE_WEBHOOK_SECRET`); NOWPayments, when enabled, uses `<WEBHOOK_URL>/nowpayments-webhook` (register it as the IPN callback URL in the NOWPayments dashboard). TON is the exception: it has no webhook — a polling worker settles on-chain transfers, so TON works without `WEBHOOK_URL` too.
 
 ## Next steps
 

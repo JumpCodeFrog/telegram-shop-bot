@@ -38,6 +38,8 @@ A full-featured e-commerce bot for Telegram — catalog, cart, Telegram Stars & 
 - **USDT via CryptoBot** (optional)
 - **RUB cards via YooKassa** (optional)
 - **USD cards via Stripe** (optional)
+- **TON on-chain transfers** (optional)
+- **300+ coins via NOWPayments** (optional)
 - **Mini App** — full shop UI inside Telegram (opt-in via `WEBAPP_URL`)
 - **Reviews & ratings** — 1–5 ⭐ after delivery, average shown on the product card
 - Promo codes with category limits + personal one-off codes
@@ -240,6 +242,12 @@ Set `YOOKASSA_SHOP_ID`, `YOOKASSA_SECRET_KEY`, `YOOKASSA_RETURN_URL` (public HTT
 **Stripe (USD)** — optional. Card payments in USD: the buyer is redirected to Stripe's hosted Checkout page, the order settles when Stripe notifies the bot.  
 Set `STRIPE_SECRET_KEY` (must start with `sk_live_` or `sk_test_`), `STRIPE_WEBHOOK_SECRET` (must start with `whsec_`) and `STRIPE_RETURN_URL` (public HTTPS) — all three must be set together. In the Stripe dashboard (Developers → Webhooks) register `<WEBHOOK_URL>/stripe-webhook` for `checkout.session.completed` and copy the endpoint's signing secret into `STRIPE_WEBHOOK_SECRET`. Stripe notifications are HMAC-signed: once the signature verifies, the signed body itself settles the order — no API refetch needed (unlike the unsigned YooKassa flow, which must re-fetch the payment). Orders below Stripe's $0.50 minimum are refused when the card button is tapped. Subscriptions remain Stars-only.
 
+**TON (on-chain)** — optional. Direct TON transfers to the shop's own wallet: the buyer taps the TON button and gets the wallet address, the exact amount and a **mandatory `order-<id>` memo** — the `ton://transfer` deeplink button prefills all three — then sends the transfer from any TON wallet. There is no webhook on-chain: a background worker polls the wallet's latest transactions via toncenter every ~30 seconds and settles the order once a transfer with the exact memo covers the frozen amount.  
+Set `TON_WALLET_ADDRESS` and `USD_PER_TON` (USD per 1 TON, e.g. `5.25`) together — with `USD_PER_TON` at the default `0` the TON button stays hidden; `TON_API_KEY` (toncenter) is optional and only lifts rate limits. The nanoton total is snapshotted on the order at checkout from the `USD_PER_TON` in effect at that moment, so a later rate change never reprices an existing order, and an order created while TON was disabled can never be paid in TON. Settlement is overpay-tolerant: a transfer of at least the snapshot settles and the ledger records the actual received amount; an underpay is quarantined for `make payment-review PROVIDER=ton`. A transfer without the exact memo can never be matched to an order — it must be refunded manually from the wallet. Subscriptions remain Stars-only.
+
+**NOWPayments (300+ coins)** — optional. Hosted crypto invoices: the buyer is redirected to a NOWPayments invoice page offering 300+ coins (BTC, ETH, USDT, …), and the order settles when NOWPayments sends a signed IPN callback.  
+Set `NOWPAYMENTS_API_KEY`, `NOWPAYMENTS_IPN_SECRET` and `NOWPAYMENTS_RETURN_URL` (public HTTPS) — all three must be set together — and register `<WEBHOOK_URL>/nowpayments-webhook` as the IPN callback URL in the NOWPayments dashboard. IPN callbacks are HMAC-SHA512-signed over the canonicalized (recursively key-sorted) JSON body: once the signature verifies, the signed body itself settles the order — no API refetch (the CryptoBot/Stripe pattern). Only `payment_status: finished` settles; every other status is acknowledged without side effects. Invoices charge the order's own USD total, so the signed amount must match exactly — unlike TON there is no overpay tolerance. ⚠️ Confirm the byte-level canonicalization agreement with NOWPayments' signer with ONE live test payment before enabling the rail in production (verification fails closed: a mismatch rejects genuine IPNs, it can never accept a forged one). Subscriptions remain Stars-only.
+
 **Stars subscriptions** — a product created as a "30-day subscription" is sold as a recurring Stars payment (`subscription_period=2592000`). Subscriptions are Stars-only; users manage them via `/mysubs`.
 
 ---
@@ -303,7 +311,7 @@ WEBHOOK_URL=https://shop.example.com
 TELEGRAM_WEBHOOK_SECRET=random-secret-string
 ```
 
-Telegram posts to `https://shop.example.com/telegram-webhook`. If CryptoBot is enabled, configure its webhook as `https://shop.example.com/cryptobot-webhook`. If YooKassa is enabled, register `https://shop.example.com/yookassa-webhook` as the notification URL in the YooKassa merchant cabinet. If Stripe is enabled, register `https://shop.example.com/stripe-webhook` in the Stripe dashboard (Developers → Webhooks).
+Telegram posts to `https://shop.example.com/telegram-webhook`. If CryptoBot is enabled, configure its webhook as `https://shop.example.com/cryptobot-webhook`. If YooKassa is enabled, register `https://shop.example.com/yookassa-webhook` as the notification URL in the YooKassa merchant cabinet. If Stripe is enabled, register `https://shop.example.com/stripe-webhook` in the Stripe dashboard (Developers → Webhooks). If NOWPayments is enabled, register `https://shop.example.com/nowpayments-webhook` as the IPN callback URL in the NOWPayments dashboard. TON needs no webhook at all — settlement is polled from the chain.
 
 </details>
 

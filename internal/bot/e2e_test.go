@@ -10,6 +10,7 @@ package bot
 // All updates are dispatched synchronously through the production router.
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -33,8 +34,10 @@ import (
 
 	"shop_bot/internal/bot/middleware"
 	"shop_bot/internal/config"
+	"shop_bot/internal/payment"
 	"shop_bot/internal/service"
 	"shop_bot/internal/storage"
+	"shop_bot/worker"
 )
 
 const (
@@ -1334,6 +1337,450 @@ func TestE2EStripePurchase(t *testing.T) {
 		t.Fatalf("purchase loyalty_txs after replay = %d, want still 1", got)
 	}
 	if got := e.qInt(`SELECT COUNT(*) FROM payment_attempts WHERE provider='stripe' AND external_id='cs_e2e'`); got != 1 {
+		t.Fatalf("payment_attempts after replay = %d, want still 1", got)
+	}
+	if got := e.tg.count() - beforeReplay; got != 0 {
+		t.Fatalf("replay sent %d messages, want 0:\n%s", got, dumpCalls(e.tg.since(beforeReplay)))
+	}
+	if !out.drained() {
+		t.Fatal("replay fired another outbound webhook event")
+	}
+}
+
+// --- TON on-chain journey ---
+
+// toncenterE2EMock is a fake toncenter v2 API covering the single route the
+// TON polling worker touches: GET /api/v2/getTransactions. The served
+// transaction list is swapped between poll legs; hits are counted so each
+// poll's single fetch is pinned.
+type toncenterE2EMock struct {
+	mu     sync.Mutex
+	srv    *httptest.Server
+	hits   int
+	result string // raw JSON array served as the "result" field
+}
+
+func newToncenterE2EMock(t *testing.T) *toncenterE2EMock {
+	t.Helper()
+	m := &toncenterE2EMock{result: "[]"}
+	m.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		m.mu.Lock()
+		m.hits++
+		result := m.result
+		m.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true,"result":` + result + `}`))
+	}))
+	t.Cleanup(m.srv.Close)
+	return m
+}
+
+// setTransactions replaces the served transaction list (a raw JSON array of
+// toncenter v2 transaction entries).
+func (m *toncenterE2EMock) setTransactions(result string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.result = result
+}
+
+func (m *toncenterE2EMock) count() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.hits
+}
+
+// tonTxJSON builds one toncenter v2 getTransactions result entry carrying a
+// plain-text comment (msg.dataText) — the only shape the TON adapter turns
+// into a receipt candidate.
+func tonTxJSON(lt, hash, comment string, valueNano int64) string {
+	return fmt.Sprintf(`{"transaction_id":{"lt":%q,"hash":%q},"utime":1720000000,`+
+		`"in_msg":{"source":"EQsender","value":"%d","msg_data":{"@type":"msg.dataText","text":%q}}}`,
+		lt, hash, valueNano, comment)
+}
+
+// TestE2ETONPurchase walks the full on-chain TON journey: /start → catalog →
+// product card → cart → checkout → confirm (the TON button is offered because
+// the wallet and rate are configured) → pay:ton → transfer instructions with
+// a prefilled ton:// deeplink (the buyer-facing flow makes ZERO chain API
+// calls) → one worker poll over a mock toncenter returning a dataText
+// transfer with the exact "order-<id>" memo and the exact nanoton snapshot →
+// settlement (order paid via ton with the <lt>:<hash> payment id, stock
+// decremented once, loyalty awarded once) → a second poll over the same
+// transfer settles nothing new → an underpaid transfer for a second order is
+// quarantined (needs_review, NOT paid).
+//
+// Worker-path notify surface (mirrors the CryptoBot polling worker, whose
+// notify is the same Bot.NotifyPaymentOutcome wired in main.go): the buyer
+// gets the loyalty outcome messages ONLY — the worker path sends NO
+// payment_success message, NO admin notification and fires NO outbound
+// webhook (those live in the webhook handlers, and TON has no webhook). The
+// test pins that actual surface instead of inventing new notify behavior.
+func TestE2ETONPurchase(t *testing.T) {
+	out := newOutboundCapture(t)
+	chain := newToncenterE2EMock(t)
+	e := newE2EEnvWithConfig(t, func(c *config.Config) {
+		// $10.00 at $5/TON snapshots exactly 2 TON (2000000000 nanotons).
+		c.TONWalletAddress = tonTestWalletAddress
+		c.USDPerTON = 5
+		c.OutboundWebhookURL = out.srv.URL
+	})
+	const buyer = int64(7001)
+
+	// /start registers the user; the catalog journey fills the cart.
+	calls := e.cmd(buyer, "/start", "en")
+	requireRender(t, calls, "back:catalog")
+	e.cb(buyer, "back:catalog", "en")
+	e.cb(buyer, fmt.Sprintf("category:%d", e.catID), "en")
+	e.cb(buyer, fmt.Sprintf("product:%d", e.prodReg), "en")
+	e.cb(buyer, fmt.Sprintf("cart:add:%d", e.prodReg), "en")
+	if got := e.qInt(`SELECT quantity FROM cart_items WHERE user_id = ? AND product_id = ?`, buyer, e.prodReg); got != 1 {
+		t.Fatalf("cart quantity = %d, want 1", got)
+	}
+
+	// Checkout and confirm: the TON button is offered because the wallet and
+	// the rate are set, and the nanoton total is snapshotted on the order.
+	e.cb(buyer, "cart:checkout", "en")
+	calls = e.cb(buyer, "order:confirm", "en")
+	orderID := e.qInt(`SELECT MAX(id) FROM orders WHERE user_id = ?`, buyer)
+	payScreen := requireRender(t, calls, fmt.Sprintf("pay:stars:%d", orderID))
+	if !strings.Contains(payScreen.markup(), fmt.Sprintf("pay:ton:%d", orderID)) {
+		t.Fatalf("TON pay button missing from the checkout screen: %s", payScreen.markup())
+	}
+	if got := e.qInt(`SELECT total_ton_nano FROM orders WHERE id = ?`, orderID); got != 2000000000 {
+		t.Fatalf("order total_ton_nano = %d, want 2000000000", got)
+	}
+
+	// pay:ton → transfer instructions with the wallet, the exact amount and
+	// the MANDATORY memo, plus a single ton:// deeplink button. The
+	// buyer-facing flow performs NO provider API calls: settlement is 100%
+	// worker-side.
+	calls = e.cb(buyer, fmt.Sprintf("pay:ton:%d", orderID), "en")
+	wantLink := fmt.Sprintf("ton://transfer/%s?amount=2000000000&text=order-%d", tonTestWalletAddress, orderID)
+	// The serialized markup JSON-escapes "&" to & — match the escape-free
+	// prefix here and pin the full decoded URL on the unmarshalled button.
+	render := requireRender(t, calls, "ton://transfer/"+tonTestWalletAddress)
+	var tonMarkup tgbotapi.InlineKeyboardMarkup
+	if err := json.Unmarshal([]byte(render.markup()), &tonMarkup); err != nil {
+		t.Fatalf("parse payment keyboard: %v", err)
+	}
+	if len(tonMarkup.InlineKeyboard) != 1 || len(tonMarkup.InlineKeyboard[0]) != 1 ||
+		tonMarkup.InlineKeyboard[0][0].URL == nil || *tonMarkup.InlineKeyboard[0][0].URL != wantLink {
+		t.Fatalf("payment keyboard = %s, want a single URL button to %s", render.markup(), wantLink)
+	}
+	if !strings.Contains(render.Params.Get("text"), fmt.Sprintf("order-%d", orderID)) {
+		t.Fatalf("instructions missing the order-%d memo: %q", orderID, render.Params.Get("text"))
+	}
+	if got := chain.count(); got != 0 {
+		t.Fatalf("toncenter API calls after pay button = %d, want 0 (settlement is worker-side)", got)
+	}
+
+	// The worker: a test-constructed adapter pointed at the mock toncenter,
+	// the bot's REAL OrderService, and the production notify wiring
+	// (Bot.NotifyPaymentOutcome — the same callback main.go installs).
+	tonAdapter := payment.NewTONPayment(tonTestWalletAddress, "")
+	tonAdapter.SetBaseURL(chain.srv.URL)
+	w := worker.NewTONPollingWorker(tonAdapter, e.bot.OrderService(), e.bot.NotifyPaymentOutcome, 30*time.Second)
+
+	// One poll over a transfer whose memo and amount match the order exactly.
+	chain.setTransactions("[" + tonTxJSON("1720000000042", "e2ehash", fmt.Sprintf("order-%d", orderID), 2000000000) + "]")
+	before := e.tg.count()
+	w.PollOnce(context.Background())
+	if got := chain.count(); got != 1 {
+		t.Fatalf("toncenter API calls after first poll = %d, want 1", got)
+	}
+
+	// Order paid via ton with the <lt>:<hash> payment id.
+	if got := e.qStr(`SELECT status FROM orders WHERE id = ?`, orderID); got != storage.OrderStatusPaid {
+		t.Fatalf("order status = %q, want paid", got)
+	}
+	if got := e.qStr(`SELECT payment_method FROM orders WHERE id = ?`, orderID); got != storage.PaymentMethodTON {
+		t.Fatalf("payment_method = %q, want ton", got)
+	}
+	if got := e.qStr(`SELECT payment_id FROM orders WHERE id = ?`, orderID); got != "1720000000042:e2ehash" {
+		t.Fatalf("payment_id = %q, want 1720000000042:e2ehash", got)
+	}
+	if got := e.qInt(`SELECT COUNT(*) FROM payment_attempts
+		WHERE provider='ton' AND external_id='1720000000042:e2ehash' AND currency='TON'
+		  AND amount_minor=2000000000 AND scale=9 AND status='succeeded'`); got != 1 {
+		t.Fatalf("settled payment attempts = %d, want 1", got)
+	}
+	// Stock decremented exactly once: 5 → 4.
+	if got := e.qInt(`SELECT stock FROM products WHERE id = ?`, e.prodReg); got != 4 {
+		t.Fatalf("stock = %d, want 4", got)
+	}
+	// Loyalty: $10.00 at 1% bronze cashback → 10 points, one accrual.
+	if got := e.qInt(`SELECT loyalty_pts FROM users WHERE telegram_id = ?`, buyer); got != 10 {
+		t.Fatalf("loyalty_pts = %d, want 10", got)
+	}
+	if got := e.qInt(`SELECT COUNT(*) FROM loyalty_txs WHERE user_id = ? AND reason = 'purchase'`, e.userDBID(buyer)); got != 1 {
+		t.Fatalf("purchase loyalty_txs = %d, want 1", got)
+	}
+	// The buyer got the loyalty outcome message (the worker-path notify).
+	lang := e.qStr(`SELECT COALESCE(language_code, '') FROM users WHERE telegram_id = ?`, buyer)
+	pointsText := fmt.Sprintf(e.bot.t(lang, "loyalty_points_awarded"), 10)
+	if !findMessage(e.tg.since(before), buyer, pointsText) {
+		t.Fatalf("no loyalty_points_awarded message to buyer %d (lang %q):\n%s", buyer, lang, dumpCalls(e.tg.since(before)))
+	}
+	// Worker-path surface, pinned as-found: NO payment_success message, NO
+	// admin notification, NO outbound webhook (those live in the webhook
+	// handlers, and TON has no webhook).
+	successText := fmt.Sprintf(e.bot.t(lang, "payment_success"), orderID)
+	if findMessage(e.tg.since(before), buyer, successText) {
+		t.Fatalf("worker path sent a payment_success message (unexpected — notify is NotifyPaymentOutcome only):\n%s",
+			dumpCalls(e.tg.since(before)))
+	}
+	for _, c := range e.tg.since(before) {
+		if c.Method == "sendMessage" && c.Params.Get("chat_id") == strconv.FormatInt(e2eAdminID, 10) {
+			t.Fatalf("worker path notified admin %d (unexpected — no admin_order_paid on the polling path): %q",
+				e2eAdminID, c.Params.Get("text"))
+		}
+	}
+	if !out.drained() {
+		t.Fatal("worker path fired an outbound webhook event (unexpected — the webhook handlers own that)")
+	}
+
+	// Re-poll replay: the same transfer is re-read and re-replayed into the
+	// ledger, where the exact repeat is a durable no-op — nothing changes and
+	// no message is sent.
+	beforeReplay := e.tg.count()
+	w.PollOnce(context.Background())
+	if got := chain.count(); got != 2 {
+		t.Fatalf("toncenter API calls after replay poll = %d, want 2", got)
+	}
+	if got := e.qStr(`SELECT status FROM orders WHERE id = ?`, orderID); got != storage.OrderStatusPaid {
+		t.Fatalf("order status after replay = %q, want still paid", got)
+	}
+	if got := e.qStr(`SELECT payment_id FROM orders WHERE id = ?`, orderID); got != "1720000000042:e2ehash" {
+		t.Fatalf("payment_id after replay = %q, want still 1720000000042:e2ehash", got)
+	}
+	if got := e.qInt(`SELECT stock FROM products WHERE id = ?`, e.prodReg); got != 4 {
+		t.Fatalf("stock after replay = %d, want still 4", got)
+	}
+	if got := e.qInt(`SELECT loyalty_pts FROM users WHERE telegram_id = ?`, buyer); got != 10 {
+		t.Fatalf("loyalty_pts after replay = %d, want still 10", got)
+	}
+	if got := e.qInt(`SELECT COUNT(*) FROM loyalty_txs WHERE user_id = ? AND reason = 'purchase'`, e.userDBID(buyer)); got != 1 {
+		t.Fatalf("purchase loyalty_txs after replay = %d, want still 1", got)
+	}
+	if got := e.qInt(`SELECT COUNT(*) FROM payment_attempts WHERE provider='ton' AND external_id='1720000000042:e2ehash'`); got != 1 {
+		t.Fatalf("payment_attempts after replay = %d, want still 1", got)
+	}
+	if got := e.tg.count() - beforeReplay; got != 0 {
+		t.Fatalf("replay poll sent %d messages, want 0:\n%s", got, dumpCalls(e.tg.since(beforeReplay)))
+	}
+	if !out.drained() {
+		t.Fatal("replay poll fired an outbound webhook event")
+	}
+
+	// Underpaid leg: a second buyer's order receives a transfer 1 nanoton
+	// below the snapshot → quarantined (needs_review, NOT paid), never
+	// settled, no notification.
+	const buyer2 = int64(7002)
+	e.cmd(buyer2, "/start", "en")
+	order2 := e.placeOrder(buyer2, e.prodReg, "")
+	if got := e.qInt(`SELECT total_ton_nano FROM orders WHERE id = ?`, order2); got != 2000000000 {
+		t.Fatalf("order2 total_ton_nano = %d, want 2000000000", got)
+	}
+	chain.setTransactions("[" + tonTxJSON("1720000000099", "lowhash", fmt.Sprintf("order-%d", order2), 1999999999) + "]")
+	beforeUnderpaid := e.tg.count()
+	w.PollOnce(context.Background())
+	if got := e.qStr(`SELECT status FROM orders WHERE id = ?`, order2); got != storage.OrderStatusPending {
+		t.Fatalf("underpaid order status = %q, want still pending", got)
+	}
+	if got := e.qStr(`SELECT payment_state FROM orders WHERE id = ?`, order2); got != storage.PaymentStateNeedsReview {
+		t.Fatalf("underpaid order payment_state = %q, want needs_review", got)
+	}
+	if got := e.qInt(`SELECT COUNT(*) FROM payment_anomalies
+		WHERE provider='ton' AND external_id='1720000000099:lowhash'
+		  AND proposed_order_id=? AND reason='receipt_mismatch' AND amount_minor=1999999999`, order2); got != 1 {
+		t.Fatalf("underpaid quarantine anomalies = %d, want 1", got)
+	}
+	if got := e.qInt(`SELECT COUNT(*) FROM payment_attempts WHERE order_id = ?`, order2); got != 0 {
+		t.Fatalf("underpaid payment attempts = %d, want 0", got)
+	}
+	if got := e.tg.count() - beforeUnderpaid; got != 0 {
+		t.Fatalf("underpaid poll sent %d messages, want 0:\n%s", got, dumpCalls(e.tg.since(beforeUnderpaid)))
+	}
+	if !out.drained() {
+		t.Fatal("underpaid poll fired an outbound webhook event")
+	}
+
+	// Button visibility: with the wallet set but the rate at 0 the TON button
+	// stays hidden and orders carry no nanoton snapshot (mirrors the YooKassa
+	// rate toggle).
+	e2 := newE2EEnvWithConfig(t, func(c *config.Config) {
+		c.TONWalletAddress = tonTestWalletAddress
+		// USDPerTON deliberately stays 0.
+	})
+	const buyer3 = int64(7003)
+	e2.cmd(buyer3, "/start", "en")
+	e2.cb(buyer3, fmt.Sprintf("cart:add:%d", e2.prodReg), "en")
+	e2.cb(buyer3, "cart:checkout", "en")
+	calls3 := e2.cb(buyer3, "order:confirm", "en")
+	order3 := e2.qInt(`SELECT MAX(id) FROM orders WHERE user_id = ?`, buyer3)
+	screen3 := requireRender(t, calls3, fmt.Sprintf("pay:stars:%d", order3))
+	if strings.Contains(screen3.markup(), "pay:ton:") {
+		t.Fatalf("TON button shown with a zero rate: %s", screen3.markup())
+	}
+	if got := e2.qInt(`SELECT total_ton_nano FROM orders WHERE id = ?`, order3); got != 0 {
+		t.Fatalf("order3 total_ton_nano = %d, want 0 (rate was unset at checkout)", got)
+	}
+}
+
+// TestE2ENowpaymentsPurchase walks the full NOWPayments hosted-invoice
+// journey, mirroring TestE2EStripePurchase: /start → catalog → product card →
+// cart → checkout → confirm (the crypto button is offered because NOWPayments
+// is configured) → pay:nowpayments → hosted invoice creation → invoice URL
+// button → SIGNED finished IPN → settlement straight from the
+// signature-verified body (order paid via nowpayments, stock decremented
+// once, loyalty points awarded once, buyer and admin notified, outbound
+// webhook fired) with the mock's hit count pinned at exactly 1 — the signed
+// IPN is authoritative, no refetch — and an identical signed replay that
+// settles nothing new.
+func TestE2ENowpaymentsPurchase(t *testing.T) {
+	out := newOutboundCapture(t)
+	api := newNowpaymentsMock(t)
+	e := newE2EEnvWithConfig(t, func(c *config.Config) {
+		enableNowpayments(c)
+		c.OutboundWebhookURL = out.srv.URL
+	})
+	e.bot.nowpayments.SetBaseURL(api.srv.URL)
+	const buyer = int64(8001)
+
+	// /start registers the user; the catalog journey fills the cart.
+	calls := e.cmd(buyer, "/start", "en")
+	requireRender(t, calls, "back:catalog")
+	e.cb(buyer, "back:catalog", "en")
+	e.cb(buyer, fmt.Sprintf("category:%d", e.catID), "en")
+	e.cb(buyer, fmt.Sprintf("product:%d", e.prodReg), "en")
+	e.cb(buyer, fmt.Sprintf("cart:add:%d", e.prodReg), "en")
+	if got := e.qInt(`SELECT quantity FROM cart_items WHERE user_id = ? AND product_id = ?`, buyer, e.prodReg); got != 1 {
+		t.Fatalf("cart quantity = %d, want 1", got)
+	}
+
+	// Checkout and confirm: the NOWPayments button is offered. USD needs no
+	// conversion — the $10.00 total is priced directly onto the invoice.
+	e.cb(buyer, "cart:checkout", "en")
+	calls = e.cb(buyer, "order:confirm", "en")
+	orderID := e.qInt(`SELECT MAX(id) FROM orders WHERE user_id = ?`, buyer)
+	payScreen := requireRender(t, calls, fmt.Sprintf("pay:stars:%d", orderID))
+	if !strings.Contains(payScreen.markup(), fmt.Sprintf("pay:nowpayments:%d", orderID)) {
+		t.Fatalf("NOWPayments pay button missing from the checkout screen: %s", payScreen.markup())
+	}
+	if got := e.qStr(`SELECT printf('%.2f', total_usd) FROM orders WHERE id = ?`, orderID); got != "10.00" {
+		t.Fatalf("order total_usd = %q, want 10.00", got)
+	}
+
+	// pay:nowpayments → the API creates the hosted invoice and the buyer gets
+	// a URL button leading to the NOWPayments invoice page.
+	calls = e.cb(buyer, fmt.Sprintf("pay:nowpayments:%d", orderID), "en")
+	render := requireRender(t, calls, nowpaymentsInvoiceURL)
+	var markup tgbotapi.InlineKeyboardMarkup
+	if err := json.Unmarshal([]byte(render.markup()), &markup); err != nil {
+		t.Fatalf("parse payment keyboard: %v", err)
+	}
+	if len(markup.InlineKeyboard) != 1 || len(markup.InlineKeyboard[0]) != 1 ||
+		markup.InlineKeyboard[0][0].URL == nil || *markup.InlineKeyboard[0][0].URL != nowpaymentsInvoiceURL {
+		t.Fatalf("payment keyboard = %s, want a single URL button to %s", render.markup(), nowpaymentsInvoiceURL)
+	}
+	if got := api.count(); got != 1 {
+		t.Fatalf("after pay button: API calls = %d, want 1 (invoice creation)", got)
+	}
+
+	// The signed IPN arrives: status finished, $10.00 price echo, carrying
+	// the real order id. The HMAC-SHA512 signature over the canonicalized
+	// body makes the body authoritative, so settlement consumes it WITHOUT
+	// any API refetch (unlike the unsigned YooKassa flow).
+	body := nowpaymentsIPNBody("5077125051", "finished", 10, orderID)
+	signature := nowpaymentsIPNSignature(nowpaymentsTestIPNSecret, body)
+
+	before := e.tg.count()
+	if rec := postNowpaymentsWebhook(t, e.bot, signature, body); rec.Code != http.StatusOK {
+		t.Fatalf("webhook status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+
+	// Order paid via nowpayments with the provider payment id.
+	if got := e.qStr(`SELECT status FROM orders WHERE id = ?`, orderID); got != storage.OrderStatusPaid {
+		t.Fatalf("order status = %q, want paid", got)
+	}
+	if got := e.qStr(`SELECT payment_method FROM orders WHERE id = ?`, orderID); got != storage.PaymentMethodNowpayments {
+		t.Fatalf("payment_method = %q, want nowpayments", got)
+	}
+	if got := e.qStr(`SELECT payment_id FROM orders WHERE id = ?`, orderID); got != "5077125051" {
+		t.Fatalf("payment_id = %q, want 5077125051", got)
+	}
+	if got := e.qInt(`SELECT COUNT(*) FROM payment_attempts
+		WHERE provider='nowpayments' AND external_id='5077125051' AND status='succeeded'`); got != 1 {
+		t.Fatalf("settled payment attempts = %d, want 1", got)
+	}
+	// Stock decremented exactly once: 5 → 4.
+	if got := e.qInt(`SELECT stock FROM products WHERE id = ?`, e.prodReg); got != 4 {
+		t.Fatalf("stock = %d, want 4", got)
+	}
+	// Loyalty: $10.00 at 1% bronze cashback → 10 points, one accrual.
+	if got := e.qInt(`SELECT loyalty_pts FROM users WHERE telegram_id = ?`, buyer); got != 10 {
+		t.Fatalf("loyalty_pts = %d, want 10", got)
+	}
+	if got := e.qInt(`SELECT COUNT(*) FROM loyalty_txs WHERE user_id = ? AND reason = 'purchase'`, e.userDBID(buyer)); got != 1 {
+		t.Fatalf("purchase loyalty_txs = %d, want 1", got)
+	}
+	// The buyer got the localized payment_success message.
+	lang := e.qStr(`SELECT COALESCE(language_code, '') FROM users WHERE telegram_id = ?`, buyer)
+	wantText := fmt.Sprintf(e.bot.t(lang, "payment_success"), orderID)
+	if !findMessage(e.tg.since(before), buyer, wantText) {
+		t.Fatalf("no payment_success message to buyer %d (lang %q):\n%s", buyer, lang, dumpCalls(e.tg.since(before)))
+	}
+	// The admin got the nowpayments crypto notification with the USD total.
+	adminNotified := false
+	for _, c := range e.tg.since(before) {
+		if c.Method == "sendMessage" && c.Params.Get("chat_id") == strconv.FormatInt(e2eAdminID, 10) {
+			if strings.Contains(c.Params.Get("text"), "NOWPayments") &&
+				strings.Contains(c.Params.Get("text"), "10.00") &&
+				strings.Contains(c.Params.Get("text"), fmt.Sprintf("#%d", orderID)) {
+				adminNotified = true
+			}
+		}
+	}
+	if !adminNotified {
+		t.Fatalf("no admin_order_paid_nowpayments message to admin %d:\n%s", e2eAdminID, dumpCalls(e.tg.since(before)))
+	}
+	// Defining assertion: settlement consumed only the signed body — the mock
+	// API's hit count stays at exactly 1 (the invoice creation), no refetch.
+	if got := api.count(); got != 1 {
+		t.Fatalf("API calls after webhook = %d, want still 1 (no refetch — the signed body is authoritative)", got)
+	}
+	// Outbound webhook fired with method nowpayments.
+	ev := out.wait(t)
+	if ev.Event != "order.paid" || ev.OrderID != orderID || ev.UserID != buyer ||
+		ev.Method != "nowpayments" || ev.PaymentID != "5077125051" {
+		t.Fatalf("outbound webhook event = %+v, want order.paid for order %d via nowpayments 5077125051", ev, orderID)
+	}
+
+	// IPN replay: the identical signed POST is ACKed with 200, settles
+	// nothing new, and still makes no API call.
+	beforeReplay := e.tg.count()
+	if rec := postNowpaymentsWebhook(t, e.bot, signature, body); rec.Code != http.StatusOK {
+		t.Fatalf("replayed webhook status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+	if got := api.count(); got != 1 {
+		t.Fatalf("API calls after replay = %d, want still 1 (no refetch)", got)
+	}
+	if got := e.qStr(`SELECT status FROM orders WHERE id = ?`, orderID); got != storage.OrderStatusPaid {
+		t.Fatalf("order status after replay = %q, want still paid", got)
+	}
+	if got := e.qStr(`SELECT payment_id FROM orders WHERE id = ?`, orderID); got != "5077125051" {
+		t.Fatalf("payment_id after replay = %q, want still 5077125051", got)
+	}
+	if got := e.qInt(`SELECT stock FROM products WHERE id = ?`, e.prodReg); got != 4 {
+		t.Fatalf("stock after replay = %d, want still 4", got)
+	}
+	if got := e.qInt(`SELECT loyalty_pts FROM users WHERE telegram_id = ?`, buyer); got != 10 {
+		t.Fatalf("loyalty_pts after replay = %d, want still 10", got)
+	}
+	if got := e.qInt(`SELECT COUNT(*) FROM loyalty_txs WHERE user_id = ? AND reason = 'purchase'`, e.userDBID(buyer)); got != 1 {
+		t.Fatalf("purchase loyalty_txs after replay = %d, want still 1", got)
+	}
+	if got := e.qInt(`SELECT COUNT(*) FROM payment_attempts WHERE provider='nowpayments' AND external_id='5077125051'`); got != 1 {
 		t.Fatalf("payment_attempts after replay = %d, want still 1", got)
 	}
 	if got := e.tg.count() - beforeReplay; got != 0 {
