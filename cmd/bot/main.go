@@ -262,28 +262,35 @@ func runBot() {
 	// is webhook-driven, so there is no polling worker.
 	stripePayments := payment.NewStripePayment(cfg.StripeSecretKey, cfg.StripeWebhookSecret, cfg.StripeReturnURL)
 
+	// Crypto payments for the Mini App checkout via NOWPayments hosted
+	// invoices. Separate instance from the bot's own (mirroring stripe);
+	// settlement is IPN-webhook-driven, so there is no polling worker.
+	nowpaymentsPayments := payment.NewNowpaymentsPayment(cfg.NowpaymentsAPIKey, cfg.NowpaymentsIPNSecret, cfg.NowpaymentsReturnURL, config.NowpaymentsWebhookURL(cfg.WebhookURL))
+
 	// Mini App REST API: reuses the bot's OrderService so web checkouts are
 	// confirmed by the same successful_payment / CryptoBot / YooKassa /
-	// Stripe webhook pipeline.
+	// Stripe / NOWPayments webhook and TON polling pipeline.
 	var apiServer *webapi.Server
 	if cfg.WebAppURL != "" {
 		exchangeSvc := service.NewExchangeService(cfg.USDToStarsRate, cfg.USDToRUBRate, cfg.USDPerTON)
 		productStore := storage.NewSQLProductStore(db)
 		apiServer = webapi.New(webapi.Deps{
-			Auth:     webapi.NewAuthenticator(cfg.BotToken, webapi.DefaultAuthTTL),
-			Catalog:  shop.NewCatalogService(productStore, exchangeSvc),
-			Cart:     shop.NewCartService(cartStore, productStore, exchangeSvc),
-			Orders:   b.OrderService(),
-			Users:    userStore,
-			Promos:   promoStore,
-			Reviews:  storage.NewSQLReviewStore(db),
-			Photos:   storage.NewSQLProductPhotoStore(db),
-			I18n:     i18n,
-			Tg:       b.API(),
-			Crypto:   cryptoPayments,
-			YooKassa: yookassaPayments,
-			Stripe:   stripePayments,
-			Files:    b.API(),
+			Auth:        webapi.NewAuthenticator(cfg.BotToken, webapi.DefaultAuthTTL),
+			Catalog:     shop.NewCatalogService(productStore, exchangeSvc),
+			Cart:        shop.NewCartService(cartStore, productStore, exchangeSvc),
+			Orders:      b.OrderService(),
+			Users:       userStore,
+			Promos:      promoStore,
+			Reviews:     storage.NewSQLReviewStore(db),
+			Photos:      storage.NewSQLProductPhotoStore(db),
+			I18n:        i18n,
+			Tg:          b.API(),
+			Crypto:      cryptoPayments,
+			YooKassa:    yookassaPayments,
+			Stripe:      stripePayments,
+			TON:         tonPayments,
+			Nowpayments: nowpaymentsPayments,
+			Files:       b.API(),
 		}, logger)
 	}
 

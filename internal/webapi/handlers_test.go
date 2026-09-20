@@ -123,6 +123,10 @@ type fakeOrders struct {
 	nextID  int64
 	orders  map[int64]*storage.Order
 	created []int64
+	// tonRate is the USD-per-TON rate the snapshot converts with; 0 leaves
+	// TotalTonNano at 0 (TON payments disabled), mirroring a missing
+	// ExchangeService in shop.OrderService.
+	tonRate float64
 }
 
 func (f *fakeOrders) CreateFromCart(_ context.Context, userID int64, view *shop.CartView, promo *storage.PromoCode) (int64, error) {
@@ -144,12 +148,19 @@ func (f *fakeOrders) CreateFromCart(_ context.Context, userID int64, view *shop.
 			ProductID: it.Product.ID, ProductName: it.Product.Name, Quantity: it.Quantity, PriceUSD: it.Product.PriceUSD,
 		})
 	}
+	// Mirrors shop.OrderService: the nanoTON snapshot converts the final
+	// (already discounted) USD total once; the zero rate leaves it 0.
+	var totalTONNano int64
+	if f.tonRate > 0 {
+		totalTONNano = int64(math.Round(totalUSD * 1e9 / f.tonRate))
+	}
 	if f.orders == nil {
 		f.orders = make(map[int64]*storage.Order)
 	}
 	f.orders[f.nextID] = &storage.Order{
 		ID: f.nextID, UserID: userID, Status: storage.OrderStatusPending,
-		TotalUSD: totalUSD, TotalStars: totalStars, TotalRUB: totalRUB, PromoCode: promoCode, Items: items,
+		TotalUSD: totalUSD, TotalStars: totalStars, TotalRUB: totalRUB, TotalTonNano: totalTONNano,
+		PromoCode: promoCode, Items: items,
 	}
 	f.created = append(f.created, f.nextID)
 	return f.nextID, nil
@@ -295,6 +306,47 @@ func (f *fakeStripe) CreateCheckoutSession(_ context.Context, orderID int64, amo
 	return &payment.Invoice{PayURL: f.payURL, InvoiceID: fmt.Sprintf("str-%d", orderID)}, nil
 }
 
+// fakeTONLinker builds ton:// deeplinks exactly like payment.TONPayment and
+// captures the TransferLink arguments for assertions. TON has no server-side
+// invoice create, so there is no error path to fake.
+type fakeTONLinker struct {
+	configured bool
+	wallet     string
+	called     bool
+	gotNano    int64
+	gotOrderID int64
+}
+
+func (f *fakeTONLinker) Configured() bool { return f.configured }
+
+func (f *fakeTONLinker) TransferLink(nano int64, orderID int64) string {
+	f.called = true
+	f.gotNano = nano
+	f.gotOrderID = orderID
+	return fmt.Sprintf("ton://transfer/%s?amount=%d&text=order-%d", f.wallet, nano, orderID)
+}
+
+// fakeNowpayments mirrors fakeStripe for NOWPayments hosted invoices and
+// captures the CreateInvoice arguments for assertions.
+type fakeNowpayments struct {
+	configured bool
+	payURL     string
+	called     bool
+	gotOrderID int64
+	gotAmount  int64
+	gotDesc    string
+}
+
+func (f *fakeNowpayments) Configured() bool { return f.configured }
+
+func (f *fakeNowpayments) CreateInvoice(_ context.Context, orderID int64, amountCents int64, description string) (*payment.Invoice, error) {
+	f.called = true
+	f.gotOrderID = orderID
+	f.gotAmount = amountCents
+	f.gotDesc = description
+	return &payment.Invoice{PayURL: f.payURL, InvoiceID: fmt.Sprintf("nowp-%d", orderID)}, nil
+}
+
 type fakeFiles struct{}
 
 func (fakeFiles) GetFileDirectURL(fileID string) (string, error) {
@@ -304,13 +356,15 @@ func (fakeFiles) GetFileDirectURL(fileID string) (string, error) {
 // ---- harness --------------------------------------------------------------
 
 type fixture struct {
-	server   *Server
-	tg       *fakeTg
-	crypto   *fakeCrypto
-	yookassa *fakeYooKassa
-	stripe   *fakeStripe
-	orders   *fakeOrders
-	cart     *fakeCart
+	server      *Server
+	tg          *fakeTg
+	crypto      *fakeCrypto
+	yookassa    *fakeYooKassa
+	stripe      *fakeStripe
+	ton         *fakeTONLinker
+	nowpayments *fakeNowpayments
+	orders      *fakeOrders
+	cart        *fakeCart
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -326,26 +380,30 @@ func newFixture(t *testing.T) *fixture {
 	crypto := &fakeCrypto{configured: true, payURL: "https://pay.crypt.bot/inv"}
 	yookassa := &fakeYooKassa{configured: true, payURL: "https://yookassa.example/pay"}
 	stripe := &fakeStripe{configured: true, payURL: "https://checkout.stripe.com/pay"}
+	ton := &fakeTONLinker{configured: true, wallet: "UQtest-ton-wallet"}
+	nowpayments := &fakeNowpayments{configured: true, payURL: "https://nowpayments.example/pay"}
 	srv := New(Deps{
 		Auth: NewAuthenticator(testBotToken, DefaultAuthTTL),
 		Catalog: &fakeCatalog{
 			categories: []storage.Category{{ID: 10, Name: "Merch", Emoji: "🎁"}},
 			products:   products,
 		},
-		Cart:     cart,
-		Orders:   orders,
-		Users:    &fakeUsers{},
-		Promos:   &fakePromos{promos: map[string]*storage.PromoCode{"SALE10": {ID: 1, Code: "SALE10", Discount: 10}}},
-		Reviews:  &fakeReviews{avg: 4.5, count: 12},
-		Photos:   &fakePhotos{photos: []storage.ProductPhoto{{ID: 1, ProductID: 2, FileID: "extra-photo"}}},
-		I18n:     fakeI18n{},
-		Tg:       tg,
-		Crypto:   crypto,
-		YooKassa: yookassa,
-		Stripe:   stripe,
-		Files:    fakeFiles{},
+		Cart:        cart,
+		Orders:      orders,
+		Users:       &fakeUsers{},
+		Promos:      &fakePromos{promos: map[string]*storage.PromoCode{"SALE10": {ID: 1, Code: "SALE10", Discount: 10}}},
+		Reviews:     &fakeReviews{avg: 4.5, count: 12},
+		Photos:      &fakePhotos{photos: []storage.ProductPhoto{{ID: 1, ProductID: 2, FileID: "extra-photo"}}},
+		I18n:        fakeI18n{},
+		Tg:          tg,
+		Crypto:      crypto,
+		YooKassa:    yookassa,
+		Stripe:      stripe,
+		TON:         ton,
+		Nowpayments: nowpayments,
+		Files:       fakeFiles{},
 	}, nil)
-	return &fixture{server: srv, tg: tg, crypto: crypto, yookassa: yookassa, stripe: stripe, orders: orders, cart: cart}
+	return &fixture{server: srv, tg: tg, crypto: crypto, yookassa: yookassa, stripe: stripe, ton: ton, nowpayments: nowpayments, orders: orders, cart: cart}
 }
 
 func (f *fixture) request(t *testing.T, method, target, body string, authed bool) *httptest.ResponseRecorder {
@@ -802,6 +860,168 @@ func TestCheckoutStripeGuards(t *testing.T) {
 	rec = f.request(t, http.MethodPost, "/api/checkout", `{"method":"paypal"}`, true)
 	if rec.Code != http.StatusBadRequest || decodeJSON(t, rec)["error"] != "webapp_err_method" {
 		t.Errorf("bad method: status/error = %d/%v, want 400/webapp_err_method", rec.Code, decodeJSON(t, rec)["error"])
+	}
+}
+
+func TestCheckoutTON(t *testing.T) {
+	f := newFixture(t)
+	f.orders.tonRate = 5 // 2 × $5 = $10 → 2 TON → 2e9 nanoTON
+	f.request(t, http.MethodPost, "/api/cart", `{"product_id":1,"delta":2}`, true)
+
+	rec := f.request(t, http.MethodPost, "/api/checkout", `{"method":"ton"}`, true)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	got := decodeJSON(t, rec)
+	wantLink := "ton://transfer/UQtest-ton-wallet?amount=2000000000&text=order-1"
+	if got["invoice_link"] != wantLink {
+		t.Errorf("invoice_link = %v, want %q", got["invoice_link"], wantLink)
+	}
+	if got["order_id"] != float64(1) {
+		t.Errorf("order_id = %v, want 1", got["order_id"])
+	}
+
+	order, err := f.orders.GetOrder(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("get order: %v", err)
+	}
+	if order.TotalTonNano != 2_000_000_000 {
+		t.Errorf("persisted TotalTonNano = %d, want 2000000000 snapshot", order.TotalTonNano)
+	}
+
+	if !f.ton.called {
+		t.Fatal("TransferLink was not called")
+	}
+	if f.ton.gotNano != order.TotalTonNano {
+		t.Errorf("TransferLink nano = %d, want %d", f.ton.gotNano, order.TotalTonNano)
+	}
+	if f.ton.gotOrderID != 1 {
+		t.Errorf("TransferLink orderID = %d, want 1", f.ton.gotOrderID)
+	}
+}
+
+func TestCheckoutTONDisabled(t *testing.T) {
+	f := newFixture(t)
+	f.request(t, http.MethodPost, "/api/cart", `{"product_id":1}`, true)
+
+	// Unconfigured adapter.
+	f.ton.configured = false
+	rec := f.request(t, http.MethodPost, "/api/checkout", `{"method":"ton"}`, true)
+	if rec.Code != http.StatusBadRequest || decodeJSON(t, rec)["error"] != "webapp_err_ton_disabled" {
+		t.Errorf("unconfigured: status/error = %d/%v, want 400/webapp_err_ton_disabled", rec.Code, decodeJSON(t, rec)["error"])
+	}
+	f.ton.configured = true
+
+	// Missing dependency.
+	f.server.deps.TON = nil
+	rec = f.request(t, http.MethodPost, "/api/checkout", `{"method":"ton"}`, true)
+	if rec.Code != http.StatusBadRequest || decodeJSON(t, rec)["error"] != "webapp_err_ton_disabled" {
+		t.Errorf("nil dep: status/error = %d/%v, want 400/webapp_err_ton_disabled", rec.Code, decodeJSON(t, rec)["error"])
+	}
+	f.server.deps.TON = f.ton
+
+	// The guard runs before CreateFromCart: no order may exist.
+	if n := len(f.orders.created); n != 0 {
+		t.Errorf("created %d orders, want 0 (guard must precede CreateFromCart)", n)
+	}
+
+	// Configured adapter but an order with TotalTonNano 0 (TON rate unset at
+	// creation): the handler must refuse with 400 and never build a deeplink.
+	rec = f.request(t, http.MethodPost, "/api/checkout", `{"method":"ton"}`, true)
+	if rec.Code != http.StatusBadRequest || decodeJSON(t, rec)["error"] != "webapp_err_ton_disabled" {
+		t.Errorf("zero TotalTonNano: status/error = %d/%v, want 400/webapp_err_ton_disabled", rec.Code, decodeJSON(t, rec)["error"])
+	}
+	if f.ton.called {
+		t.Error("TransferLink called with a zero snapshot, want refusal before the adapter")
+	}
+}
+
+func TestCheckoutTONGuards(t *testing.T) {
+	f := newFixture(t)
+
+	// Subscription products are Stars-only, ton is rejected like crypto.
+	f.request(t, http.MethodPost, "/api/cart", `{"product_id":3}`, true)
+	rec := f.request(t, http.MethodPost, "/api/checkout", `{"method":"ton"}`, true)
+	if rec.Code != http.StatusBadRequest || decodeJSON(t, rec)["error"] != "webapp_err_sub_stars_only" {
+		t.Errorf("sub cart: status/error = %d/%v, want 400/webapp_err_sub_stars_only", rec.Code, decodeJSON(t, rec)["error"])
+	}
+
+	// Unknown methods stay rejected.
+	rec = f.request(t, http.MethodPost, "/api/checkout", `{"method":"paypal"}`, true)
+	if rec.Code != http.StatusBadRequest || decodeJSON(t, rec)["error"] != "webapp_err_method" {
+		t.Errorf("bad method: status/error = %d/%v, want 400/webapp_err_method", rec.Code, decodeJSON(t, rec)["error"])
+	}
+}
+
+func TestCheckoutNowpayments(t *testing.T) {
+	f := newFixture(t)
+	f.request(t, http.MethodPost, "/api/cart", `{"product_id":1,"delta":2}`, true) // 2 × $5 = $10
+
+	rec := f.request(t, http.MethodPost, "/api/checkout", `{"method":"nowpayments"}`, true)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	got := decodeJSON(t, rec)
+	if got["invoice_link"] != "https://nowpayments.example/pay" {
+		t.Errorf("invoice_link = %v, want NOWPayments invoice URL", got["invoice_link"])
+	}
+	if got["order_id"] != float64(1) {
+		t.Errorf("order_id = %v, want 1", got["order_id"])
+	}
+
+	order, err := f.orders.GetOrder(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("get order: %v", err)
+	}
+
+	if !f.nowpayments.called {
+		t.Fatal("CreateInvoice was not called")
+	}
+	if f.nowpayments.gotOrderID != 1 {
+		t.Errorf("CreateInvoice orderID = %d, want 1", f.nowpayments.gotOrderID)
+	}
+	if want := int64(math.Round(order.TotalUSD * 100)); f.nowpayments.gotAmount != want {
+		t.Errorf("CreateInvoice amountCents = %d, want %d", f.nowpayments.gotAmount, want)
+	}
+	if f.nowpayments.gotDesc != "Mug × 2" {
+		t.Errorf("CreateInvoice description = %q, want %q", f.nowpayments.gotDesc, "Mug × 2")
+	}
+}
+
+func TestCheckoutNowpaymentsDisabled(t *testing.T) {
+	f := newFixture(t)
+	f.request(t, http.MethodPost, "/api/cart", `{"product_id":1}`, true)
+
+	// Unconfigured adapter.
+	f.nowpayments.configured = false
+	rec := f.request(t, http.MethodPost, "/api/checkout", `{"method":"nowpayments"}`, true)
+	if rec.Code != http.StatusBadRequest || decodeJSON(t, rec)["error"] != "webapp_err_nowpayments_disabled" {
+		t.Errorf("unconfigured: status/error = %d/%v, want 400/webapp_err_nowpayments_disabled", rec.Code, decodeJSON(t, rec)["error"])
+	}
+	f.nowpayments.configured = true
+
+	// Missing dependency.
+	f.server.deps.Nowpayments = nil
+	rec = f.request(t, http.MethodPost, "/api/checkout", `{"method":"nowpayments"}`, true)
+	if rec.Code != http.StatusBadRequest || decodeJSON(t, rec)["error"] != "webapp_err_nowpayments_disabled" {
+		t.Errorf("nil dep: status/error = %d/%v, want 400/webapp_err_nowpayments_disabled", rec.Code, decodeJSON(t, rec)["error"])
+	}
+	f.server.deps.Nowpayments = f.nowpayments
+
+	// The guard runs before CreateFromCart: no order may exist.
+	if n := len(f.orders.created); n != 0 {
+		t.Errorf("created %d orders, want 0 (guard must precede CreateFromCart)", n)
+	}
+}
+
+func TestCheckoutNowpaymentsGuards(t *testing.T) {
+	f := newFixture(t)
+
+	// Subscription products are Stars-only, nowpayments is rejected like crypto.
+	f.request(t, http.MethodPost, "/api/cart", `{"product_id":3}`, true)
+	rec := f.request(t, http.MethodPost, "/api/checkout", `{"method":"nowpayments"}`, true)
+	if rec.Code != http.StatusBadRequest || decodeJSON(t, rec)["error"] != "webapp_err_sub_stars_only" {
+		t.Errorf("sub cart: status/error = %d/%v, want 400/webapp_err_sub_stars_only", rec.Code, decodeJSON(t, rec)["error"])
 	}
 }
 
