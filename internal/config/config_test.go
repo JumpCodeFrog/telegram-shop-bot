@@ -601,3 +601,271 @@ func TestStripeWebhookURLDerivesFromBase(t *testing.T) {
 		}
 	}
 }
+
+// TON on-chain payments (polling provider — no webhook).
+
+// tonTestAddress is a well-formed 48-char base64url TON friendly address.
+const tonTestAddress = "EQCD39VS5jcptHL8vMjEXrzGaRcCVYto7HUn4bpAOg8xqB2N"
+
+func TestTONConfigLoadsWhenComplete(t *testing.T) {
+	values := map[string]string{
+		"BOT_TOKEN":          "123456789:abcdefghijklmnopqrstuvwxyz_ABCD",
+		"TON_WALLET_ADDRESS": tonTestAddress,
+		"USD_PER_TON":        "5.25",
+		"TON_API_KEY":        "toncenter-key",
+	}
+
+	cfg, err := LoadFromMap(values)
+	if err != nil {
+		t.Fatalf("LoadFromMap() error = %v", err)
+	}
+	if cfg.TONWalletAddress != tonTestAddress {
+		t.Errorf("TONWalletAddress = %q, want %q", cfg.TONWalletAddress, tonTestAddress)
+	}
+	if cfg.USDPerTON != 5.25 {
+		t.Errorf("USDPerTON = %v, want 5.25", cfg.USDPerTON)
+	}
+	if cfg.TONAPIKey != "toncenter-key" {
+		t.Errorf("TONAPIKey = %q, want %q", cfg.TONAPIKey, "toncenter-key")
+	}
+}
+
+func TestTONConfigLoadsWithoutAPIKey(t *testing.T) {
+	// The toncenter API key is optional: address + rate alone enable TON.
+	values := map[string]string{
+		"BOT_TOKEN":          "123456789:abcdefghijklmnopqrstuvwxyz_ABCD",
+		"TON_WALLET_ADDRESS": tonTestAddress,
+		"USD_PER_TON":        "5.25",
+	}
+
+	cfg, err := LoadFromMap(values)
+	if err != nil {
+		t.Fatalf("LoadFromMap() error = %v", err)
+	}
+	if cfg.TONWalletAddress != tonTestAddress || cfg.USDPerTON != 5.25 {
+		t.Errorf("TON config = %q/%v, want %q/5.25", cfg.TONWalletAddress, cfg.USDPerTON, tonTestAddress)
+	}
+	if cfg.TONAPIKey != "" {
+		t.Errorf("TONAPIKey = %q, want empty when unset", cfg.TONAPIKey)
+	}
+}
+
+func TestTONConfigUnsetIsDisabled(t *testing.T) {
+	values := map[string]string{
+		"BOT_TOKEN": "123456789:abcdefghijklmnopqrstuvwxyz_ABCD",
+	}
+
+	cfg, err := LoadFromMap(values)
+	if err != nil {
+		t.Fatalf("LoadFromMap() error = %v", err)
+	}
+	if cfg.TONWalletAddress != "" || cfg.USDPerTON != 0 || cfg.TONAPIKey != "" {
+		t.Errorf("TON config = %q/%v/%q, want all empty when unset",
+			cfg.TONWalletAddress, cfg.USDPerTON, cfg.TONAPIKey)
+	}
+}
+
+func TestTONAddressRequiresRate(t *testing.T) {
+	values := map[string]string{
+		"BOT_TOKEN":          "123456789:abcdefghijklmnopqrstuvwxyz_ABCD",
+		"TON_WALLET_ADDRESS": tonTestAddress,
+	}
+
+	_, err := LoadFromMap(values)
+	if err == nil {
+		t.Fatal("expected error for TON_WALLET_ADDRESS without USD_PER_TON, got nil")
+	}
+	if !strings.Contains(err.Error(), "USD_PER_TON") {
+		t.Errorf("error should mention USD_PER_TON, got: %v", err)
+	}
+}
+
+func TestTONRateRequiresAddress(t *testing.T) {
+	values := map[string]string{
+		"BOT_TOKEN":   "123456789:abcdefghijklmnopqrstuvwxyz_ABCD",
+		"USD_PER_TON": "5.25",
+	}
+
+	_, err := LoadFromMap(values)
+	if err == nil {
+		t.Fatal("expected error for USD_PER_TON without TON_WALLET_ADDRESS, got nil")
+	}
+	if !strings.Contains(err.Error(), "TON_WALLET_ADDRESS") {
+		t.Errorf("error should mention TON_WALLET_ADDRESS, got: %v", err)
+	}
+}
+
+func TestTONAPIKeyAloneRejected(t *testing.T) {
+	values := map[string]string{
+		"BOT_TOKEN":   "123456789:abcdefghijklmnopqrstuvwxyz_ABCD",
+		"TON_API_KEY": "toncenter-key",
+	}
+
+	_, err := LoadFromMap(values)
+	if err == nil {
+		t.Fatal("expected error for TON_API_KEY without address and rate, got nil")
+	}
+	if !strings.Contains(err.Error(), "TON_API_KEY") {
+		t.Errorf("error should mention TON_API_KEY, got: %v", err)
+	}
+}
+
+func TestTONAddressShape(t *testing.T) {
+	values := map[string]string{
+		"BOT_TOKEN":          "123456789:abcdefghijklmnopqrstuvwxyz_ABCD",
+		"TON_WALLET_ADDRESS": tonTestAddress,
+		"USD_PER_TON":        "5.25",
+	}
+
+	bad := map[string]string{
+		"too short":        tonTestAddress[:47],
+		"too long":         tonTestAddress + "A",
+		"bad charset":      tonTestAddress[:47] + "+",
+		"padding rejected": tonTestAddress[:46] + "==",
+	}
+	for name, addr := range bad {
+		t.Run(name, func(t *testing.T) {
+			values["TON_WALLET_ADDRESS"] = addr
+			_, err := LoadFromMap(values)
+			if err == nil {
+				t.Fatalf("expected error for TON_WALLET_ADDRESS %q, got nil", addr)
+			}
+			if !strings.Contains(err.Error(), "TON_WALLET_ADDRESS") {
+				t.Errorf("error should mention TON_WALLET_ADDRESS, got: %v", err)
+			}
+		})
+	}
+
+	// A well-formed address passes shape validation (full ownership checks
+	// are toncenter's job at polling time, not config's).
+	values["TON_WALLET_ADDRESS"] = tonTestAddress
+	if _, err := LoadFromMap(values); err != nil {
+		t.Errorf("LoadFromMap() rejected a well-formed address: %v", err)
+	}
+}
+
+func TestUSDPerTONRateGuards(t *testing.T) {
+	values := map[string]string{
+		"BOT_TOKEN":          "123456789:abcdefghijklmnopqrstuvwxyz_ABCD",
+		"TON_WALLET_ADDRESS": tonTestAddress,
+	}
+
+	// Non-finite and non-numeric spellings must be rejected when set
+	// explicitly, exactly like USD_TO_RUB_RATE. A zero rate with an address
+	// set is a configuration error, not "disabled".
+	for _, raw := range []string{"abc", "-5", "0", "NaN", "Inf"} {
+		values["USD_PER_TON"] = raw
+		if _, err := LoadFromMap(values); err == nil {
+			t.Errorf("USD_PER_TON = %q with address set: expected error, got nil", raw)
+		}
+	}
+}
+
+// NOWPayments crypto payments.
+
+func TestNowpaymentsConfigLoadsWhenComplete(t *testing.T) {
+	values := map[string]string{
+		"BOT_TOKEN":              "123456789:abcdefghijklmnopqrstuvwxyz_ABCD",
+		"NOWPAYMENTS_API_KEY":    "np-api-key",
+		"NOWPAYMENTS_IPN_SECRET": "np-ipn-secret",
+		"NOWPAYMENTS_RETURN_URL": "https://shop.example.com/return",
+	}
+
+	cfg, err := LoadFromMap(values)
+	if err != nil {
+		t.Fatalf("LoadFromMap() error = %v", err)
+	}
+	if cfg.NowpaymentsAPIKey != "np-api-key" {
+		t.Errorf("NowpaymentsAPIKey = %q, want %q", cfg.NowpaymentsAPIKey, "np-api-key")
+	}
+	if cfg.NowpaymentsIPNSecret != "np-ipn-secret" {
+		t.Errorf("NowpaymentsIPNSecret = %q, want %q", cfg.NowpaymentsIPNSecret, "np-ipn-secret")
+	}
+	if cfg.NowpaymentsReturnURL != "https://shop.example.com/return" {
+		t.Errorf("NowpaymentsReturnURL = %q, want %q", cfg.NowpaymentsReturnURL, "https://shop.example.com/return")
+	}
+}
+
+func TestNowpaymentsConfigUnsetIsDisabled(t *testing.T) {
+	values := map[string]string{
+		"BOT_TOKEN": "123456789:abcdefghijklmnopqrstuvwxyz_ABCD",
+	}
+
+	cfg, err := LoadFromMap(values)
+	if err != nil {
+		t.Fatalf("LoadFromMap() error = %v", err)
+	}
+	if cfg.NowpaymentsAPIKey != "" || cfg.NowpaymentsIPNSecret != "" || cfg.NowpaymentsReturnURL != "" {
+		t.Errorf("NOWPayments config = %q/%q/%q, want all empty when unset",
+			cfg.NowpaymentsAPIKey, cfg.NowpaymentsIPNSecret, cfg.NowpaymentsReturnURL)
+	}
+}
+
+func TestNowpaymentsConfigPartialCredentialsRejected(t *testing.T) {
+	complete := map[string]string{
+		"NOWPAYMENTS_API_KEY":    "np-api-key",
+		"NOWPAYMENTS_IPN_SECRET": "np-ipn-secret",
+		"NOWPAYMENTS_RETURN_URL": "https://shop.example.com/return",
+	}
+	const botToken = "123456789:abcdefghijklmnopqrstuvwxyz_ABCD"
+
+	// Any subset of the three (but not all) must fail: half-configured
+	// credentials must never silently disable the provider.
+	cases := map[string]map[string]string{}
+	for drop := range complete {
+		values := map[string]string{"BOT_TOKEN": botToken}
+		for key, val := range complete {
+			if key != drop {
+				values[key] = val
+			}
+		}
+		cases["missing_"+drop] = values
+	}
+	for only := range complete {
+		values := map[string]string{"BOT_TOKEN": botToken, only: complete[only]}
+		cases["only_"+only] = values
+	}
+	for name, values := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, err := LoadFromMap(values)
+			if err == nil {
+				t.Fatal("expected error for partial NOWPAYMENTS credentials, got nil")
+			}
+			if !strings.Contains(err.Error(), "NOWPAYMENTS") {
+				t.Errorf("error should mention NOWPAYMENTS, got: %v", err)
+			}
+		})
+	}
+}
+
+func TestNowpaymentsReturnURLMustBeHTTPS(t *testing.T) {
+	values := map[string]string{
+		"BOT_TOKEN":              "123456789:abcdefghijklmnopqrstuvwxyz_ABCD",
+		"NOWPAYMENTS_API_KEY":    "np-api-key",
+		"NOWPAYMENTS_IPN_SECRET": "np-ipn-secret",
+		"NOWPAYMENTS_RETURN_URL": "http://shop.example.com/return",
+	}
+
+	_, err := LoadFromMap(values)
+	if err == nil {
+		t.Fatal("expected error for non-HTTPS NOWPAYMENTS_RETURN_URL, got nil")
+	}
+	if !strings.Contains(err.Error(), "NOWPAYMENTS_RETURN_URL") {
+		t.Errorf("error should mention NOWPAYMENTS_RETURN_URL, got: %v", err)
+	}
+}
+
+func TestNowpaymentsWebhookURLDerivesFromBase(t *testing.T) {
+	tests := map[string]string{
+		"":                              "",
+		"   ":                           "",
+		"https://shop.example.com":      "https://shop.example.com/nowpayments-webhook",
+		"https://shop.example.com/":     "https://shop.example.com/nowpayments-webhook",
+		" https://shop.example.com/// ": "https://shop.example.com/nowpayments-webhook",
+	}
+	for input, want := range tests {
+		if got := NowpaymentsWebhookURL(input); got != want {
+			t.Errorf("NowpaymentsWebhookURL(%q) = %q, want %q", input, got, want)
+		}
+	}
+}

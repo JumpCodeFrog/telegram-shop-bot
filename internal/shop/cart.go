@@ -17,6 +17,10 @@ type CartView struct {
 	// kopecks. It stays 0 while RUB payments are disabled (rate 0 or no
 	// exchange service).
 	TotalRUB float64
+	// TotalTONNano is the TON price of TotalUSD at the current rate in
+	// integer nanotons (TON minor units, scale 9). It stays 0 while TON
+	// payments are disabled (rate 0 or no exchange service).
+	TotalTONNano int64
 }
 
 // CartItemView pairs a product with its quantity in the cart.
@@ -55,7 +59,7 @@ func (s *CartService) Add(ctx context.Context, userID, productID int64) error {
 }
 
 // Get returns an aggregated view of the user's cart including product details
-// and computed totals (TotalUSD, TotalStars and TotalRUB).
+// and computed totals (TotalUSD, TotalStars, TotalRUB and TotalTONNano).
 func (s *CartService) Get(ctx context.Context, userID int64) (*CartView, error) {
 	items, err := s.cart.GetItems(ctx, userID)
 	if err != nil {
@@ -85,9 +89,10 @@ func (s *CartService) Get(ctx context.Context, userID int64) (*CartView, error) 
 	}
 
 	// Convert once from the accumulated TotalUSD: per-item conversion would
-	// drift the total through repeated kopeck rounding.
+	// drift the total through repeated kopeck/nanoton rounding.
 	if s.exchange != nil {
 		view.TotalRUB = s.exchange.ConvertUSDToRUB(view.TotalUSD)
+		view.TotalTONNano = s.exchange.ConvertUSDToNanoTON(view.TotalUSD)
 	}
 
 	return view, nil

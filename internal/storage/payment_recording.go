@@ -256,11 +256,12 @@ func (s *SQLOrderStore) recordSubscriptionRenewalOnce(ctx context.Context, id in
 	var order Order
 	if err := tx.QueryRowContext(ctx,
 		`SELECT id, user_id, COALESCE(total_usd, 0), COALESCE(total_stars, 0), COALESCE(total_rub, 0),
+		        COALESCE(total_ton_nano, 0),
 		        COALESCE(payment_method, ''), COALESCE(payment_id, ''),
 		        COALESCE(status, 'pending'), payment_state,
 		        COALESCE(subscription_product_id, 0), subscription_period_days
 		 FROM orders WHERE id = ?`, id).Scan(
-		&order.ID, &order.UserID, &order.TotalUSD, &order.TotalStars, &order.TotalRUB,
+		&order.ID, &order.UserID, &order.TotalUSD, &order.TotalStars, &order.TotalRUB, &order.TotalTonNano,
 		&order.PaymentMethod, &order.PaymentID, &order.Status, &order.PaymentState,
 		&order.SubscriptionProductID, &order.SubscriptionPeriodDays,
 	); errors.Is(err, sql.ErrNoRows) {
@@ -414,10 +415,11 @@ func (s *SQLOrderStore) loadPaymentOrder(ctx context.Context, id int64) (*Order,
 	var order Order
 	if err := s.db.QueryRowContext(ctx,
 		`SELECT id, user_id, COALESCE(total_usd, 0), COALESCE(total_stars, 0), COALESCE(total_rub, 0),
+		        COALESCE(total_ton_nano, 0),
 		        COALESCE(payment_method, ''), COALESCE(payment_id, ''),
 		        COALESCE(status, 'pending'), payment_state
 		 FROM orders WHERE id = ?`, id).Scan(
-		&order.ID, &order.UserID, &order.TotalUSD, &order.TotalStars, &order.TotalRUB,
+		&order.ID, &order.UserID, &order.TotalUSD, &order.TotalStars, &order.TotalRUB, &order.TotalTonNano,
 		&order.PaymentMethod, &order.PaymentID, &order.Status, &order.PaymentState,
 	); err == sql.ErrNoRows {
 		return nil, ErrNotFound

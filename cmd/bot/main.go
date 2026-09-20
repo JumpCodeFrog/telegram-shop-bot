@@ -231,11 +231,37 @@ func runBot() {
 	if cryptoPayments.Configured() {
 		// Confirm through the bot's OrderService so polled payments get the
 		// same loyalty/referral/cache side effects as webhook payments, and
-		// let the bot send the outcome messages.
-		pollingW := worker.NewCryptoBotPollingWorker(cryptoPayments, b.OrderService(), b.NotifyPaymentOutcome, 30*time.Second)
+		// announce the settlement with the full notification set (buyer
+		// payment_success, admin message, outbound webhook) — the poller is
+		// a backup to the webhook and must not deliver a degraded surface.
+		pollingW := worker.NewCryptoBotPollingWorker(cryptoPayments, b.OrderService(),
+			func(ctx context.Context, outcome *shop.PaymentOutcome) {
+				b.AnnouncePaidOutcome(ctx, outcome, storage.PaymentMethodCrypto)
+			}, 30*time.Second)
 		workers.Start(ctx, "cryptobot_polling", pollingW.Start)
 	} else {
 		slog.Warn("CryptoBot disabled, skipping polling worker")
+	}
+
+	// TON on-chain settlement is 100% worker-side: there is no webhook, so
+	// this poller is the only path turning wallet transfers into paid
+	// orders. The rate guard matters as much as the wallet — TON amounts
+	// are meaningless without USDPerTON (checkout only snapshots
+	// orders.total_ton_nano when the rate is positive). Separate instance
+	// from the bot's checkout-facing one, mirroring cryptoPayments.
+	tonPayments := payment.NewTONPayment(cfg.TONWalletAddress, cfg.TONAPIKey)
+	if tonPayments.Configured() && cfg.USDPerTON > 0 {
+		// This poller is TON's only settlement path, so its notify callback
+		// must deliver the full settlement announcements (buyer
+		// payment_success, admin message, outbound webhook), not just the
+		// loyalty/referral outcome messages.
+		tonW := worker.NewTONPollingWorker(tonPayments, b.OrderService(),
+			func(ctx context.Context, outcome *shop.PaymentOutcome) {
+				b.AnnouncePaidOutcome(ctx, outcome, storage.PaymentMethodTON)
+			}, 30*time.Second)
+		workers.Start(ctx, "ton_polling", tonW.Start)
+	} else {
+		slog.Warn("TON disabled, skipping polling worker")
 	}
 
 	// RUB card payments for the Mini App checkout. Separate instance from the
@@ -248,28 +274,35 @@ func runBot() {
 	// is webhook-driven, so there is no polling worker.
 	stripePayments := payment.NewStripePayment(cfg.StripeSecretKey, cfg.StripeWebhookSecret, cfg.StripeReturnURL)
 
+	// Crypto payments for the Mini App checkout via NOWPayments hosted
+	// invoices. Separate instance from the bot's own (mirroring stripe);
+	// settlement is IPN-webhook-driven, so there is no polling worker.
+	nowpaymentsPayments := payment.NewNowpaymentsPayment(cfg.NowpaymentsAPIKey, cfg.NowpaymentsIPNSecret, cfg.NowpaymentsReturnURL, config.NowpaymentsWebhookURL(cfg.WebhookURL))
+
 	// Mini App REST API: reuses the bot's OrderService so web checkouts are
 	// confirmed by the same successful_payment / CryptoBot / YooKassa /
-	// Stripe webhook pipeline.
+	// Stripe / NOWPayments webhook and TON polling pipeline.
 	var apiServer *webapi.Server
 	if cfg.WebAppURL != "" {
-		exchangeSvc := service.NewExchangeService(cfg.USDToStarsRate, cfg.USDToRUBRate)
+		exchangeSvc := service.NewExchangeService(cfg.USDToStarsRate, cfg.USDToRUBRate, cfg.USDPerTON)
 		productStore := storage.NewSQLProductStore(db)
 		apiServer = webapi.New(webapi.Deps{
-			Auth:     webapi.NewAuthenticator(cfg.BotToken, webapi.DefaultAuthTTL),
-			Catalog:  shop.NewCatalogService(productStore, exchangeSvc),
-			Cart:     shop.NewCartService(cartStore, productStore, exchangeSvc),
-			Orders:   b.OrderService(),
-			Users:    userStore,
-			Promos:   promoStore,
-			Reviews:  storage.NewSQLReviewStore(db),
-			Photos:   storage.NewSQLProductPhotoStore(db),
-			I18n:     i18n,
-			Tg:       b.API(),
-			Crypto:   cryptoPayments,
-			YooKassa: yookassaPayments,
-			Stripe:   stripePayments,
-			Files:    b.API(),
+			Auth:        webapi.NewAuthenticator(cfg.BotToken, webapi.DefaultAuthTTL),
+			Catalog:     shop.NewCatalogService(productStore, exchangeSvc),
+			Cart:        shop.NewCartService(cartStore, productStore, exchangeSvc),
+			Orders:      b.OrderService(),
+			Users:       userStore,
+			Promos:      promoStore,
+			Reviews:     storage.NewSQLReviewStore(db),
+			Photos:      storage.NewSQLProductPhotoStore(db),
+			I18n:        i18n,
+			Tg:          b.API(),
+			Crypto:      cryptoPayments,
+			YooKassa:    yookassaPayments,
+			Stripe:      stripePayments,
+			TON:         tonPayments,
+			Nowpayments: nowpaymentsPayments,
+			Files:       b.API(),
 		}, logger)
 	}
 

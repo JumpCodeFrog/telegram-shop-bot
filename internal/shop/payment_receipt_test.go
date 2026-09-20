@@ -794,3 +794,349 @@ func TestConfirmPaymentReceiptStripe(t *testing.T) {
 		t.Fatalf("attempts=%d anomalies=%d settled=%+v", replayAttempts, replayAnomalies, settled)
 	}
 }
+
+// TestConfirmPaymentReceiptTON pins the ton receipt contract: provider
+// "ton", currency TON, scale 9, nanotons >= order.TotalTonNano and a
+// non-empty external id (no payer check: on-chain receipts carry PayerID 0
+// like crypto). Settlement is overpay-tolerant — an on-chain transfer
+// larger than the snapshot is real money received, so it settles and the
+// ledger records the ACTUAL received amount; underpay quarantines. An
+// order created while TON was disabled (TotalTonNano 0) never settles.
+// Mismatched receipts are rejected with the mismatch class without mutating
+// the order (mock harness) and durably quarantined with the order left
+// pending in needs review (SQL harness). An exact replay of the settled
+// receipt is an idempotent status conflict like the stripe replay.
+func TestConfirmPaymentReceiptTON(t *testing.T) {
+	// Mismatch class, no order mutation (mock store has no anomaly recorder).
+	orders := &mockOrderStore{orders: map[int64]*storage.Order{
+		7: {ID: 7, UserID: 42, Status: storage.OrderStatusPending, TotalTonNano: 1500000000},
+		8: {ID: 8, UserID: 42, Status: storage.OrderStatusPending},
+	}}
+	svc := NewOrderService(orders, &mockCartStore{}, &mockProductStore{}, PaymentDeps{}, slog.Default())
+	for _, receipt := range []PaymentReceipt{
+		{OrderID: 7, Provider: "ton", ExternalID: "1:abc", Currency: "TON", AmountMinor: 1499999999, Scale: 9},
+		{OrderID: 7, Provider: "ton", ExternalID: "1:abc", Currency: "USDT", AmountMinor: 1500000000, Scale: 9},
+		{OrderID: 7, Provider: "ton", ExternalID: "1:abc", Currency: "TON", AmountMinor: 1500000000, Scale: 2},
+		{OrderID: 7, Provider: "ton", ExternalID: "", Currency: "TON", AmountMinor: 1500000000, Scale: 9},
+		{OrderID: 8, Provider: "ton", ExternalID: "1:abc", Currency: "TON", AmountMinor: 1500000000, Scale: 9},
+	} {
+		if _, err := svc.ConfirmPaymentReceipt(context.Background(), receipt); !errors.Is(err, storage.ErrPaymentReceiptMismatch) {
+			t.Fatalf("receipt=%+v err=%v", receipt, err)
+		}
+	}
+	if orders.orders[7].Status != storage.OrderStatusPending || orders.orders[8].Status != storage.OrderStatusPending {
+		t.Fatalf("orders mutated: 7=%+v 8=%+v", orders.orders[7], orders.orders[8])
+	}
+
+	// Durable quarantine with the receipt's actual facts (order 1.5 TON;
+	// the last leg targets an order created while TON was disabled,
+	// TotalTonNano 0: a positive receipt against it must not settle).
+	db, err := storage.New(filepath.Join(t.TempDir(), "ton-receipt.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	store := storage.NewSQLOrderStore(db)
+	orderID, err := store.CreateOrder(ctx, &storage.Order{
+		UserID: 42, TotalTonNano: 1500000000, Status: storage.OrderStatusPending,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tonDisabledID, err := store.CreateOrder(ctx, &storage.Order{
+		UserID: 42, Status: storage.OrderStatusPending,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc = NewOrderService(store, storage.NewCartStore(db.Conn()), storage.NewSQLProductStore(db), PaymentDeps{}, slog.Default())
+	for _, receipt := range []PaymentReceipt{
+		{OrderID: orderID, Provider: "ton", ExternalID: "ton-low", Currency: "TON", AmountMinor: 1499999999, Scale: 9},
+		{OrderID: orderID, Provider: "ton", ExternalID: "ton-usdt", Currency: "USDT", AmountMinor: 1500000000, Scale: 9},
+		{OrderID: orderID, Provider: "ton", ExternalID: "ton-scale", Currency: "TON", AmountMinor: 1500000000, Scale: 2},
+		{OrderID: orderID, Provider: "ton", ExternalID: "", Currency: "TON", AmountMinor: 1500000000, Scale: 9},
+		{OrderID: tonDisabledID, Provider: "ton", ExternalID: "ton-disabled", Currency: "TON", AmountMinor: 1500000000, Scale: 9},
+	} {
+		want := storage.ErrPaymentNeedsReview
+		if receipt.ExternalID == "" {
+			// An identity-less fact cannot be quarantined durably; it is
+			// rejected with the mismatch class instead.
+			want = storage.ErrPaymentReceiptMismatch
+		}
+		if _, err := svc.ConfirmPaymentReceipt(ctx, receipt); !errors.Is(err, want) {
+			t.Fatalf("receipt=%+v err=%v want=%v", receipt, err, want)
+		}
+	}
+	for _, leg := range []struct {
+		externalID string
+		amount     int64
+		currency   string
+	}{
+		{"ton-low", 1499999999, "TON"},
+		{"ton-usdt", 1500000000, "USDT"},
+		{"ton-scale", 1500000000, "TON"},
+		{"ton-disabled", 1500000000, "TON"},
+	} {
+		var amount, payer int64
+		var currency string
+		if err := db.Conn().QueryRow(`
+			SELECT amount_minor, payer_id, currency FROM payment_anomalies
+			WHERE provider='ton' AND external_id=?`, leg.externalID).Scan(&amount, &payer, &currency); err != nil {
+			t.Fatalf("anomaly %s: %v", leg.externalID, err)
+		}
+		if amount != leg.amount || payer != 0 || currency != leg.currency {
+			t.Fatalf("anomaly %s: amount=%d payer=%d currency=%s", leg.externalID, amount, payer, currency)
+		}
+	}
+	var anomalies, attempts int64
+	_ = db.Conn().QueryRow(`SELECT COUNT(*) FROM payment_anomalies WHERE proposed_order_id=?`, orderID).Scan(&anomalies)
+	if anomalies != 3 {
+		t.Fatalf("order anomalies=%d, want 3 (the empty-external-id leg leaves no row)", anomalies)
+	}
+	_ = db.Conn().QueryRow(`SELECT COUNT(*) FROM payment_anomalies WHERE proposed_order_id=?`, tonDisabledID).Scan(&anomalies)
+	if anomalies != 1 {
+		t.Fatalf("ton-disabled order anomalies=%d, want 1", anomalies)
+	}
+	_ = db.Conn().QueryRow(`SELECT COUNT(*) FROM payment_attempts WHERE order_id=?`, orderID).Scan(&attempts)
+	_ = db.Conn().QueryRow(`SELECT COUNT(*) FROM payment_attempts WHERE order_id=?`, tonDisabledID).Scan(&attempts)
+	if attempts != 0 {
+		t.Fatalf("attempts=%d, want 0", attempts)
+	}
+	mismatched, _ := store.GetOrder(ctx, orderID)
+	disabled, _ := store.GetOrder(ctx, tonDisabledID)
+	if mismatched.Status != storage.OrderStatusPending || mismatched.PaymentState != storage.PaymentStateNeedsReview ||
+		disabled.Status != storage.OrderStatusPending || disabled.PaymentState != storage.PaymentStateNeedsReview {
+		t.Fatalf("mismatched=%+v disabled=%+v", mismatched, disabled)
+	}
+
+	// Exact-boundary receipt (== the snapshot) settles the order; the
+	// attempt row carries the validated facts.
+	settledID, err := store.CreateOrder(ctx, &storage.Order{
+		UserID: 42, TotalTonNano: 1500000000, Status: storage.OrderStatusPending,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt := PaymentReceipt{OrderID: settledID, Provider: "ton", ExternalID: "1720000000001:abc", Currency: "TON", AmountMinor: 1500000000, Scale: 9}
+	outcome, err := svc.ConfirmPaymentReceipt(ctx, receipt)
+	if err != nil {
+		t.Fatalf("valid receipt: %v", err)
+	}
+	if outcome == nil || outcome.Order == nil || outcome.Order.Status != storage.OrderStatusPaid {
+		t.Fatalf("outcome=%+v", outcome)
+	}
+	var currency string
+	var amount int64
+	if err := db.Conn().QueryRow(`SELECT currency, amount_minor FROM payment_attempts WHERE external_id='1720000000001:abc'`).Scan(&currency, &amount); err != nil {
+		t.Fatal(err)
+	}
+	if currency != "TON" || amount != 1500000000 {
+		t.Fatalf("attempt currency=%s amount=%d", currency, amount)
+	}
+	var events int64
+	_ = db.Conn().QueryRow(`SELECT COUNT(*) FROM payment_events WHERE provider='ton' AND external_id='1720000000001:abc'`).Scan(&events)
+	if events != 1 {
+		t.Fatalf("events=%d, want 1", events)
+	}
+
+	// Overpay settles too, and the ledger records the ACTUAL received
+	// amount (1600000001 nanotons), not the order snapshot: on-chain
+	// overpayment is real money received.
+	overpayID, err := store.CreateOrder(ctx, &storage.Order{
+		UserID: 42, TotalTonNano: 1500000000, Status: storage.OrderStatusPending,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	overpayReceipt := PaymentReceipt{OrderID: overpayID, Provider: "ton", ExternalID: "1720000000002:def", Currency: "TON", AmountMinor: 1600000001, Scale: 9}
+	overpayOutcome, err := svc.ConfirmPaymentReceipt(ctx, overpayReceipt)
+	if err != nil {
+		t.Fatalf("overpay receipt: %v", err)
+	}
+	if overpayOutcome == nil || overpayOutcome.Order == nil || overpayOutcome.Order.Status != storage.OrderStatusPaid {
+		t.Fatalf("overpay outcome=%+v", overpayOutcome)
+	}
+	if err := db.Conn().QueryRow(`SELECT amount_minor FROM payment_attempts WHERE external_id='1720000000002:def'`).Scan(&amount); err != nil {
+		t.Fatal(err)
+	}
+	if amount != 1600000001 {
+		t.Fatalf("overpay attempt amount=%d, want the actual received 1600000001, not the 1500000000 snapshot", amount)
+	}
+
+	// Exact replay: idempotent status conflict; the order settles exactly once.
+	if _, err := svc.ConfirmPaymentReceipt(ctx, receipt); !errors.Is(err, storage.ErrOrderStatusConflict) {
+		t.Fatalf("replay error=%v", err)
+	}
+	var replayAttempts, replayAnomalies int64
+	_ = db.Conn().QueryRow(`SELECT COUNT(*) FROM payment_attempts WHERE order_id=?`, settledID).Scan(&replayAttempts)
+	_ = db.Conn().QueryRow(`SELECT COUNT(*) FROM payment_anomalies WHERE proposed_order_id=?`, settledID).Scan(&replayAnomalies)
+	settled, _ := store.GetOrder(ctx, settledID)
+	if replayAttempts != 1 || replayAnomalies != 0 || settled.Status != storage.OrderStatusPaid ||
+		settled.PaymentState != storage.PaymentStateSettled ||
+		settled.PaymentMethod != storage.PaymentMethodTON || settled.PaymentID != "1720000000001:abc" {
+		t.Fatalf("attempts=%d anomalies=%d settled=%+v", replayAttempts, replayAnomalies, settled)
+	}
+}
+
+// TestConfirmPaymentReceiptNowpayments pins the nowpayments receipt
+// contract, an exact mirror of the stripe contract: provider "nowpayments",
+// currency USD, scale 2, cents equal to round(order.TotalUSD*100) and a
+// non-empty external id (no payer check: nowpayments receipts carry
+// PayerID 0 like stripe — the signed IPN echoes our own invoice, so the
+// match is exact, no overpay tolerance). Mismatched receipts are rejected
+// with the mismatch class without mutating the order (mock harness) and
+// durably quarantined with the order left pending in needs review (SQL
+// harness). An exact replay of the settled receipt is an idempotent status
+// conflict like the stripe replay.
+func TestConfirmPaymentReceiptNowpayments(t *testing.T) {
+	// Mismatch class, no order mutation (mock store has no anomaly recorder).
+	orders := &mockOrderStore{orders: map[int64]*storage.Order{
+		7: {ID: 7, UserID: 42, Status: storage.OrderStatusPending, TotalUSD: 12.34},
+		8: {ID: 8, UserID: 42, Status: storage.OrderStatusPending},
+	}}
+	svc := NewOrderService(orders, &mockCartStore{}, &mockProductStore{}, PaymentDeps{}, slog.Default())
+	for _, receipt := range []PaymentReceipt{
+		{OrderID: 7, Provider: "nowpayments", ExternalID: "5077125051", Currency: "USD", AmountMinor: 1233, Scale: 2},
+		{OrderID: 7, Provider: "nowpayments", ExternalID: "5077125051", Currency: "USD", AmountMinor: 1235, Scale: 2},
+		{OrderID: 7, Provider: "nowpayments", ExternalID: "5077125051", Currency: "RUB", AmountMinor: 1234, Scale: 2},
+		{OrderID: 7, Provider: "nowpayments", ExternalID: "5077125051", Currency: "USD", AmountMinor: 1234, Scale: 0},
+		{OrderID: 7, Provider: "nowpayments", ExternalID: "", Currency: "USD", AmountMinor: 1234, Scale: 2},
+		{OrderID: 8, Provider: "nowpayments", ExternalID: "5077125051", Currency: "USD", AmountMinor: 1234, Scale: 2},
+	} {
+		if _, err := svc.ConfirmPaymentReceipt(context.Background(), receipt); !errors.Is(err, storage.ErrPaymentReceiptMismatch) {
+			t.Fatalf("receipt=%+v err=%v", receipt, err)
+		}
+	}
+	if orders.orders[7].Status != storage.OrderStatusPending || orders.orders[8].Status != storage.OrderStatusPending {
+		t.Fatalf("orders mutated: 7=%+v 8=%+v", orders.orders[7], orders.orders[8])
+	}
+
+	// Durable quarantine with the receipt's actual facts (order 12.34 USD;
+	// the last leg targets an order whose USD snapshot is zero).
+	db, err := storage.New(filepath.Join(t.TempDir(), "nowpayments-receipt.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	store := storage.NewSQLOrderStore(db)
+	orderID, err := store.CreateOrder(ctx, &storage.Order{
+		UserID: 42, TotalUSD: 12.34, Status: storage.OrderStatusPending,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zeroUSDID, err := store.CreateOrder(ctx, &storage.Order{
+		UserID: 42, Status: storage.OrderStatusPending,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc = NewOrderService(store, storage.NewCartStore(db.Conn()), storage.NewSQLProductStore(db), PaymentDeps{}, slog.Default())
+	for _, receipt := range []PaymentReceipt{
+		{OrderID: orderID, Provider: "nowpayments", ExternalID: "np-low", Currency: "USD", AmountMinor: 1233, Scale: 2},
+		{OrderID: orderID, Provider: "nowpayments", ExternalID: "np-high", Currency: "USD", AmountMinor: 1235, Scale: 2},
+		{OrderID: orderID, Provider: "nowpayments", ExternalID: "np-rub", Currency: "RUB", AmountMinor: 1234, Scale: 2},
+		{OrderID: orderID, Provider: "nowpayments", ExternalID: "np-scale", Currency: "USD", AmountMinor: 1234, Scale: 0},
+		{OrderID: orderID, Provider: "nowpayments", ExternalID: "", Currency: "USD", AmountMinor: 1234, Scale: 2},
+		{OrderID: zeroUSDID, Provider: "nowpayments", ExternalID: "np-zero-usd", Currency: "USD", AmountMinor: 1234, Scale: 2},
+	} {
+		want := storage.ErrPaymentNeedsReview
+		if receipt.ExternalID == "" {
+			// An identity-less fact cannot be quarantined durably; it is
+			// rejected with the mismatch class instead.
+			want = storage.ErrPaymentReceiptMismatch
+		}
+		if _, err := svc.ConfirmPaymentReceipt(ctx, receipt); !errors.Is(err, want) {
+			t.Fatalf("receipt=%+v err=%v want=%v", receipt, err, want)
+		}
+	}
+	for _, leg := range []struct {
+		externalID string
+		amount     int64
+		currency   string
+	}{
+		{"np-low", 1233, "USD"},
+		{"np-high", 1235, "USD"},
+		{"np-rub", 1234, "RUB"},
+		{"np-scale", 1234, "USD"},
+		{"np-zero-usd", 1234, "USD"},
+	} {
+		var amount, payer int64
+		var currency string
+		if err := db.Conn().QueryRow(`
+			SELECT amount_minor, payer_id, currency FROM payment_anomalies
+			WHERE provider='nowpayments' AND external_id=?`, leg.externalID).Scan(&amount, &payer, &currency); err != nil {
+			t.Fatalf("anomaly %s: %v", leg.externalID, err)
+		}
+		if amount != leg.amount || payer != 0 || currency != leg.currency {
+			t.Fatalf("anomaly %s: amount=%d payer=%d currency=%s", leg.externalID, amount, payer, currency)
+		}
+	}
+	var anomalies, attempts int64
+	_ = db.Conn().QueryRow(`SELECT COUNT(*) FROM payment_anomalies WHERE proposed_order_id=?`, orderID).Scan(&anomalies)
+	if anomalies != 4 {
+		t.Fatalf("order anomalies=%d, want 4 (the empty-external-id leg leaves no row)", anomalies)
+	}
+	_ = db.Conn().QueryRow(`SELECT COUNT(*) FROM payment_anomalies WHERE proposed_order_id=?`, zeroUSDID).Scan(&anomalies)
+	if anomalies != 1 {
+		t.Fatalf("zero-usd order anomalies=%d, want 1", anomalies)
+	}
+	_ = db.Conn().QueryRow(`SELECT COUNT(*) FROM payment_attempts WHERE order_id=?`, orderID).Scan(&attempts)
+	_ = db.Conn().QueryRow(`SELECT COUNT(*) FROM payment_attempts WHERE order_id=?`, zeroUSDID).Scan(&attempts)
+	if attempts != 0 {
+		t.Fatalf("attempts=%d, want 0", attempts)
+	}
+	mismatched, _ := store.GetOrder(ctx, orderID)
+	zeroUSD, _ := store.GetOrder(ctx, zeroUSDID)
+	if mismatched.Status != storage.OrderStatusPending || mismatched.PaymentState != storage.PaymentStateNeedsReview ||
+		zeroUSD.Status != storage.OrderStatusPending || zeroUSD.PaymentState != storage.PaymentStateNeedsReview {
+		t.Fatalf("mismatched=%+v zeroUSD=%+v", mismatched, zeroUSD)
+	}
+
+	// Valid receipt settles the order; the attempt row carries the validated
+	// facts. The external id is the decimal string of NOWPayments'
+	// payment_id.
+	settledID, err := store.CreateOrder(ctx, &storage.Order{
+		UserID: 42, TotalUSD: 12.34, Status: storage.OrderStatusPending,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt := PaymentReceipt{OrderID: settledID, Provider: "nowpayments", ExternalID: "5077125051", Currency: "USD", AmountMinor: 1234, Scale: 2}
+	outcome, err := svc.ConfirmPaymentReceipt(ctx, receipt)
+	if err != nil {
+		t.Fatalf("valid receipt: %v", err)
+	}
+	if outcome == nil || outcome.Order == nil || outcome.Order.Status != storage.OrderStatusPaid {
+		t.Fatalf("outcome=%+v", outcome)
+	}
+	var currency string
+	var amount int64
+	if err := db.Conn().QueryRow(`SELECT currency, amount_minor FROM payment_attempts WHERE external_id='5077125051'`).Scan(&currency, &amount); err != nil {
+		t.Fatal(err)
+	}
+	if currency != "USD" || amount != 1234 {
+		t.Fatalf("attempt currency=%s amount=%d", currency, amount)
+	}
+	var events int64
+	_ = db.Conn().QueryRow(`SELECT COUNT(*) FROM payment_events WHERE provider='nowpayments' AND external_id='5077125051'`).Scan(&events)
+	if events != 1 {
+		t.Fatalf("events=%d, want 1", events)
+	}
+
+	// Exact replay: idempotent status conflict; the order settles exactly once.
+	if _, err := svc.ConfirmPaymentReceipt(ctx, receipt); !errors.Is(err, storage.ErrOrderStatusConflict) {
+		t.Fatalf("replay error=%v", err)
+	}
+	var replayAttempts, replayAnomalies int64
+	_ = db.Conn().QueryRow(`SELECT COUNT(*) FROM payment_attempts WHERE order_id=?`, settledID).Scan(&replayAttempts)
+	_ = db.Conn().QueryRow(`SELECT COUNT(*) FROM payment_anomalies WHERE proposed_order_id=?`, settledID).Scan(&replayAnomalies)
+	settled, _ := store.GetOrder(ctx, settledID)
+	if replayAttempts != 1 || replayAnomalies != 0 || settled.Status != storage.OrderStatusPaid ||
+		settled.PaymentState != storage.PaymentStateSettled ||
+		settled.PaymentMethod != storage.PaymentMethodNowpayments || settled.PaymentID != "5077125051" {
+		t.Fatalf("attempts=%d anomalies=%d settled=%+v", replayAttempts, replayAnomalies, settled)
+	}
+}

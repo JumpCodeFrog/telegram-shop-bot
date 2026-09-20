@@ -14,12 +14,24 @@ const (
 	PaymentIngressApply      = "apply"
 )
 
+// providerHasNoTelegramPayer reports whether a provider identity belongs to
+// a rail whose facts carry no Telegram payer identity: the card rails
+// (yookassa, stripe) and the on-chain/IPN crypto rails (ton, nowpayments).
+// Exactly those providers may carry PayerID 0 at the capture gates.
+func providerHasNoTelegramPayer(provider string) bool {
+	switch normalizePaymentProvider(provider) {
+	case PaymentMethodYooKassa, PaymentMethodStripe, PaymentMethodTON, PaymentMethodNowpayments:
+		return true
+	}
+	return false
+}
+
 // invalidProviderCapturePayer enforces payer equality only for providers that
-// supply a Telegram payer identity. YooKassa and Stripe facts carry PayerID 0
-// because those providers have no Telegram payer identity, so a payerless fact
-// is accepted exactly for those rails. A negative PayerID rejects for every
-// provider, and a positive PayerID that disagrees with the order user still
-// rejects for every provider.
+// supply a Telegram payer identity. Facts on the payerless rails carry
+// PayerID 0 because those providers have no Telegram payer identity, so a
+// payerless fact is accepted exactly for those rails. A negative PayerID
+// rejects for every provider, and a positive PayerID that disagrees with the
+// order user still rejects for every provider.
 func invalidProviderCapturePayer(fact PaymentFact, orderUserID int64) bool {
 	if fact.PayerID > 0 {
 		return fact.PayerID != orderUserID
@@ -27,8 +39,7 @@ func invalidProviderCapturePayer(fact PaymentFact, orderUserID int64) bool {
 	if fact.PayerID < 0 {
 		return true
 	}
-	provider := normalizePaymentProvider(fact.Provider)
-	return provider != PaymentMethodYooKassa && provider != PaymentMethodStripe
+	return !providerHasNoTelegramPayer(fact.Provider)
 }
 
 func (s *SQLOrderStore) PreviewProviderCaptureIngress(ctx context.Context, orderID int64, fact PaymentFact) (string, error) {
@@ -68,7 +79,7 @@ func (s *SQLOrderStore) PreviewProviderCaptureIngress(ctx context.Context, order
 func (s *SQLPaymentLedgerStore) PreviewProviderRefundIngress(ctx context.Context, refund Refund) (string, error) {
 	provider := normalizePaymentProvider(refund.Provider)
 	if refund.OrderID <= 0 || refund.AmountMinor <= 0 || refund.ExternalID == "" ||
-		refund.PaymentExternalID == "" || (provider != PaymentMethodStars && provider != PaymentMethodCrypto && provider != PaymentMethodYooKassa && provider != PaymentMethodStripe) ||
+		refund.PaymentExternalID == "" || (provider != PaymentMethodStars && provider != PaymentMethodCrypto && provider != PaymentMethodYooKassa && provider != PaymentMethodStripe && provider != PaymentMethodTON && provider != PaymentMethodNowpayments) ||
 		refund.Scale < 0 || refund.Scale > 9 || refund.Currency == "" || refund.PayerID <= 0 ||
 		refund.OccurredAt.IsZero() || (provider == PaymentMethodStars && refund.ExternalID != refund.PaymentExternalID) {
 		return "", ErrPaymentReceiptMismatch

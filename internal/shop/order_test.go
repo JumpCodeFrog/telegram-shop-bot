@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"shop_bot/internal/service"
 	"shop_bot/internal/storage"
 
 	"pgregory.net/rapid"
@@ -590,5 +591,77 @@ func TestCreateFromCartSnapshotsTotalRUB(t *testing.T) {
 	}
 	if discounted.DiscountPct != 10 || discounted.PromoCode != "RUB10" {
 		t.Fatalf("discount fields: %+v", discounted)
+	}
+}
+
+// TestCreateFromCartSnapshotsTotalTONNano verifies CreateFromCart snapshots
+// the TON total onto the order by converting the (possibly discounted) USD
+// total once at 5.13 USD/TON: 19.99 -> 3896686160 nanotons without a promo,
+// and with 10% off the discounted 17.991 USD converts to 3507017544 — the
+// discount is applied to the USD total before the single conversion, never
+// by re-rounding a pre-converted nano amount (mirrors the TotalRUB promo
+// placement). With a zero TON rate (TON disabled) or no exchange service
+// the column stays 0.
+func TestCreateFromCartSnapshotsTotalTONNano(t *testing.T) {
+	os := newMockOrderStore()
+	cs := &mockClearCartStore{}
+	svc := NewOrderService(os, cs, isActiveProductStore{}, PaymentDeps{}, slog.Default(), service.NewExchangeService(50, 92.5, 5.13))
+
+	view := &CartView{
+		Items: []CartItemView{
+			{Product: storage.Product{ID: 1, PriceUSD: 10.0, PriceStars: 500}, Quantity: 1},
+			{Product: storage.Product{ID: 2, PriceUSD: 4.995, PriceStars: 249}, Quantity: 2},
+		},
+		TotalUSD:     19.99,
+		TotalStars:   998,
+		TotalRUB:     1849.08,
+		TotalTONNano: 3896686160,
+	}
+
+	orderID, err := svc.CreateFromCart(context.Background(), 42, view, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	plain := os.orders[orderID]
+	if plain.TotalTonNano != 3896686160 {
+		t.Fatalf("plain TotalTonNano=%d, want 3896686160", plain.TotalTonNano)
+	}
+	if math.Abs(plain.TotalUSD-19.99) > 1e-9 {
+		t.Fatalf("plain TotalUSD=%f, want 19.99", plain.TotalUSD)
+	}
+
+	promo := &storage.PromoCode{Code: "TON10", Discount: 10}
+	orderID, err = svc.CreateFromCart(context.Background(), 42, view, promo)
+	if err != nil {
+		t.Fatalf("unexpected error with promo: %v", err)
+	}
+	discounted := os.orders[orderID]
+	if discounted.TotalTonNano != 3507017544 {
+		t.Fatalf("discounted TotalTonNano=%d, want 3507017544", discounted.TotalTonNano)
+	}
+	if math.Abs(discounted.TotalUSD-17.991) > 1e-9 {
+		t.Fatalf("discounted TotalUSD=%f, want 17.991", discounted.TotalUSD)
+	}
+
+	// TON rate 0 (TON payments disabled): the snapshot column stays 0.
+	zeroStore := newMockOrderStore()
+	zeroRate := NewOrderService(zeroStore, &mockClearCartStore{}, isActiveProductStore{}, PaymentDeps{}, slog.Default(), service.NewExchangeService(50, 92.5, 0))
+	orderID, err = zeroRate.CreateFromCart(context.Background(), 42, view, nil)
+	if err != nil {
+		t.Fatalf("unexpected error with zero rate: %v", err)
+	}
+	if got := zeroStore.orders[orderID].TotalTonNano; got != 0 {
+		t.Fatalf("zero-rate TotalTonNano=%d, want 0", got)
+	}
+
+	// No exchange service wired: the snapshot column stays 0.
+	bareStore := newMockOrderStore()
+	bare := NewOrderService(bareStore, &mockClearCartStore{}, isActiveProductStore{}, PaymentDeps{}, slog.Default())
+	orderID, err = bare.CreateFromCart(context.Background(), 42, view, nil)
+	if err != nil {
+		t.Fatalf("unexpected error without exchange: %v", err)
+	}
+	if got := bareStore.orders[orderID].TotalTonNano; got != 0 {
+		t.Fatalf("no-exchange TotalTonNano=%d, want 0", got)
 	}
 }

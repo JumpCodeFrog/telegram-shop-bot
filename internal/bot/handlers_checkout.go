@@ -250,6 +250,7 @@ func (b *Bot) onOrderConfirm(chatID, userID int64, msgID int, data, lang string)
 	view.TotalUSD = createdOrder.TotalUSD
 	view.TotalStars = createdOrder.TotalStars
 	view.TotalRUB = createdOrder.TotalRUB
+	view.TotalTONNano = createdOrder.TotalTonNano
 
 	b.notifyAdmins(ctx, AdminEventOrderNew, fmt.Sprintf(
 		b.t("en", "admin_order_new"),
@@ -260,17 +261,21 @@ func (b *Bot) onOrderConfirm(chatID, userID int64, msgID int, data, lang string)
 	cryptoOK := b.cryptoPaymentsEnabled() && !cartHasSubscription(view)
 	yookassaOK := b.yooKassaPaymentsEnabled() && !cartHasSubscription(view) && view.TotalRUB > 0
 	stripeOK := b.stripePaymentsEnabled() && !cartHasSubscription(view)
-	text := b.formatPaymentMethodsText(lang, orderID, view, cryptoOK, yookassaOK, stripeOK)
-	kb := paymentMethodKeyboard(orderID, cryptoOK, yookassaOK, stripeOK, view.TotalRUB, view.TotalStars, view.TotalUSD, lang, b)
+	tonOK := b.tonPaymentsEnabled() && !cartHasSubscription(view) && view.TotalTONNano > 0
+	nowpaymentsOK := b.nowpaymentsEnabled() && !cartHasSubscription(view)
+	text := b.formatPaymentMethodsText(lang, orderID, view, cryptoOK, yookassaOK, stripeOK, tonOK, nowpaymentsOK)
+	kb := paymentMethodKeyboard(orderID, cryptoOK, yookassaOK, stripeOK, tonOK, nowpaymentsOK, view.TotalRUB, view.TotalStars, view.TotalUSD, view.TotalTONNano, lang, b)
 
 	b.sendOrEditStyled(chatID, msgID, text, "HTML", kb)
 }
 
-func paymentMethodKeyboard(orderID int64, cryptoEnabled, yookassaOK, stripeOK bool, totalRUB float64, totalStars int, totalUSD float64, lang string, b *Bot) StyledKeyboard {
+func paymentMethodKeyboard(orderID int64, cryptoEnabled, yookassaOK, stripeOK, tonOK, nowpaymentsOK bool, totalRUB float64, totalStars int, totalUSD float64, totalTONNano int64, lang string, b *Bot) StyledKeyboard {
 	starsLabel := fmt.Sprintf("⭐ Pay %d Stars", totalStars)
 	cryptoLabel := fmt.Sprintf("💎 Pay $%.2f USDT", totalUSD)
 	rubLabel := fmt.Sprintf("💳 Pay %.2f ₽", totalRUB)
 	stripeLabel := fmt.Sprintf("💳 Pay $%.2f", totalUSD)
+	tonLabel := fmt.Sprintf("💎 Pay %s TON", formatTON(totalTONNano))
+	nowpaymentsLabel := "🪙 Pay crypto"
 	termsLabel := "📄 Terms"
 	paySupportLabel := "🆘 Payment support"
 	cancelLabel := "❌ Cancel order"
@@ -281,6 +286,8 @@ func paymentMethodKeyboard(orderID int64, cryptoEnabled, yookassaOK, stripeOK bo
 		starsLabel = fmt.Sprintf("⭐ %s (%d ⭐)", b.t(lang, "btn_pay_stars"), totalStars)
 		rubLabel = fmt.Sprintf("💳 %s (%.2f ₽)", b.t(lang, "btn_pay_rub"), totalRUB)
 		stripeLabel = b.t(lang, "btn_pay_stripe")
+		tonLabel = fmt.Sprintf("%s (%s TON)", b.t(lang, "btn_pay_ton"), formatTON(totalTONNano))
+		nowpaymentsLabel = b.t(lang, "btn_pay_nowpayments")
 		termsLabel = b.t(lang, "btn_terms")
 		paySupportLabel = b.t(lang, "btn_paysupport")
 		cancelLabel = b.t(lang, "btn_cancel_order")
@@ -302,6 +309,17 @@ func paymentMethodKeyboard(orderID int64, cryptoEnabled, yookassaOK, stripeOK bo
 	// snapshot is charged directly, so no per-order total guard is needed.
 	if stripeOK {
 		kb = append(kb, []StyledButton{b.styledBtn(BtnKeyPayStripe, stripeLabel, fmt.Sprintf("pay:stripe:%d", orderID), StylePrimary)})
+	}
+	// TON on-chain transfers follow the card rails, only when the wallet is
+	// configured, the rate is positive and the order has a positive nanoton
+	// snapshot.
+	if tonOK {
+		kb = append(kb, []StyledButton{b.styledBtn(BtnKeyPayTON, tonLabel, fmt.Sprintf("pay:ton:%d", orderID), StyleSuccess)})
+	}
+	// Hosted crypto invoices via NOWPayments close the payment section: the
+	// USD snapshot is priced directly, so no per-order total guard is needed.
+	if nowpaymentsOK {
+		kb = append(kb, []StyledButton{b.styledBtn(BtnKeyPayNowpayments, nowpaymentsLabel, fmt.Sprintf("pay:nowpayments:%d", orderID), StyleSuccess)})
 	}
 	kb = append(kb,
 		[]StyledButton{Btn(termsLabel, "terms"), Btn(paySupportLabel, "paysupport")},

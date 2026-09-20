@@ -350,8 +350,10 @@ func assertStripeCaptureQuarantine(t *testing.T, db *DB, orderID, productID int6
 
 // TestInvalidProviderCapturePayerMatrix pins the capture payer rule for every
 // provider: a positive payer id must equal the order user; exactly zero is
-// accepted only on the card rails that have no Telegram payer identity
-// (yookassa, stripe); a negative payer id is rejected for every provider.
+// accepted only on the rails that have no Telegram payer identity (the card
+// rails yookassa/stripe and the on-chain/IPN rails ton/nowpayments); a
+// negative payer id is rejected for every provider. The DB-only balance
+// forward-pin is not in the payerless set, so a zero payer rejects for it.
 // The negative-payer rejection is a deliberate tightening: yookassa accepted
 // negatives before the stripe storage acceptance generalized the predicate.
 func TestInvalidProviderCapturePayerMatrix(t *testing.T) {
@@ -378,6 +380,17 @@ func TestInvalidProviderCapturePayerMatrix(t *testing.T) {
 		{name: "stripe matching payer accepts", provider: PaymentMethodStripe, payerID: 42, orderUserID: 42, wantInvalid: false},
 		{name: "stripe mismatched payer rejects", provider: PaymentMethodStripe, payerID: 43, orderUserID: 42, wantInvalid: true},
 		{name: "stripe negative payer rejects", provider: PaymentMethodStripe, payerID: -1, orderUserID: 42, wantInvalid: true},
+		{name: "ton payerless accepts", provider: PaymentMethodTON, payerID: 0, orderUserID: 42, wantInvalid: false},
+		{name: "ton matching payer accepts", provider: PaymentMethodTON, payerID: 42, orderUserID: 42, wantInvalid: false},
+		{name: "ton mismatched payer rejects", provider: PaymentMethodTON, payerID: 43, orderUserID: 42, wantInvalid: true},
+		{name: "ton negative payer rejects", provider: PaymentMethodTON, payerID: -1, orderUserID: 42, wantInvalid: true},
+		{name: "nowpayments payerless accepts", provider: PaymentMethodNowpayments, payerID: 0, orderUserID: 42, wantInvalid: false},
+		{name: "nowpayments matching payer accepts", provider: PaymentMethodNowpayments, payerID: 42, orderUserID: 42, wantInvalid: false},
+		{name: "nowpayments mismatched payer rejects", provider: PaymentMethodNowpayments, payerID: 43, orderUserID: 42, wantInvalid: true},
+		{name: "nowpayments negative payer rejects", provider: PaymentMethodNowpayments, payerID: -1, orderUserID: 42, wantInvalid: true},
+		{name: "balance payerless rejects", provider: PaymentMethodBalance, payerID: 0, orderUserID: 42, wantInvalid: true},
+		{name: "balance mismatched payer rejects", provider: PaymentMethodBalance, payerID: 43, orderUserID: 42, wantInvalid: true},
+		{name: "balance negative payer rejects", provider: PaymentMethodBalance, payerID: -1, orderUserID: 42, wantInvalid: true},
 	}
 	for _, tc := range tests {
 		fact := PaymentFact{Provider: tc.provider, PayerID: tc.payerID}

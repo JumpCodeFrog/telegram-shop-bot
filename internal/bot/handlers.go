@@ -237,6 +237,12 @@ func (b *Bot) handleCallback(cb *tgbotapi.CallbackQuery) {
 	case strings.HasPrefix(data, "pay:stripe:"):
 		b.onPayStripe(cb.ID, chatID, userID, msgID, data, lang)
 
+	case strings.HasPrefix(data, "pay:ton:"):
+		b.onPayTON(cb.ID, chatID, userID, msgID, data, lang)
+
+	case strings.HasPrefix(data, "pay:nowpayments:"):
+		b.onPayNowpayments(cb.ID, chatID, userID, msgID, data, lang)
+
 	case strings.HasPrefix(data, "admin:togglestock:"):
 		b.ack(cb.ID)
 		if b.isAdmin(userID) {

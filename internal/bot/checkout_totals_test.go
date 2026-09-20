@@ -723,3 +723,547 @@ func TestOnPayStripeCreatesCheckoutSession(t *testing.T) {
 		}
 	})
 }
+
+// --- TON on-chain transfer checkout ---
+
+// tonTestWalletAddress is a well-formed 48-char base64url TON friendly
+// address (mirrors tonTestAddress in the config package tests).
+const tonTestWalletAddress = "EQCD39VS5jcptHL8vMjEXrzGaRcCVYto7HUn4bpAOg8xqB2N"
+
+// toncenterMock is a counting toncenter stand-in: the buyer-facing TON flow
+// must never call the chain API (settlement is 100% worker-side), so tests
+// assert the request count stays zero.
+type toncenterMock struct {
+	mu  sync.Mutex
+	srv *httptest.Server
+	n   int
+}
+
+func newToncenterMock(t *testing.T) *toncenterMock {
+	t.Helper()
+	m := &toncenterMock{}
+	m.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		m.mu.Lock()
+		m.n++
+		m.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "result": []any{}})
+	}))
+	t.Cleanup(m.srv.Close)
+	return m
+}
+
+func (m *toncenterMock) count() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.n
+}
+
+// enableTON configures the wallet address and a 5.25 USD/TON rate: $7.875
+// converts to exactly 1.5 TON (1500000000 nanotons).
+func enableTON(c *config.Config) {
+	c.TONWalletAddress = tonTestWalletAddress
+	c.USDPerTON = 5.25
+}
+
+func TestPaymentKeyboardShowsTONOnlyWhenEnabled(t *testing.T) {
+	const buyer = int64(1031)
+
+	// The pre-TON row set (crypto configured): Stars, crypto, terms/support,
+	// cancel/orders, menu.
+	baseKeyboard := func(orderID int64) []string {
+		return []string{
+			fmt.Sprintf("pay:stars:%d", orderID),
+			fmt.Sprintf("pay:crypto:%d", orderID),
+			"terms", "paysupport",
+			fmt.Sprintf("order:cancel:%d", orderID), "back:orders",
+			"back:menu",
+		}
+	}
+
+	t.Run("unconfigured adapter keeps the row set unchanged", func(t *testing.T) {
+		e := newE2EEnv(t) // no TON wallet, USDPerTON 0
+		orderID, rows := confirmOrder(e, buyer, e.prodReg)
+		if got := buttonCallbacks(rows); !slices.Equal(got, baseKeyboard(orderID)) {
+			t.Fatalf("callbacks = %v, want %v", got, baseKeyboard(orderID))
+		}
+	})
+
+	t.Run("zero TON rate keeps the row set unchanged", func(t *testing.T) {
+		e := newE2EEnvWithConfig(t, func(c *config.Config) {
+			c.TONWalletAddress = tonTestWalletAddress
+			// USDPerTON deliberately stays 0.
+		})
+		orderID, rows := confirmOrder(e, buyer, e.prodReg)
+		if got := buttonCallbacks(rows); !slices.Equal(got, baseKeyboard(orderID)) {
+			t.Fatalf("callbacks = %v, want %v", got, baseKeyboard(orderID))
+		}
+	})
+
+	t.Run("configured adds exactly one TON row", func(t *testing.T) {
+		e := newE2EEnvWithConfig(t, enableTON)
+		orderID, rows := confirmOrder(e, buyer, e.prodReg)
+		want := append([]string{
+			fmt.Sprintf("pay:stars:%d", orderID),
+			fmt.Sprintf("pay:crypto:%d", orderID),
+			fmt.Sprintf("pay:ton:%d", orderID),
+		}, baseKeyboard(orderID)[2:]...)
+		if got := buttonCallbacks(rows); !slices.Equal(got, want) {
+			t.Fatalf("callbacks = %v, want %v", got, want)
+		}
+		found := false
+		for _, row := range rows {
+			for _, button := range row {
+				if button.CallbackData != nil && *button.CallbackData == fmt.Sprintf("pay:ton:%d", orderID) {
+					found = true
+					if !strings.Contains(button.Text, "TON") {
+						t.Errorf("TON button label = %q, want a TON amount", button.Text)
+					}
+				}
+			}
+		}
+		if !found {
+			t.Fatalf("pay:ton:%d button missing", orderID)
+		}
+	})
+
+	t.Run("TON row follows the Stripe row", func(t *testing.T) {
+		e := newE2EEnvWithConfig(t, func(c *config.Config) {
+			enableStripe(c)
+			enableTON(c)
+		})
+		orderID, rows := confirmOrder(e, buyer, e.prodReg)
+		want := []string{
+			fmt.Sprintf("pay:stars:%d", orderID),
+			fmt.Sprintf("pay:crypto:%d", orderID),
+			fmt.Sprintf("pay:stripe:%d", orderID),
+			fmt.Sprintf("pay:ton:%d", orderID),
+			"terms", "paysupport",
+			fmt.Sprintf("order:cancel:%d", orderID), "back:orders",
+			"back:menu",
+		}
+		if got := buttonCallbacks(rows); !slices.Equal(got, want) {
+			t.Fatalf("callbacks = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("subscription cart hides the TON row", func(t *testing.T) {
+		e := newE2EEnvWithConfig(t, enableTON)
+		orderID, rows := confirmOrder(e, buyer, e.prodSub)
+		want := []string{
+			fmt.Sprintf("pay:stars:%d", orderID),
+			"terms", "paysupport",
+			fmt.Sprintf("order:cancel:%d", orderID), "back:orders",
+			"back:menu",
+		}
+		if got := buttonCallbacks(rows); !slices.Equal(got, want) {
+			t.Fatalf("callbacks = %v, want %v", got, want)
+		}
+	})
+}
+
+func TestOnPayTONSendsTransferInstructions(t *testing.T) {
+	const buyer = int64(1032)
+	const stranger = int64(1033)
+
+	// newConfiguredEnv builds an env with TON enabled and the bot's adapter
+	// pointed at a counting toncenter stand-in via the SetBaseURL test seam.
+	newConfiguredEnv := func(t *testing.T) (*e2eEnv, *toncenterMock) {
+		e := newE2EEnvWithConfig(t, enableTON)
+		mock := newToncenterMock(t)
+		e.bot.ton.SetBaseURL(mock.srv.URL)
+		// $7.875 at $5.25/TON snapshots exactly 1.5 TON.
+		if _, err := e.db.Conn().Exec(`UPDATE products SET price_usd = ? WHERE id = ?`, 7.875, e.prodReg); err != nil {
+			t.Fatal(err)
+		}
+		return e, mock
+	}
+
+	t.Run("pending order renders instructions with a deeplink and zero API calls", func(t *testing.T) {
+		e, mock := newConfiguredEnv(t)
+		orderID := e.placeOrder(buyer, e.prodReg, "")
+		if got := e.qInt(`SELECT total_ton_nano FROM orders WHERE id = ?`, orderID); got != 1500000000 {
+			t.Fatalf("total_ton_nano = %d, want 1500000000", got)
+		}
+		calls := e.cb(buyer, fmt.Sprintf("pay:ton:%d", orderID), "en")
+
+		render := requireRender(t, calls, fmt.Sprintf("#%d", orderID))
+		text := render.Params.Get("text")
+		for _, want := range []string{
+			"1.5 TON",
+			"<code>" + tonTestWalletAddress + "</code>",
+			fmt.Sprintf("<code>order-%d</code>", orderID),
+		} {
+			if !strings.Contains(text, want) {
+				t.Errorf("instructions missing %q:\n%s", want, text)
+			}
+		}
+		var markup tgbotapi.InlineKeyboardMarkup
+		if err := json.Unmarshal([]byte(render.markup()), &markup); err != nil {
+			t.Fatal(err)
+		}
+		if len(markup.InlineKeyboard) != 1 || len(markup.InlineKeyboard[0]) != 1 {
+			t.Fatalf("keyboard = %s, want a single URL button", render.markup())
+		}
+		button := markup.InlineKeyboard[0][0]
+		wantURL := fmt.Sprintf("ton://transfer/%s?amount=1500000000&text=order-%d", tonTestWalletAddress, orderID)
+		if button.URL == nil || *button.URL != wantURL {
+			t.Fatalf("deeplink = %+v, want %s", button, wantURL)
+		}
+		if !hasCall(calls, "answerCallbackQuery", "") {
+			t.Errorf("callback ack missing")
+		}
+		// TON settlement is 100% worker-side: the buyer-facing flow must not
+		// touch the chain API.
+		if mock.count() != 0 {
+			t.Fatalf("toncenter API calls = %d, want 0", mock.count())
+		}
+	})
+
+	t.Run("foreign buyer is rejected without an API call", func(t *testing.T) {
+		e, mock := newConfiguredEnv(t)
+		orderID := e.placeOrder(buyer, e.prodReg, "")
+		calls := e.cb(stranger, fmt.Sprintf("pay:ton:%d", orderID), "en")
+		requireCall(t, calls, "answerCallbackQuery", "Order not found")
+		if mock.count() != 0 {
+			t.Fatalf("toncenter API calls = %d, want 0", mock.count())
+		}
+	})
+
+	t.Run("non-pending order is rejected without an API call", func(t *testing.T) {
+		e, mock := newConfiguredEnv(t)
+		orderID := e.placeOrder(buyer, e.prodReg, "")
+		if _, err := e.db.Conn().Exec(`UPDATE orders SET status = 'paid' WHERE id = ?`, orderID); err != nil {
+			t.Fatal(err)
+		}
+		calls := e.cb(buyer, fmt.Sprintf("pay:ton:%d", orderID), "en")
+		requireCall(t, calls, "answerCallbackQuery", "no longer be paid")
+		if mock.count() != 0 {
+			t.Fatalf("toncenter API calls = %d, want 0", mock.count())
+		}
+	})
+
+	t.Run("unconfigured adapter alerts ton_unavailable", func(t *testing.T) {
+		e := newE2EEnv(t) // no TON wallet, no rate
+		orderID := e.placeOrder(buyer, e.prodReg, "")
+		calls := e.cb(buyer, fmt.Sprintf("pay:ton:%d", orderID), "en")
+		requireCall(t, calls, "answerCallbackQuery", "not available")
+	})
+
+	t.Run("order without a TON snapshot alerts ton_unavailable", func(t *testing.T) {
+		e, mock := newConfiguredEnv(t)
+		orderID := e.placeOrder(buyer, e.prodReg, "")
+		// Simulate an order created while TON was disabled.
+		if _, err := e.db.Conn().Exec(`UPDATE orders SET total_ton_nano = 0 WHERE id = ?`, orderID); err != nil {
+			t.Fatal(err)
+		}
+		calls := e.cb(buyer, fmt.Sprintf("pay:ton:%d", orderID), "en")
+		requireCall(t, calls, "answerCallbackQuery", "not available")
+		if mock.count() != 0 {
+			t.Fatalf("toncenter API calls = %d, want 0", mock.count())
+		}
+	})
+
+	t.Run("subscription order alerts sub_stars_only", func(t *testing.T) {
+		e, mock := newConfiguredEnv(t)
+		orderID := e.placeOrder(buyer, e.prodSub, "")
+		calls := e.cb(buyer, fmt.Sprintf("pay:ton:%d", orderID), "en")
+		requireCall(t, calls, "answerCallbackQuery", "only be paid with Telegram Stars")
+		if mock.count() != 0 {
+			t.Fatalf("toncenter API calls = %d, want 0", mock.count())
+		}
+	})
+}
+
+// --- NOWPayments hosted crypto invoice checkout ---
+
+// nowpaymentsReq captures what the fake NOWPayments API received. Invoice
+// creation sends a JSON body, so the decoded object is kept verbatim.
+type nowpaymentsReq struct {
+	Path   string
+	APIKey string
+	Body   map[string]any
+}
+
+const nowpaymentsInvoiceURL = "https://nowpayments.example/invoice/5077125051"
+
+// nowpaymentsMock is a fake NOWPayments API: it records every request and
+// answers invoice creation with a hosted invoice URL. fail() makes the next
+// request fail with an HTTP 500 so the error path can be exercised.
+type nowpaymentsMock struct {
+	mu       sync.Mutex
+	srv      *httptest.Server
+	requests []nowpaymentsReq
+	failNext bool
+}
+
+func newNowpaymentsMock(t *testing.T) *nowpaymentsMock {
+	t.Helper()
+	m := &nowpaymentsMock{}
+	m.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		m.mu.Lock()
+		m.requests = append(m.requests, nowpaymentsReq{Path: r.URL.Path, APIKey: r.Header.Get("x-api-key"), Body: body})
+		fail := m.failNext
+		m.failNext = false
+		m.mu.Unlock()
+
+		w.Header().Set("Content-Type", "application/json")
+		if fail {
+			w.WriteHeader(http.StatusInternalServerError)
+			_ = json.NewEncoder(w).Encode(map[string]any{"status": false, "statusCode": 500, "message": "boom"})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id":          "5077125051",
+			"invoice_url": nowpaymentsInvoiceURL,
+		})
+	}))
+	t.Cleanup(m.srv.Close)
+	return m
+}
+
+func (m *nowpaymentsMock) count() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.requests)
+}
+
+func (m *nowpaymentsMock) last() nowpaymentsReq {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.requests) == 0 {
+		return nowpaymentsReq{}
+	}
+	return m.requests[len(m.requests)-1]
+}
+
+func (m *nowpaymentsMock) fail() {
+	m.mu.Lock()
+	m.failNext = true
+	m.mu.Unlock()
+}
+
+// enableNowpayments configures NOWPayments credentials and the public base
+// URL the IPN callback URL is derived from.
+func enableNowpayments(c *config.Config) {
+	c.NowpaymentsAPIKey = "np-api-key"
+	c.NowpaymentsIPNSecret = "np-ipn-secret"
+	c.NowpaymentsReturnURL = "https://shop.example.com/return"
+	c.WebhookURL = "https://shop.example.com"
+}
+
+func TestPaymentKeyboardShowsNowpaymentsOnlyWhenEnabled(t *testing.T) {
+	const buyer = int64(1041)
+
+	// The pre-NOWPayments row set (crypto configured): Stars, crypto,
+	// terms/support, cancel/orders, menu.
+	baseKeyboard := func(orderID int64) []string {
+		return []string{
+			fmt.Sprintf("pay:stars:%d", orderID),
+			fmt.Sprintf("pay:crypto:%d", orderID),
+			"terms", "paysupport",
+			fmt.Sprintf("order:cancel:%d", orderID), "back:orders",
+			"back:menu",
+		}
+	}
+
+	t.Run("unconfigured adapter keeps the row set unchanged", func(t *testing.T) {
+		e := newE2EEnv(t) // no NOWPayments credentials
+		orderID, rows := confirmOrder(e, buyer, e.prodReg)
+		if got := buttonCallbacks(rows); !slices.Equal(got, baseKeyboard(orderID)) {
+			t.Fatalf("callbacks = %v, want %v", got, baseKeyboard(orderID))
+		}
+	})
+
+	t.Run("configured adds exactly one crypto row", func(t *testing.T) {
+		e := newE2EEnvWithConfig(t, enableNowpayments)
+		orderID, rows := confirmOrder(e, buyer, e.prodReg)
+		want := append([]string{
+			fmt.Sprintf("pay:stars:%d", orderID),
+			fmt.Sprintf("pay:crypto:%d", orderID),
+			fmt.Sprintf("pay:nowpayments:%d", orderID),
+		}, baseKeyboard(orderID)[2:]...)
+		if got := buttonCallbacks(rows); !slices.Equal(got, want) {
+			t.Fatalf("callbacks = %v, want %v", got, want)
+		}
+		found := false
+		for _, row := range rows {
+			for _, button := range row {
+				if button.CallbackData != nil && *button.CallbackData == fmt.Sprintf("pay:nowpayments:%d", orderID) {
+					found = true
+					if button.Text != "🪙 Crypto (300+ coins)" {
+						t.Errorf("NOWPayments button label = %q, want localized btn_pay_nowpayments", button.Text)
+					}
+				}
+			}
+		}
+		if !found {
+			t.Fatalf("pay:nowpayments:%d button missing", orderID)
+		}
+	})
+
+	t.Run("nowpayments row follows the TON row", func(t *testing.T) {
+		e := newE2EEnvWithConfig(t, func(c *config.Config) {
+			enableTON(c)
+			enableNowpayments(c)
+		})
+		orderID, rows := confirmOrder(e, buyer, e.prodReg)
+		want := []string{
+			fmt.Sprintf("pay:stars:%d", orderID),
+			fmt.Sprintf("pay:crypto:%d", orderID),
+			fmt.Sprintf("pay:ton:%d", orderID),
+			fmt.Sprintf("pay:nowpayments:%d", orderID),
+			"terms", "paysupport",
+			fmt.Sprintf("order:cancel:%d", orderID), "back:orders",
+			"back:menu",
+		}
+		if got := buttonCallbacks(rows); !slices.Equal(got, want) {
+			t.Fatalf("callbacks = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("subscription cart hides the NOWPayments row", func(t *testing.T) {
+		e := newE2EEnvWithConfig(t, enableNowpayments)
+		orderID, rows := confirmOrder(e, buyer, e.prodSub)
+		want := []string{
+			fmt.Sprintf("pay:stars:%d", orderID),
+			"terms", "paysupport",
+			fmt.Sprintf("order:cancel:%d", orderID), "back:orders",
+			"back:menu",
+		}
+		if got := buttonCallbacks(rows); !slices.Equal(got, want) {
+			t.Fatalf("callbacks = %v, want %v", got, want)
+		}
+	})
+}
+
+func TestOnPayNowpaymentsCreatesInvoice(t *testing.T) {
+	const buyer = int64(1042)
+	const stranger = int64(1043)
+
+	// newConfiguredEnv builds an env with NOWPayments enabled and the bot's
+	// adapter pointed at a fake NOWPayments API via the SetBaseURL test seam.
+	newConfiguredEnv := func(t *testing.T) (*e2eEnv, *nowpaymentsMock) {
+		e := newE2EEnvWithConfig(t, enableNowpayments)
+		mock := newNowpaymentsMock(t)
+		e.bot.nowpayments.SetBaseURL(mock.srv.URL)
+		if _, err := e.db.Conn().Exec(`UPDATE products SET price_usd = ? WHERE id = ?`, 19.99, e.prodReg); err != nil {
+			t.Fatal(err)
+		}
+		return e, mock
+	}
+
+	t.Run("pending order redirects to the hosted invoice URL", func(t *testing.T) {
+		e, mock := newConfiguredEnv(t)
+		orderID := e.placeOrder(buyer, e.prodReg, "")
+		calls := e.cb(buyer, fmt.Sprintf("pay:nowpayments:%d", orderID), "en")
+
+		render := requireRender(t, calls, fmt.Sprintf("Pay order <code>#%d</code>", orderID))
+		if !strings.Contains(render.Params.Get("text"), "$19.99") {
+			t.Fatalf("payment message = %q, want amount $19.99", render.Params.Get("text"))
+		}
+		var markup tgbotapi.InlineKeyboardMarkup
+		if err := json.Unmarshal([]byte(render.markup()), &markup); err != nil {
+			t.Fatal(err)
+		}
+		if len(markup.InlineKeyboard) != 1 || len(markup.InlineKeyboard[0]) != 1 {
+			t.Fatalf("payment keyboard = %s, want a single URL button", render.markup())
+		}
+		button := markup.InlineKeyboard[0][0]
+		if button.URL == nil || *button.URL != nowpaymentsInvoiceURL {
+			t.Fatalf("URL button = %+v, want invoice URL %s", button, nowpaymentsInvoiceURL)
+		}
+		if button.Text != "🪙 Crypto (300+ coins)" {
+			t.Fatalf("URL button label = %q, want localized btn_pay_nowpayments", button.Text)
+		}
+		// Skeleton state and callback ack precede the redirect message.
+		if !hasCall(calls, "editMessageReplyMarkup", "Generating invoice") {
+			t.Errorf("skeleton invoice edit missing")
+		}
+		if !hasCall(calls, "answerCallbackQuery", "") {
+			t.Errorf("callback ack missing")
+		}
+
+		if mock.count() != 1 {
+			t.Fatalf("NOWPayments API calls = %d, want 1", mock.count())
+		}
+		req := mock.last()
+		if req.Path != "/invoice" {
+			t.Errorf("API path = %q, want /invoice", req.Path)
+		}
+		if req.APIKey != "np-api-key" {
+			t.Errorf("API key header = %q, want the configured API key", req.APIKey)
+		}
+		if req.Body["price_amount"] != 19.99 {
+			t.Errorf("price_amount = %v, want 19.99", req.Body["price_amount"])
+		}
+		if req.Body["price_currency"] != "usd" {
+			t.Errorf("price_currency = %v, want usd", req.Body["price_currency"])
+		}
+		if req.Body["order_id"] != strconv.FormatInt(orderID, 10) {
+			t.Errorf("order_id = %v, want %d", req.Body["order_id"], orderID)
+		}
+		if req.Body["ipn_callback_url"] != "https://shop.example.com/nowpayments-webhook" {
+			t.Errorf("ipn_callback_url = %v, want derived from the public base URL", req.Body["ipn_callback_url"])
+		}
+		if req.Body["success_url"] != "https://shop.example.com/return" || req.Body["cancel_url"] != "https://shop.example.com/return" {
+			t.Errorf("success/cancel URLs = %v/%v, want the configured return URL", req.Body["success_url"], req.Body["cancel_url"])
+		}
+	})
+
+	t.Run("foreign buyer is rejected without an API call", func(t *testing.T) {
+		e, mock := newConfiguredEnv(t)
+		orderID := e.placeOrder(buyer, e.prodReg, "")
+		calls := e.cb(stranger, fmt.Sprintf("pay:nowpayments:%d", orderID), "en")
+		requireCall(t, calls, "answerCallbackQuery", "Order not found")
+		if mock.count() != 0 {
+			t.Fatalf("NOWPayments API calls = %d, want 0", mock.count())
+		}
+		if hasRender(calls, "Pay order") {
+			t.Fatal("unexpected payment message for a foreign buyer")
+		}
+	})
+
+	t.Run("non-pending order is rejected without an API call", func(t *testing.T) {
+		e, mock := newConfiguredEnv(t)
+		orderID := e.placeOrder(buyer, e.prodReg, "")
+		if _, err := e.db.Conn().Exec(`UPDATE orders SET status = 'paid' WHERE id = ?`, orderID); err != nil {
+			t.Fatal(err)
+		}
+		calls := e.cb(buyer, fmt.Sprintf("pay:nowpayments:%d", orderID), "en")
+		requireCall(t, calls, "answerCallbackQuery", "no longer be paid")
+		if mock.count() != 0 {
+			t.Fatalf("NOWPayments API calls = %d, want 0", mock.count())
+		}
+	})
+
+	t.Run("unconfigured adapter alerts nowpayments_unavailable", func(t *testing.T) {
+		e := newE2EEnv(t) // no NOWPayments credentials
+		orderID := e.placeOrder(buyer, e.prodReg, "")
+		calls := e.cb(buyer, fmt.Sprintf("pay:nowpayments:%d", orderID), "en")
+		requireCall(t, calls, "answerCallbackQuery", "not available")
+	})
+
+	t.Run("subscription order alerts sub_stars_only", func(t *testing.T) {
+		e, mock := newConfiguredEnv(t)
+		orderID := e.placeOrder(buyer, e.prodSub, "")
+		calls := e.cb(buyer, fmt.Sprintf("pay:nowpayments:%d", orderID), "en")
+		requireCall(t, calls, "answerCallbackQuery", "only be paid with Telegram Stars")
+		if mock.count() != 0 {
+			t.Fatalf("NOWPayments API calls = %d, want 0", mock.count())
+		}
+	})
+
+	t.Run("API failure informs the buyer", func(t *testing.T) {
+		e, mock := newConfiguredEnv(t)
+		mock.fail()
+		orderID := e.placeOrder(buyer, e.prodReg, "")
+		calls := e.cb(buyer, fmt.Sprintf("pay:nowpayments:%d", orderID), "en")
+		requireCall(t, calls, "sendMessage", "Error creating payment")
+		if mock.count() != 1 {
+			t.Fatalf("NOWPayments API calls = %d, want 1", mock.count())
+		}
+	})
+}

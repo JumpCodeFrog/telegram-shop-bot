@@ -323,6 +323,16 @@
       payStripe.type = 'button';
       payStripe.onclick = function () { checkout('stripe', promo.value, payStripe); };
       screenEl.appendChild(payStripe);
+
+      var payTon = el('button', 'btn secondary', t('webapp_pay_ton'));
+      payTon.type = 'button';
+      payTon.onclick = function () { checkout('ton', promo.value, payTon); };
+      screenEl.appendChild(payTon);
+
+      var payNowp = el('button', 'btn secondary', t('webapp_pay_nowpayments'));
+      payNowp.type = 'button';
+      payNowp.onclick = function () { checkout('nowpayments', promo.value, payNowp); };
+      screenEl.appendChild(payNowp);
     }).catch(showError);
   }
 

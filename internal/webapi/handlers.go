@@ -97,6 +97,22 @@ type StripeInvoicer interface {
 	CreateCheckoutSession(ctx context.Context, orderID int64, amountCents int64, description string) (*payment.Invoice, error)
 }
 
+// TONLinker builds ton:// deeplinks for wallet transfers
+// (payment.TONPayment). TON has no server-side invoice create: the handler
+// only deeplinks the buyer's wallet to the shop's address with the order
+// reference prefilled, so the interface is pure and has no error path.
+type TONLinker interface {
+	Configured() bool
+	TransferLink(nano int64, orderID int64) string
+}
+
+// NowpaymentsInvoicer creates NOWPayments hosted invoices
+// (payment.NowpaymentsPayment).
+type NowpaymentsInvoicer interface {
+	Configured() bool
+	CreateInvoice(ctx context.Context, orderID int64, amountCents int64, description string) (*payment.Invoice, error)
+}
+
 // FileURLResolver resolves a Telegram file_id to a direct download URL
 // (tgbotapi.BotAPI.GetFileDirectURL).
 type FileURLResolver interface {
@@ -112,20 +128,22 @@ type Localizer interface {
 
 // Deps carries every dependency of the Mini App API server.
 type Deps struct {
-	Auth     *Authenticator
-	Catalog  CatalogService
-	Cart     CartService
-	Orders   OrderService
-	Users    storage.UserStore
-	Promos   PromoStore
-	Reviews  RatingStore
-	Photos   PhotoStore
-	I18n     Localizer
-	Tg       TelegramAPI
-	Crypto   CryptoInvoicer
-	YooKassa YooKassaInvoicer
-	Stripe   StripeInvoicer
-	Files    FileURLResolver
+	Auth        *Authenticator
+	Catalog     CatalogService
+	Cart        CartService
+	Orders      OrderService
+	Users       storage.UserStore
+	Promos      PromoStore
+	Reviews     RatingStore
+	Photos      PhotoStore
+	I18n        Localizer
+	Tg          TelegramAPI
+	Crypto      CryptoInvoicer
+	YooKassa    YooKassaInvoicer
+	Stripe      StripeInvoicer
+	TON         TONLinker
+	Nowpayments NowpaymentsInvoicer
+	Files       FileURLResolver
 }
 
 type cachedFileURL struct {
@@ -478,10 +496,10 @@ func (s *Server) decodeBody(w http.ResponseWriter, r *http.Request, v any) bool 
 	return true
 }
 
-// POST /api/checkout {"method":"stars"|"crypto"|"yookassa"|"stripe","promo":""} → {"order_id","invoice_link"}.
+// POST /api/checkout {"method":"stars"|"crypto"|"yookassa"|"stripe"|"ton"|"nowpayments","promo":""} → {"order_id","invoice_link"}.
 // The order is created through the same OrderService.CreateFromCart as the bot
 // flow; payment confirmation then arrives via the existing successful_payment /
-// CryptoBot / YooKassa / Stripe webhook pipeline.
+// CryptoBot / YooKassa / Stripe / NOWPayments webhook and TON polling pipeline.
 func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request, auth *AuthResult) {
 	var req struct {
 		Method string `json:"method"`
@@ -490,7 +508,7 @@ func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request, auth *Au
 	if !s.decodeBody(w, r, &req) {
 		return
 	}
-	if req.Method != storage.PaymentMethodStars && req.Method != storage.PaymentMethodCrypto && req.Method != storage.PaymentMethodYooKassa && req.Method != storage.PaymentMethodStripe {
+	if req.Method != storage.PaymentMethodStars && req.Method != storage.PaymentMethodCrypto && req.Method != storage.PaymentMethodYooKassa && req.Method != storage.PaymentMethodStripe && req.Method != storage.PaymentMethodTON && req.Method != storage.PaymentMethodNowpayments {
 		s.writeError(w, http.StatusBadRequest, "webapp_err_method")
 		return
 	}
@@ -504,6 +522,14 @@ func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request, auth *Au
 	}
 	if req.Method == storage.PaymentMethodStripe && (s.deps.Stripe == nil || !s.deps.Stripe.Configured()) {
 		s.writeError(w, http.StatusBadRequest, "webapp_err_stripe_disabled")
+		return
+	}
+	if req.Method == storage.PaymentMethodTON && (s.deps.TON == nil || !s.deps.TON.Configured()) {
+		s.writeError(w, http.StatusBadRequest, "webapp_err_ton_disabled")
+		return
+	}
+	if req.Method == storage.PaymentMethodNowpayments && (s.deps.Nowpayments == nil || !s.deps.Nowpayments.Configured()) {
+		s.writeError(w, http.StatusBadRequest, "webapp_err_nowpayments_disabled")
 		return
 	}
 
@@ -603,6 +629,24 @@ func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request, auth *Au
 		}
 		var inv *payment.Invoice
 		inv, err = s.deps.Stripe.CreateCheckoutSession(ctx, order.ID, amountCents, orderDescription(order.Items))
+		if err == nil {
+			link = inv.PayURL
+		}
+	case storage.PaymentMethodTON:
+		// TotalTonNano is 0 when the TON rate was unset at order creation
+		// (TON disabled): refuse rather than deeplink a zero amount. The
+		// deeplink itself is a pure function — no API call, no error path.
+		if order.TotalTonNano <= 0 {
+			s.writeError(w, http.StatusBadRequest, "webapp_err_ton_disabled")
+			return
+		}
+		link = s.deps.TON.TransferLink(order.TotalTonNano, order.ID)
+	case storage.PaymentMethodNowpayments:
+		// Cents from the USD total, mirroring Stripe — but NOWPayments has
+		// no minimum charge, so there is no amount guard here.
+		amountCents := int64(math.Round(order.TotalUSD * 100))
+		var inv *payment.Invoice
+		inv, err = s.deps.Nowpayments.CreateInvoice(ctx, order.ID, amountCents, orderDescription(order.Items))
 		if err == nil {
 			link = inv.PayURL
 		}

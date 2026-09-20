@@ -143,3 +143,82 @@ func TestAppendPaymentIngressAuditAcceptsYooKassa(t *testing.T) {
 		t.Fatalf("unknown provider audit: err=%v, want ErrPaymentReviewConflict", err)
 	}
 }
+
+// TestAppendPaymentIngressAuditAcceptsTONAndNowpayments proves the operator
+// ingress audit gate accepts the ton and nowpayments provider identities,
+// and that the allowlist still fails closed for the DB-only balance
+// forward-pin. The unexported helper is driven directly inside a
+// transaction, exactly the way recordPaymentAnomaly calls it.
+// Feature: shop_bot, Property 2: Round-trip хранилища данных
+// Validates: Requirements 12.5, 9.3
+func TestAppendPaymentIngressAuditAcceptsTONAndNowpayments(t *testing.T) {
+	db, err := New(":memory:")
+	if err != nil {
+		t.Fatalf("New(:memory:): %v", err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+
+	if _, err := db.Conn().ExecContext(ctx, "INSERT INTO categories (name) VALUES ('Cat')"); err != nil {
+		t.Fatalf("seed category: %v", err)
+	}
+	if _, err := db.Conn().ExecContext(ctx,
+		`INSERT INTO products (category_id, name, price_usd, price_stars, stock, is_active)
+		 VALUES (1, 'Gadget', 0, 0, 10, 1)`); err != nil {
+		t.Fatalf("seed product: %v", err)
+	}
+	orderID := int64(1)
+
+	// The audited target is a quarantined ton fact. The DB CHECKs have
+	// accepted ton/nowpayments since migration 021, so seed the anomaly row
+	// directly and isolate the app-level audit gate.
+	res, err := db.Conn().ExecContext(ctx,
+		`INSERT INTO payment_anomalies (fingerprint, proposed_order_id, provider, external_id, amount_minor, currency, scale, reason)
+		 VALUES ('ton-audit-fingerprint', 0, 'ton', 'ton-tx-9', 100, 'TON', 9, 'amount_mismatch')`)
+	if err != nil {
+		t.Fatalf("seed anomaly: %v", err)
+	}
+	anomalyID, err := res.LastInsertId()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, provider := range []string{PaymentMethodTON, PaymentMethodNowpayments} {
+		audit := PaymentIngressAudit{Actor: "operator:" + provider, Reason: provider + " quarantine reviewed"}
+		tx, err := db.Conn().BeginTx(ctx, nil)
+		if err != nil {
+			t.Fatalf("begin %s tx: %v", provider, err)
+		}
+		if err := appendPaymentIngressAudit(ctx, tx, orderID, provider,
+			PaymentEventCaptured, PaymentIngressTargetAnomaly, anomalyID, audit); err != nil {
+			tx.Rollback()
+			t.Fatalf("append %s audit: %v", provider, err)
+		}
+		if err := tx.Commit(); err != nil {
+			t.Fatalf("commit %s audit: %v", provider, err)
+		}
+		var stored string
+		if err := db.Conn().QueryRowContext(ctx,
+			`SELECT provider FROM payment_ingress_audits WHERE provider = ? AND actor = ?`,
+			provider, "operator:"+provider).Scan(&stored); err != nil {
+			t.Fatalf("load %s audit: %v", provider, err)
+		}
+		if stored != provider {
+			t.Fatalf("%s audit provider=%s", provider, stored)
+		}
+	}
+
+	// The allowlist still fails closed for providers with no app-level
+	// identity: balance is a DB-only forward-pin and stays rejected here.
+	tx, err := db.Conn().BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin balance tx: %v", err)
+	}
+	defer tx.Rollback()
+	if err := appendPaymentIngressAudit(ctx, tx, orderID, PaymentMethodBalance,
+		PaymentEventCaptured, PaymentIngressTargetAnomaly, anomalyID,
+		PaymentIngressAudit{Actor: "operator:balance", Reason: "balance quarantine reviewed"}); !errors.Is(err, ErrPaymentReviewConflict) {
+		t.Fatalf("balance audit: err=%v, want ErrPaymentReviewConflict", err)
+	}
+}

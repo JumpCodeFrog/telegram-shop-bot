@@ -7,6 +7,7 @@ type webhookEndpoints interface {
 	CryptoBotWebhookHandler() http.HandlerFunc
 	YooKassaWebhookHandler() http.HandlerFunc
 	StripeWebhookHandler() http.HandlerFunc
+	NowpaymentsWebhookHandler() http.HandlerFunc
 }
 
 func mountWebhookRoutes(mux *http.ServeMux, endpoints webhookEndpoints) {
@@ -14,4 +15,5 @@ func mountWebhookRoutes(mux *http.ServeMux, endpoints webhookEndpoints) {
 	mux.Handle("/cryptobot-webhook", endpoints.CryptoBotWebhookHandler())
 	mux.Handle("/yookassa-webhook", endpoints.YooKassaWebhookHandler())
 	mux.Handle("/stripe-webhook", endpoints.StripeWebhookHandler())
+	mux.Handle("/nowpayments-webhook", endpoints.NowpaymentsWebhookHandler())
 }
