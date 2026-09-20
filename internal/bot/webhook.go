@@ -171,10 +171,16 @@ func (b *Bot) YooKassaWebhookHandler() http.HandlerFunc {
 		if err != nil || notification.PaymentID == "" {
 			// Unparseable or factless body: quarantine a digest, ACK so YooKassa
 			// does not retry garbage forever (mirrors the crypto parse path).
+			// The reason distinguishes the two cases: an envelope that parsed
+			// cleanly but carried no payment id is not a parse failure.
+			reason := "webhook_parse_failure"
+			if err == nil {
+				reason = "webhook_missing_payment_id"
+			}
 			digest := sha256.Sum256(body)
 			recordErr := b.order.RecordPaymentAnomaly(r.Context(), storage.PaymentAnomaly{
 				Provider: storage.PaymentMethodYooKassa, RawPayload: fmt.Sprintf("sha256:%x", digest),
-				Reason: "webhook_parse_failure",
+				Reason: reason,
 			})
 			if err == nil && notification != nil && notification.PaymentID == "" {
 				w.WriteHeader(http.StatusOK) // valid envelope, no payment id: nothing to do
