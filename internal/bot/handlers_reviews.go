@@ -115,7 +115,7 @@ func (b *Bot) onReviewRate(cbID string, chatID, userID int64, msgID int, data, l
 		return
 	}
 
-	ctx, cancel := handlerCtx()
+	ctx, cancel := b.handlerCtx()
 	defer cancel()
 
 	order, err := b.order.GetOrder(ctx, orderID)
@@ -150,7 +150,7 @@ func (b *Bot) onReviewRate(cbID string, chatID, userID int64, msgID int, data, l
 
 // onReviewSkip finishes the review flow without a text.
 func (b *Bot) onReviewSkip(cbID string, chatID, userID int64, msgID int, lang string) {
-	ctx, cancel := handlerCtx()
+	ctx, cancel := b.handlerCtx()
 	defer cancel()
 	_ = b.fsm.DelReviewState(ctx, userID) // best effort: state also expires by TTL
 
@@ -164,7 +164,7 @@ func (b *Bot) handleReviewTextInput(msg *tgbotapi.Message, state *storage.Review
 	chatID := msg.Chat.ID
 	lang := msg.From.LanguageCode
 
-	ctx, cancel := handlerCtx()
+	ctx, cancel := b.handlerCtx()
 	defer cancel()
 	// Clear the state up front so a failing save never traps the user in the FSM.
 	_ = b.fsm.DelReviewState(ctx, userID)
@@ -205,7 +205,7 @@ func (b *Bot) onReviewList(chatID int64, msgID int, data, lang string) {
 		return
 	}
 
-	ctx, cancel := handlerCtx()
+	ctx, cancel := b.handlerCtx()
 	defer cancel()
 	reviews, err := b.reviews.ListByProduct(ctx, prodID, 3)
 	if err != nil {
@@ -244,7 +244,7 @@ func (b *Bot) handleReviewsAdmin(msg *tgbotapi.Message) {
 	}
 	lang := msg.From.LanguageCode
 
-	ctx, cancel := handlerCtx()
+	ctx, cancel := b.handlerCtx()
 	defer cancel()
 	reviews, err := b.reviews.ListRecent(ctx, 10)
 	if err != nil {
@@ -284,7 +284,7 @@ func (b *Bot) onReviewDelete(chatID int64, data, lang string) {
 		return
 	}
 
-	ctx, cancel := handlerCtx()
+	ctx, cancel := b.handlerCtx()
 	defer cancel()
 	if err := b.reviews.Delete(ctx, id); err != nil {
 		b.logger.Error("review: delete", "review_id", id, "error", err)

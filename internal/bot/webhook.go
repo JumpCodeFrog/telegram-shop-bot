@@ -49,7 +49,7 @@ func (b *Bot) CryptoBotWebhookHandler() http.HandlerFunc {
 		payload, err := b.crypto.ParseWebhook(body)
 		if err != nil {
 			digest := sha256.Sum256(body)
-			recordErr := b.order.RecordPaymentAnomaly(context.Background(), storage.PaymentAnomaly{
+			recordErr := b.order.RecordPaymentAnomaly(r.Context(), storage.PaymentAnomaly{
 				Provider: storage.PaymentMethodCrypto, RawPayload: fmt.Sprintf("sha256:%x", digest), Reason: "webhook_parse_failure",
 			})
 			if recordErr == nil || errors.Is(recordErr, storage.ErrPaymentNeedsReview) {
@@ -67,7 +67,9 @@ func (b *Bot) CryptoBotWebhookHandler() http.HandlerFunc {
 			return
 		}
 
-		ctx := context.Background()
+		// The webhook request IS the context: all settlement work below
+		// completes before the response is written, so propagate r.Context().
+		ctx := r.Context()
 		if !payload.ReceiptComplete {
 			anomaly, _ := (payment.PendingInvoice{
 				InvoiceID: payload.InvoiceID, Status: payload.Status, OrderID: payload.OrderID,

@@ -144,7 +144,7 @@ func (b *Bot) handleMySubs(msg *tgbotapi.Message) {
 // sendMySubs renders the active-subscriptions screen with a cancel button per
 // subscription.
 func (b *Bot) sendMySubs(chatID, userID int64, msgID int, lang string) {
-	ctx, cancel := handlerCtx()
+	ctx, cancel := b.handlerCtx()
 	defer cancel()
 
 	subs, err := b.subs.ListActiveByUser(ctx, userID)
@@ -187,7 +187,7 @@ func (b *Bot) onSubCancel(cbID string, chatID, userID int64, msgID int, data, la
 		return
 	}
 
-	ctx, cancel := handlerCtx()
+	ctx, cancel := b.handlerCtx()
 	defer cancel()
 
 	// Resolve the subscription through the user's own active list: this both

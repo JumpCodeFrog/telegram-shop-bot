@@ -98,7 +98,7 @@ func payReviewReasons(item storage.PaymentReviewCase) string {
 
 // sendPayReviewList renders the queue: one line plus one card button per case.
 func (b *Bot) sendPayReviewList(chatID int64, msgID int, lang string) {
-	ctx, cancel := handlerCtx()
+	ctx, cancel := b.handlerCtx()
 	defer cancel()
 	cases, err := b.listAllPaymentReviews(ctx)
 	if err != nil {
@@ -262,7 +262,7 @@ func (b *Bot) payReviewActionLabel(lang, action string) string {
 // sendPayReviewCard renders one case: order summary, payment state, every
 // target with its reason code, and the action buttons.
 func (b *Bot) sendPayReviewCard(chatID int64, msgID int, ref payReviewRef, lang string) {
-	ctx, cancel := handlerCtx()
+	ctx, cancel := b.handlerCtx()
 	defer cancel()
 	item, err := b.findReviewCase(ctx, ref)
 	if err != nil {
@@ -302,7 +302,7 @@ func (b *Bot) sendPayReviewCard(chatID int64, msgID int, ref payReviewRef, lang 
 // from the freshly reloaded case and validate it against the ledger without
 // writing anything.
 func (b *Bot) onAdminPayReviewPreview(chatID int64, msgID int, userID int64, ref payReviewRef, lang string) {
-	ctx, cancel := handlerCtx()
+	ctx, cancel := b.handlerCtx()
 	defer cancel()
 	item, err := b.findReviewCase(ctx, ref)
 	if err == nil {
@@ -344,7 +344,7 @@ func payReviewResultState(item storage.PaymentReviewCase, action string) string 
 // onAdminPayReviewConfirm is the second tap: reload, rebuild, re-preview (the
 // target set may have changed since the first tap), then apply.
 func (b *Bot) onAdminPayReviewConfirm(chatID int64, msgID int, userID int64, ref payReviewRef, lang string) {
-	ctx, cancel := handlerCtx()
+	ctx, cancel := b.handlerCtx()
 	defer cancel()
 	item, err := b.findReviewCase(ctx, ref)
 	if err == nil {

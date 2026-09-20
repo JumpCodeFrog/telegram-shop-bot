@@ -15,7 +15,7 @@ import (
 
 // onPromoEnter sets the user into promo-entry mode and asks for the code.
 func (b *Bot) onPromoEnter(chatID, userID int64, lang string) {
-	fsmCtx, cancel := handlerCtx()
+	fsmCtx, cancel := b.handlerCtx()
 	defer cancel()
 	_ = b.fsm.SetPromoState(fsmCtx, userID, time.Now(), 10*time.Hour)
 
@@ -34,14 +34,14 @@ func (b *Bot) handlePromoInput(msg *tgbotapi.Message) {
 	chatID := msg.Chat.ID
 	lang := msg.From.LanguageCode
 
-	fsmCtx, fsmCancel := handlerCtx()
+	fsmCtx, fsmCancel := b.handlerCtx()
 	// Clear promo state immediately regardless of outcome.
 	_ = b.fsm.DelPromoState(fsmCtx, userID)
 	fsmCancel()
 
 	code := strings.TrimSpace(strings.ToUpper(msg.Text))
 
-	ctx, cancel := handlerCtx()
+	ctx, cancel := b.handlerCtx()
 	defer cancel()
 	promo, err := b.promos.GetPromoByCode(ctx, code)
 	if err != nil {
@@ -128,7 +128,7 @@ func (b *Bot) onOrderConfirm(chatID, userID int64, msgID int, data, lang string)
 		promoCode = strings.TrimPrefix(data, "order:confirm:promo:")
 	}
 
-	ctx, cancel := handlerCtx()
+	ctx, cancel := b.handlerCtx()
 	defer cancel()
 	view, err := b.cart.Get(ctx, userID)
 	if err != nil {

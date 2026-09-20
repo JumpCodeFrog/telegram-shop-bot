@@ -98,8 +98,10 @@ type Bot struct {
 }
 
 // handlerCtx returns a context with a 30-second deadline for use in handler
-// DB/service calls. This prevents a single slow query from holding a goroutine indefinitely.
-func handlerCtx() (context.Context, context.CancelFunc) {
+// DB/service calls: a per-handler timeout until full update-context
+// propagation exists. This prevents a single slow query from holding a
+// goroutine indefinitely.
+func (*Bot) handlerCtx() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), 30*time.Second)
 }
 
@@ -197,6 +199,8 @@ func NewWithAPI(cfg *config.Config, api *tgbotapi.BotAPI, db *storage.DB, metric
 		balances:        balanceStore,
 		subs:            storage.NewSQLSubscriptionStore(db),
 	}
+	// One-time setup at construction: no request/update context exists yet, so
+	// context.Background() is the honest root (not a per-handler handlerCtx).
 	b.reloadButtonStyles(context.Background())
 	// handler is built lazily in Run so we have a context.
 	return b, nil
@@ -222,6 +226,8 @@ func (b *Bot) prepareHandler(ctx context.Context) {
 
 func (b *Bot) ensureHandler(ctx context.Context) {
 	if ctx == nil {
+		// Long-lived: this ctx controls the rate-limit cleanup goroutine for
+		// the process lifetime; a per-handler handlerCtx (30s) would kill it.
 		ctx = context.Background()
 	}
 
@@ -415,6 +421,8 @@ func (b *Bot) Run(ctx context.Context) error {
 // HandleUpdate processes a single Telegram update through the full middleware
 // chain. It is useful for local smoke tooling and webhook-style entry points.
 func (b *Bot) HandleUpdate(update tgbotapi.Update) {
+	// ensureHandler keeps this ctx for the handler-chain lifetime (rate-limit
+	// cleanup goroutine), so it must be background, not a 30s handlerCtx.
 	b.ensureHandler(context.Background())
 	b.handler(update)
 }

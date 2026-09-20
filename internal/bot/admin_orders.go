@@ -2,7 +2,6 @@ package bot
 
 import (
 	"bytes"
-	"context"
 	"encoding/csv"
 	"errors"
 	"fmt"
@@ -22,7 +21,9 @@ func (b *Bot) handleOrdersAll(msg *tgbotapi.Message) {
 	}
 	lang := msg.From.LanguageCode
 	statusFilter := strings.TrimSpace(msg.CommandArguments())
-	orders, err := b.order.GetAllOrders(context.Background(), statusFilter)
+	ctx, cancel := b.handlerCtx()
+	defer cancel()
+	orders, err := b.order.GetAllOrders(ctx, statusFilter)
 	if err != nil {
 		b.logger.Error("get all orders", "status", statusFilter, "error", err)
 		b.send(tgbotapi.NewMessage(msg.Chat.ID, b.t(lang, "admin_orders_load_failed")))
@@ -59,7 +60,7 @@ func (b *Bot) handleOrderCard(msg *tgbotapi.Message) {
 		return
 	}
 
-	ctx, cancel := handlerCtx()
+	ctx, cancel := b.handlerCtx()
 	defer cancel()
 	order, err := b.order.GetOrder(ctx, id)
 	if err != nil {
@@ -131,7 +132,9 @@ func (b *Bot) handleSetDelivered(msg *tgbotapi.Message) {
 		b.send(tgbotapi.NewMessage(msg.Chat.ID, b.t(lang, "admin_usage_setdelivered")))
 		return
 	}
-	order, err := b.order.SetDelivered(context.Background(), id)
+	ctx, cancel := b.handlerCtx()
+	defer cancel()
+	order, err := b.order.SetDelivered(ctx, id)
 	if err != nil {
 		b.logger.Error("set delivered", "order_id", id, "error", err)
 		b.send(tgbotapi.NewMessage(msg.Chat.ID, b.t(lang, "admin_set_delivered_failed")))
@@ -140,9 +143,9 @@ func (b *Bot) handleSetDelivered(msg *tgbotapi.Message) {
 	b.send(tgbotapi.NewMessage(msg.Chat.ID, fmt.Sprintf(b.t(lang, "admin_delivered_ok"), order.ID)))
 
 	// Invite the buyer to rate the freshly delivered order (1..5 stars).
-	b.sendReviewInvite(context.Background(), order)
+	b.sendReviewInvite(ctx, order)
 
-	b.notifyAdmins(context.Background(), AdminEventOrderDelivered,
+	b.notifyAdmins(ctx, AdminEventOrderDelivered,
 		fmt.Sprintf(b.t("en", "admin_order_delivered"), order.ID, order.UserID))
 
 	b.outWebhook.Send(service.OutboundWebhookEvent{
@@ -211,7 +214,9 @@ func (b *Bot) handleExportOrders(msg *tgbotapi.Message) {
 		return
 	}
 
-	orders, err := b.order.GetAllOrders(context.Background(), "")
+	ctx, cancel := b.handlerCtx()
+	defer cancel()
+	orders, err := b.order.GetAllOrders(ctx, "")
 	if err != nil {
 		b.logger.Error("export orders", "error", err)
 		b.send(tgbotapi.NewMessage(msg.Chat.ID, b.t(lang, "admin_export_failed")))

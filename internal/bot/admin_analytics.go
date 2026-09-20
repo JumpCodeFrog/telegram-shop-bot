@@ -1,7 +1,6 @@
 package bot
 
 import (
-	"context"
 	"fmt"
 	"math"
 	"strconv"
@@ -71,7 +70,8 @@ func renderRevenueChart(daily []storage.DailyRevenue, today time.Time, days int)
 }
 
 func (b *Bot) sendAnalytics(chatID int64, msgID int, days int, lang string) {
-	ctx := context.Background()
+	ctx, cancel := b.handlerCtx()
+	defer cancel()
 	fail := func(stage string, err error) {
 		b.logger.Error("analytics "+stage, "error", err)
 		b.send(tgbotapi.NewMessage(chatID, b.t(lang, "admin_analytics_error")))

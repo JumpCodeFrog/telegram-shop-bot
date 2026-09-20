@@ -107,7 +107,8 @@ func (b *Bot) addProductPhoto(ctx context.Context, chatID, productID int64, file
 // sendAdminPhotoList renders the photo management screen for a product:
 // one delete button per photo plus an add button.
 func (b *Bot) sendAdminPhotoList(chatID int64, msgID int, productID int64, lang string) {
-	ctx := context.Background()
+	ctx, cancel := b.handlerCtx()
+	defer cancel()
 	photos, err := b.photos.List(ctx, productID)
 	if err != nil {
 		b.logger.Error("list product photos", "product_id", productID, "error", err)
@@ -144,7 +145,8 @@ func (b *Bot) onAdminPhotoDelete(chatID int64, msgID int, data, lang string) {
 		return
 	}
 
-	ctx := context.Background()
+	ctx, cancel := b.handlerCtx()
+	defer cancel()
 	if err := b.photos.Delete(ctx, photoID); err != nil {
 		b.logger.Error("delete product photo", "photo_id", photoID, "error", err)
 		b.send(tgbotapi.NewMessage(chatID, b.t(lang, "admin_photo_error")))
@@ -196,7 +198,8 @@ func (b *Bot) onAdminPhotoAdd(chatID, userID int64, data, lang string) {
 		b.logger.Error("parse admin:photoadd callback", "error", err)
 		return
 	}
-	ctx := context.Background()
+	ctx, cancel := b.handlerCtx()
+	defer cancel()
 	_ = b.fsm.SetAddProductState(ctx, userID, &storage.AddProductState{Step: storage.StepPhoto, EditProductID: productID, CreatedAt: time.Now()}, 30*time.Minute)
 	b.send(tgbotapi.NewMessage(chatID, b.t(lang, "admin_photo_prompt")))
 }

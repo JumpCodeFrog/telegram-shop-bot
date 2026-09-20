@@ -47,7 +47,7 @@ func (b *Bot) handleSetBalance(msg *tgbotapi.Message) {
 		reason = "admin_adjust: " + strings.Join(args[2:], " ")
 	}
 
-	ctx, cancel := handlerCtx()
+	ctx, cancel := b.handlerCtx()
 	defer cancel()
 	newBalance, err := b.balances.AdjustBalance(ctx, targetID, amount, reason, msg.From.ID)
 	if err != nil {
