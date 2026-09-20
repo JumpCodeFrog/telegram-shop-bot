@@ -67,7 +67,7 @@ func TestHasPendingOrderWithPromo_IgnoresNonPendingOrOtherPromo(t *testing.T) {
 }
 
 func TestPaymentMethodKeyboard_HidesCryptoWhenDisabled(t *testing.T) {
-	keyboard := paymentMethodKeyboard(15, false, false, false, 0, 100, 1.50, "", nil)
+	keyboard := paymentMethodKeyboard(15, false, false, false, false, false, 0, 100, 1.50, 0, "", nil)
 
 	// Stars row + terms/support row + cancel/orders row + menu row
 	if len(keyboard) != 4 {
@@ -81,7 +81,7 @@ func TestPaymentMethodKeyboard_HidesCryptoWhenDisabled(t *testing.T) {
 }
 
 func TestPaymentMethodKeyboard_ShowsCryptoWhenEnabled(t *testing.T) {
-	keyboard := paymentMethodKeyboard(15, true, false, false, 0, 100, 1.50, "", nil)
+	keyboard := paymentMethodKeyboard(15, true, false, false, false, false, 0, 100, 1.50, 0, "", nil)
 
 	// Stars row + crypto row + terms/support row + cancel/orders row + menu row
 	if len(keyboard) != 5 {
@@ -131,7 +131,7 @@ func TestPaymentMethodKeyboard_StripeDisabledPathInvariance(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			keyboard := paymentMethodKeyboard(15, tc.cryptoEnabled, tc.yookassaOK, false, 1849.08, 100, 19.99, "", nil)
+			keyboard := paymentMethodKeyboard(15, tc.cryptoEnabled, tc.yookassaOK, false, false, false, 1849.08, 100, 19.99, 0, "", nil)
 			if got := styledCallbacks(keyboard); !slices.Equal(got, tc.want) {
 				t.Fatalf("callbacks = %v, want %v", got, tc.want)
 			}
@@ -140,7 +140,7 @@ func TestPaymentMethodKeyboard_StripeDisabledPathInvariance(t *testing.T) {
 }
 
 func TestPaymentMethodKeyboard_ShowsStripeAfterYooKassa(t *testing.T) {
-	keyboard := paymentMethodKeyboard(15, true, true, true, 1849.08, 100, 19.99, "", nil)
+	keyboard := paymentMethodKeyboard(15, true, true, true, false, false, 1849.08, 100, 19.99, 0, "", nil)
 
 	// Row order stays stars → crypto → yookassa → stripe → footer rows.
 	want := []string{"pay:stars:15", "pay:crypto:15", "pay:yookassa:15", "pay:stripe:15", "terms", "paysupport", "order:cancel:15", "back:orders", "back:menu"}
@@ -152,7 +152,7 @@ func TestPaymentMethodKeyboard_ShowsStripeAfterYooKassa(t *testing.T) {
 }
 
 func TestPaymentMethodKeyboard_HidesStripeWhenDisabled(t *testing.T) {
-	keyboard := paymentMethodKeyboard(15, true, false, false, 0, 100, 1.50, "", nil)
+	keyboard := paymentMethodKeyboard(15, true, false, false, false, false, 0, 100, 1.50, 0, "", nil)
 
 	// Stars row + crypto row + terms/support row + cancel/orders row + menu row
 	if len(keyboard) != 5 {
@@ -163,6 +163,88 @@ func TestPaymentMethodKeyboard_HidesStripeWhenDisabled(t *testing.T) {
 			if button.CallbackData == "pay:stripe:15" {
 				t.Fatalf("stripe button must be hidden when disabled: %+v", button)
 			}
+		}
+	}
+}
+
+func TestPaymentMethodKeyboard_TONNowpaymentsDisabledPathInvariance(t *testing.T) {
+	// With TON and NOWPayments disabled the full callback list must be
+	// byte-identical to the pre-TON/NOWPayments row set, whatever the other
+	// rails do — even when a positive nanoton total is passed in.
+	for _, tc := range []struct {
+		name          string
+		cryptoEnabled bool
+		yookassaOK    bool
+		stripeOK      bool
+		want          []string
+	}{
+		{
+			name: "stars only",
+			want: []string{"pay:stars:15", "terms", "paysupport", "order:cancel:15", "back:orders", "back:menu"},
+		},
+		{
+			name:          "all legacy rails offered",
+			cryptoEnabled: true,
+			yookassaOK:    true,
+			stripeOK:      true,
+			want:          []string{"pay:stars:15", "pay:crypto:15", "pay:yookassa:15", "pay:stripe:15", "terms", "paysupport", "order:cancel:15", "back:orders", "back:menu"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			keyboard := paymentMethodKeyboard(15, tc.cryptoEnabled, tc.yookassaOK, tc.stripeOK, false, false, 1849.08, 100, 19.99, 1500000000, "", nil)
+			if got := styledCallbacks(keyboard); !slices.Equal(got, tc.want) {
+				t.Fatalf("callbacks = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestPaymentMethodKeyboard_ShowsTONAndNowpaymentsAfterStripe(t *testing.T) {
+	keyboard := paymentMethodKeyboard(15, true, true, true, true, true, 1849.08, 100, 19.99, 1500000000, "", nil)
+
+	// Row order stays stars → crypto → yookassa → stripe → ton → nowpayments → footer.
+	want := []string{"pay:stars:15", "pay:crypto:15", "pay:yookassa:15", "pay:stripe:15", "pay:ton:15", "pay:nowpayments:15", "terms", "paysupport", "order:cancel:15", "back:orders", "back:menu"}
+	if got := styledCallbacks(keyboard); !slices.Equal(got, want) {
+		t.Fatalf("callbacks = %v, want %v", got, want)
+	}
+
+	assertPaymentButton(t, keyboard[4][0], "💎 Pay 1.5 TON", "pay:ton:15")
+	assertPaymentButton(t, keyboard[5][0], "🪙 Pay crypto", "pay:nowpayments:15")
+}
+
+func TestPaymentMethodKeyboard_TONAndNowpaymentsToggleIndependently(t *testing.T) {
+	// TON only: the row lands after the (disabled) Stripe slot, before the footer.
+	tonOnly := paymentMethodKeyboard(15, false, false, false, true, false, 0, 100, 1.50, 1500000000, "", nil)
+	wantTON := []string{"pay:stars:15", "pay:ton:15", "terms", "paysupport", "order:cancel:15", "back:orders", "back:menu"}
+	if got := styledCallbacks(tonOnly); !slices.Equal(got, wantTON) {
+		t.Fatalf("TON-only callbacks = %v, want %v", got, wantTON)
+	}
+
+	// NOWPayments only.
+	nowpOnly := paymentMethodKeyboard(15, false, false, false, false, true, 0, 100, 1.50, 1500000000, "", nil)
+	wantNowp := []string{"pay:stars:15", "pay:nowpayments:15", "terms", "paysupport", "order:cancel:15", "back:orders", "back:menu"}
+	if got := styledCallbacks(nowpOnly); !slices.Equal(got, wantNowp) {
+		t.Fatalf("NOWPayments-only callbacks = %v, want %v", got, wantNowp)
+	}
+}
+
+func TestFormatTON(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		nano int64
+		want string
+	}{
+		{0, "0"},
+		{2000000000, "2"},
+		{1500000000, "1.5"},
+		{3896686160, "3.89668616"},
+		{1, "0.000000001"},
+		{100000000, "0.1"},
+		{1234567890, "1.23456789"},
+	} {
+		if got := formatTON(tc.nano); got != tc.want {
+			t.Errorf("formatTON(%d) = %q, want %q", tc.nano, got, tc.want)
 		}
 	}
 }

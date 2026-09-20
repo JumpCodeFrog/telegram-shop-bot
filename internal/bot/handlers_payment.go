@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"strconv"
+	"strings"
 	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
@@ -331,6 +332,161 @@ func (b *Bot) onPayStripe(cbID string, chatID, userID int64, msgID int, data, la
 	reply.ParseMode = "HTML"
 	reply.ReplyMarkup = keyboard
 	b.send(reply)
+}
+
+func (b *Bot) onPayTON(cbID string, chatID, userID int64, msgID int, data, lang string) {
+	if !b.tonPaymentsEnabled() {
+		b.alert(cbID, b.t(lang, "ton_unavailable"))
+		return
+	}
+
+	orderID, err := parseIDFromCallback(data, "pay:ton:")
+	if err != nil {
+		b.logger.Error("parse pay:ton callback", "error", err)
+		b.ack(cbID)
+		return
+	}
+
+	ctx := context.Background()
+	target, err := b.loadPayableOrder(ctx, userID, orderID)
+	if err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			b.alert(cbID, b.t(lang, "order_not_found"))
+			return
+		}
+		if errors.Is(err, storage.ErrOrderStatusConflict) {
+			b.alert(cbID, b.t(lang, "order_already_paid"))
+			return
+		}
+		b.logger.Error("load payable order for ton payment", "order_id", orderID, "error", err)
+		b.alert(cbID, b.t(lang, "error_short"))
+		return
+	}
+
+	// Subscription products are payable with Telegram Stars only.
+	if _, subDays, subErr := b.orderSubscriptionProduct(ctx, target); subErr != nil {
+		b.logger.Error("detect subscription product for ton payment", "order_id", orderID, "error", subErr)
+		b.alert(cbID, b.t(lang, "error_short"))
+		return
+	} else if subDays > 0 {
+		b.alert(cbID, b.t(lang, "sub_stars_only"))
+		return
+	}
+
+	// The nanoton snapshot is taken at checkout; an order created while TON
+	// was disabled cannot be paid in TON.
+	if target.TotalTonNano <= 0 {
+		b.alert(cbID, b.t(lang, "ton_unavailable"))
+		return
+	}
+
+	b.ack(cbID)
+
+	// TON settlement is 100% worker-side: the chain poller watches the wallet
+	// and settles each transfer by its order comment. The buyer-facing flow
+	// only renders the transfer instructions plus a prefilled ton:// deeplink
+	// — there is NO server-side invoice and this handler performs NO provider
+	// API calls.
+	memo := fmt.Sprintf("order-%d", orderID)
+	text := fmt.Sprintf(b.t(lang, "ton_pay_instructions"),
+		orderID, formatTON(target.TotalTonNano), b.cfg.TONWalletAddress, memo)
+	keyboard := tgbotapi.NewInlineKeyboardMarkup(
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonURL(b.t(lang, "btn_pay_ton"), b.ton.TransferLink(target.TotalTonNano, orderID)),
+		),
+	)
+	reply := tgbotapi.NewMessage(chatID, text)
+	reply.ParseMode = "HTML"
+	reply.ReplyMarkup = keyboard
+	b.send(reply)
+}
+
+func (b *Bot) onPayNowpayments(cbID string, chatID, userID int64, msgID int, data, lang string) {
+	if !b.nowpaymentsEnabled() {
+		b.alert(cbID, b.t(lang, "nowpayments_unavailable"))
+		return
+	}
+
+	orderID, err := parseIDFromCallback(data, "pay:nowpayments:")
+	if err != nil {
+		b.logger.Error("parse pay:nowpayments callback", "error", err)
+		b.ack(cbID)
+		return
+	}
+
+	ctx := context.Background()
+	target, err := b.loadPayableOrder(ctx, userID, orderID)
+	if err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			b.alert(cbID, b.t(lang, "order_not_found"))
+			return
+		}
+		if errors.Is(err, storage.ErrOrderStatusConflict) {
+			b.alert(cbID, b.t(lang, "order_already_paid"))
+			return
+		}
+		b.logger.Error("load payable order for nowpayments payment", "order_id", orderID, "error", err)
+		b.alert(cbID, b.t(lang, "error_short"))
+		return
+	}
+
+	// Subscription products are payable with Telegram Stars only.
+	if _, subDays, subErr := b.orderSubscriptionProduct(ctx, target); subErr != nil {
+		b.logger.Error("detect subscription product for nowpayments payment", "order_id", orderID, "error", subErr)
+		b.alert(cbID, b.t(lang, "error_short"))
+		return
+	} else if subDays > 0 {
+		b.alert(cbID, b.t(lang, "sub_stars_only"))
+		return
+	}
+
+	// NOWPayments' hosted invoice has no documented hard minimum, so unlike
+	// Stripe there is no client-side amount guard — the order's USD snapshot
+	// is priced directly.
+	amountCents := int64(math.Round(target.TotalUSD * 100))
+
+	// Show skeleton state while generating the invoice.
+	skeletonKeyboard := tgbotapi.NewInlineKeyboardMarkup(
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData(b.t(lang, "btn_generating_invoice"), "noop"),
+		),
+	)
+	editSkeleton := tgbotapi.NewEditMessageReplyMarkup(chatID, msgID, skeletonKeyboard)
+	b.send(editSkeleton)
+	b.ack(cbID)
+
+	invoice, err := b.nowpayments.CreateInvoice(ctx, orderID, amountCents, b.t(lang, "nowpayments_invoice_desc"))
+	if err != nil {
+		b.logger.Error("create nowpayments invoice", "error", err)
+		b.send(tgbotapi.NewMessage(chatID, b.t(lang, "payment_error")))
+		return
+	}
+
+	keyboard := tgbotapi.NewInlineKeyboardMarkup(
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonURL(b.t(lang, "btn_pay_nowpayments"), invoice.PayURL),
+		),
+	)
+
+	text := fmt.Sprintf(b.t(lang, "nowpayments_pay_title"), orderID, target.TotalUSD)
+	reply := tgbotapi.NewMessage(chatID, text)
+	reply.ParseMode = "HTML"
+	reply.ReplyMarkup = keyboard
+	b.send(reply)
+}
+
+// formatTON renders an integer nanoton amount (TON minor units, scale 9) as
+// a decimal TON string with trailing fractional zeros trimmed:
+// 2000000000 → "2", 1500000000 → "1.5", 3896686160 → "3.89668616".
+func formatTON(nano int64) string {
+	const scale = int64(1_000_000_000)
+	whole := nano / scale
+	frac := nano % scale
+	if frac == 0 {
+		return strconv.FormatInt(whole, 10)
+	}
+	fracStr := strings.TrimRight(fmt.Sprintf("%09d", frac), "0")
+	return fmt.Sprintf("%d.%s", whole, fracStr)
 }
 
 // --- Payment handlers ---

@@ -70,6 +70,8 @@ type Bot struct {
 	crypto          *payment.CryptoBotPayment
 	yookassa        *payment.YooKassaPayment
 	stripe          *payment.StripePayment
+	ton             *payment.TONPayment
+	nowpayments     *payment.NowpaymentsPayment
 	logger          *slog.Logger
 	metrics         *service.MetricsService
 	fsm             storage.FSMStore
@@ -176,6 +178,8 @@ func NewWithAPI(cfg *config.Config, api *tgbotapi.BotAPI, db *storage.DB, metric
 		crypto:          payment.NewCryptoBotPayment(cfg.CryptoBotToken),
 		yookassa:        payment.NewYooKassaPayment(cfg.YooKassaShopID, cfg.YooKassaSecretKey, cfg.YooKassaReturnURL),
 		stripe:          payment.NewStripePayment(cfg.StripeSecretKey, cfg.StripeWebhookSecret, cfg.StripeReturnURL),
+		ton:             payment.NewTONPayment(cfg.TONWalletAddress, cfg.TONAPIKey),
+		nowpayments:     payment.NewNowpaymentsPayment(cfg.NowpaymentsAPIKey, cfg.NowpaymentsIPNSecret, cfg.NowpaymentsReturnURL, config.NowpaymentsWebhookURL(cfg.WebhookURL)),
 		logger:          logger,
 		metrics:         metrics,
 		fsm:             fsm,
@@ -241,6 +245,20 @@ func (b *Bot) yooKassaPaymentsEnabled() bool {
 // order's USD snapshot is charged directly.
 func (b *Bot) stripePaymentsEnabled() bool {
 	return b.stripe != nil && b.stripe.Configured()
+}
+
+// tonPaymentsEnabled reports whether TON on-chain transfers can be offered:
+// a wallet address configured AND a positive USD/TON rate. The order's
+// nanoton snapshot is checked per-order at button build time.
+func (b *Bot) tonPaymentsEnabled() bool {
+	return b.ton != nil && b.ton.Configured() && b.cfg != nil && b.cfg.USDPerTON > 0
+}
+
+// nowpaymentsEnabled reports whether hosted crypto invoices via NOWPayments
+// can be offered: the adapter is fully configured. No conversion is needed —
+// the order's USD snapshot is priced directly.
+func (b *Bot) nowpaymentsEnabled() bool {
+	return b.nowpayments != nil && b.nowpayments.Configured()
 }
 
 // registerCommands registers the bot command list with Telegram so the "/" menu shows up.

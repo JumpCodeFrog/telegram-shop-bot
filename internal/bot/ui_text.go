@@ -143,7 +143,7 @@ func (b *Bot) formatCheckoutText(lang string, view *shop.CartView) string {
 	return sb.String()
 }
 
-func (b *Bot) formatPaymentMethodsText(lang string, orderID int64, view *shop.CartView, cryptoEnabled, yookassaOK, stripeOK bool) string {
+func (b *Bot) formatPaymentMethodsText(lang string, orderID int64, view *shop.CartView, cryptoEnabled, yookassaOK, stripeOK, tonOK, nowpaymentsOK bool) string {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf(b.t(lang, "payment_methods_title"), orderID))
 	sb.WriteString(b.t(lang, "payment_methods_items_header"))
@@ -164,9 +164,9 @@ func (b *Bot) formatPaymentMethodsText(lang string, orderID int64, view *shop.Ca
 		sb.WriteString(fmt.Sprintf(b.t(lang, "payment_methods_rub_total"), view.TotalRUB))
 	}
 	// The "only Telegram Stars" note must stay true: suppress it when any
-	// non-Stars rail (CryptoBot, YooKassa RUB card or Stripe USD card) is
-	// offered.
-	if !cryptoEnabled && !yookassaOK && !stripeOK {
+	// non-Stars rail (CryptoBot, YooKassa RUB card, Stripe USD card, TON
+	// on-chain transfer or NOWPayments hosted invoice) is offered.
+	if !cryptoEnabled && !yookassaOK && !stripeOK && !tonOK && !nowpaymentsOK {
 		sb.WriteString(b.t(lang, "order_created_no_crypto"))
 	}
 	return sb.String()
