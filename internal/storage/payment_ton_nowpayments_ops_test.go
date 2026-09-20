@@ -705,74 +705,7 @@ func TestPaymentReviewListsPreviewsAndResolvesNowpaymentsTargets(t *testing.T) {
 	}
 }
 
-// TestBalanceFailsClosedAtAppLevel pins the DB-only discipline for the
-// balance forward-pin at every storage gate that now accepts ton and
-// nowpayments: the review listing and resolution gates reject it, the
-// refund-record path quarantines the invalid fact under the order's real
-// provider identity with an invalid_provider marker, and the refund ingress
-// preview rejects it outright.
-func TestBalanceFailsClosedAtAppLevel(t *testing.T) {
-	db, err := New(filepath.Join(t.TempDir(), "balance-fail-closed.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-
-	ctx := context.Background()
-	store, orderID, _ := seedTONLedgerOrder(t, db)
-	if err := store.UpdateOrderStatusWithPaymentFact(ctx, orderID, OrderStatusPending, OrderStatusPaid, PaymentFact{
-		Provider: PaymentMethodTON, ExternalID: "ton-pay-bal",
-		AmountMinor: 1_500_000_000, Currency: "TON", Scale: 9, OccurredAt: providerIngressTime,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	ledger := NewSQLPaymentLedgerStore(db)
-
-	// Review listing rejects the DB-only provider.
-	if _, err := ledger.ListPaymentReviews(ctx, PaymentMethodBalance); !errors.Is(err, ErrPaymentReviewConflict) {
-		t.Fatalf("list balance reviews: err=%v, want ErrPaymentReviewConflict", err)
-	}
-
-	// Resolution preview and resolve reject the DB-only provider.
-	resolution := PaymentReviewResolution{
-		OrderID: orderID, Provider: PaymentMethodBalance, Actor: "operator:test",
-		Reason: "balance review", ResultingPaymentState: PaymentStateSettled,
-	}
-	if _, err := ledger.PreviewPaymentReviewResolution(ctx, resolution); !errors.Is(err, ErrPaymentReviewConflict) {
-		t.Fatalf("preview balance resolution: err=%v, want ErrPaymentReviewConflict", err)
-	}
-	if err := ledger.ResolvePaymentReview(ctx, resolution); !errors.Is(err, ErrPaymentReviewConflict) {
-		t.Fatalf("resolve balance review: err=%v, want ErrPaymentReviewConflict", err)
-	}
-
-	// The refund ingress preview rejects the DB-only provider outright.
-	balanceRefund := Refund{
-		OrderID: orderID, Provider: PaymentMethodBalance, ExternalID: "bal-refund-1",
-		PaymentExternalID: "ton-pay-bal", PayerID: 42,
-		AmountMinor: 1_500_000_000, Currency: "TON", Scale: 9, OccurredAt: providerIngressTime.Add(time.Minute),
-	}
-	if _, err := ledger.PreviewProviderRefundIngress(ctx, balanceRefund); !errors.Is(err, ErrPaymentReceiptMismatch) {
-		t.Fatalf("preview balance refund: err=%v, want ErrPaymentReceiptMismatch", err)
-	}
-
-	// The refund-record path fails closed too: the invalid provider fact is
-	// quarantined under the order's real provider identity (ton) with an
-	// invalid_provider marker, exactly like any provider without an
-	// app-level identity (sepa).
-	if err := ledger.RecordRefund(ctx, balanceRefund); !errors.Is(err, ErrPaymentReceiptMismatch) {
-		t.Fatalf("record balance refund: err=%v, want ErrPaymentReceiptMismatch", err)
-	}
-	var anomalyProvider, rawPayload string
-	if err := db.Conn().QueryRow(`SELECT provider, raw_payload FROM payment_anomalies
-		WHERE external_id='bal-refund-1'`).Scan(&anomalyProvider, &rawPayload); err != nil {
-		t.Fatal(err)
-	}
-	if anomalyProvider != PaymentMethodTON || !strings.Contains(rawPayload, "invalid_provider:"+PaymentMethodBalance) {
-		t.Fatalf("balance refund anomaly provider=%s raw_payload=%q", anomalyProvider, rawPayload)
-	}
-	var refunds int
-	_ = db.Conn().QueryRow(`SELECT COUNT(*) FROM refunds WHERE provider='balance'`).Scan(&refunds)
-	if refunds != 0 {
-		t.Fatalf("balance refunds=%d, want 0", refunds)
-	}
-}
+// NOTE: the former TestBalanceFailsClosedAtAppLevel pinned the dormant
+// DB-only balance forward-pin. The balance feature now lands, so the
+// app-level ACCEPTANCE discipline for the balance rail lives in
+// balance_acceptance_test.go instead.

@@ -522,16 +522,9 @@ func TestNormalizePaymentProviderNowpayments(t *testing.T) {
 	}
 }
 
-// TestOrderMoneyBalanceRejected pins the fail-closed rule for the balance
-// provider: balance is a DB-only forward-pin (migration 021) with no
-// app-level identity, so the money mapping rejects it exactly like any other
-// unsupported provider — with the unsupported-provider error, not a money
-// one.
-func TestOrderMoneyBalanceRejected(t *testing.T) {
-	if _, _, _, err := orderMoney(Order{TotalUSD: 1}, PaymentMethodBalance); err == nil || errors.Is(err, ErrInvalidMoney) {
-		t.Fatalf("balance provider: err=%v, want unsupported-provider error", err)
-	}
-}
+// The balance provider's money mapping is now accepted app-side; its
+// acceptance legs (USD cents at scale 2, invalid-total rejection) live in
+// balance_acceptance_test.go: TestOrderMoneyBalance.
 
 // TestValidatePaymentFactTON pins the ton fact gate: currency and scale are
 // exact, no payer check applies (on-chain transfers carry no Telegram
@@ -604,18 +597,9 @@ func TestValidatePaymentFactNowpayments(t *testing.T) {
 	}
 }
 
-// TestValidatePaymentFactBalanceRejected pins the fail-closed rule for the
-// balance provider: a balance fact is rejected before any currency or scale
-// check because the provider has no app-level money mapping.
-func TestValidatePaymentFactBalanceRejected(t *testing.T) {
-	_, err := validatePaymentFact(Order{UserID: 42, TotalUSD: 1}, PaymentFact{
-		Provider: PaymentMethodBalance, ExternalID: "bal-1",
-		AmountMinor: 100, Currency: "USD", Scale: 2,
-	})
-	if err == nil || errors.Is(err, ErrPaymentReceiptMismatch) {
-		t.Fatalf("balance fact: err=%v, want unsupported-provider error", err)
-	}
-}
+// The balance fact gate is now accepted app-side; its acceptance legs
+// (required positive payer equal to the order user, USD/scale-2 money,
+// exact amount) live in balance_acceptance_test.go: TestValidatePaymentFactBalance.
 
 // TestUpdateOrderStatusWithPaymentFactTON proves the app-level receipt gate
 // accepts the TON provider identity. A TON fact in nanoton

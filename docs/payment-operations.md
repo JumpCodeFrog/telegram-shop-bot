@@ -442,6 +442,96 @@ so the USD cents match exactly — unlike TON there is no overpay tolerance.
 Subscriptions remain Stars-only. The NOWPayments button is never offered for
 subscription carts.
 
+## 9. Review queue in the bot (`/payreview`)
+
+Admins (their Telegram IDs in `ADMIN_IDS`) can triage the same review queue
+without leaving Telegram. `/payreview` lists every case across all provider
+buckets — one line (`#<order> | <provider> | <state> | targets=<n> |
+<reasons>`) and one card button per case. The bot aggregates the queue itself:
+the ledger's `ListPaymentReviews` has no cross-provider wildcard, so the bot
+loops the seven provider buckets (`stars`, `crypto`, `yookassa`, `stripe`,
+`ton`, `nowpayments`, `unknown`).
+
+A case card shows the order summary, the payment state, and every target with
+its kind and reason code. Each action (Settle / Refund / Dismiss) is a
+**two-tap flow**: the first tap reloads the case, rebuilds the resolution from
+the CURRENT target set and previews it read-only; the confirm tap reloads,
+rebuilds and re-validates against the ledger before applying.
+A case that changed between preview and confirm fails closed with a conflict
+message, and resolutions are recorded with actor `admin:<telegram-id>`. Orphan
+facts that share a provider-proposed order id are addressed independently —
+their callbacks carry the anomaly target id as a disambiguator.
+
+Use the bot for quick triage of the cases the ledger can derive to a terminal
+state on its own:
+
+- **settle** — a paid/delivered order whose quarantined captures are all fully
+  compensated by durable succeeded refunds returns to `settled`;
+- **refund** — a paid/delivered order whose entire quarantined capture was
+  refunded closes as `refunded`;
+- **dismiss** — evidence-derived cancellation, and the provider-neutral
+  `unknown` inbox (always `dismissed` + `cancelled`, never revenue);
+- **orphan facts** (no local order) — settle acknowledges them as
+  `compensated`, refund as `accepted_refund`, dismiss follows the ledger
+  evidence; a detached provider order id can only be cancelled.
+
+Keep using the CLI (sections 2–4) for what the bot deliberately cannot
+express — every bot action names a terminal state, so these stay CLI-only:
+
+- **cross-provider orders**: while another provider still holds unresolved
+  targets for the same order, the only valid outcome is the partial
+  `needs_review` — the bot's preview rejects every terminal action with the
+  conflict message; resolve one provider per CLI command with
+  `--state needs_review`;
+- **refunded-kind anomalies with no durable refund row**: their only valid
+  shape is `accepted_refund` + `needs_review` (the order stays quarantined
+  until ingress binds the refund to its parent capture);
+- any case whose preview the bot rejected: the CLI prints the exact target
+  ids to investigate.
+
+## 10. Balance (internal rail)
+
+Buyers with a positive USD balance see a balance button at checkout
+(non-subscription carts only; subscriptions remain Stars-only). The tap
+settles the order **synchronously** — there is no provider round-trip: the
+service debits the buyer's balance and commits a synthetic payment fact
+(provider `balance`, external id `balance:<orderID>`, the buyer as the
+required positive payer, USD cents at scale 2) through the same guarded
+settlement path as the external rails.
+
+The debit is idempotent across crash windows. The service composes the
+balance store's own transaction with the settlement store's own transaction
+(debit-first + compensating credit — the house helpers own no cross-store
+transaction), and before debiting it reads the order's net balance effect —
+the sum over its `order_payment:<id>` and `settlement_failed:<id>` rows in
+`balance_txs`: net < 0 means a prior orphan debit already covers the order
+and the debit is skipped; net ≥ 0 means no live debit (or a compensated one —
+the money was returned, so the re-tap debits again). Each orphan debit deepens
+the net-negative, so N crash loops still settle exactly once. Any settle
+failure is answered with an exact compensating credit typed
+`settlement_failed:<id>` — but only a debit made by that same call is
+compensated; crediting a skipped orphan would mint money.
+
+**Operator adjustments**: `/setbalance <user_id> <±amount> [reason...]`
+(admins only, by Telegram user id) credits or debits a balance atomically —
+the funds check and the mutation are one `UPDATE`, so a debit can never
+overdraw — and appends a `balance_txs` audit row (type
+`admin_adjust[: reason]`, `ref_id` = the acting admin's Telegram id). There is
+no confirmation step: the audit trail is the mitigation.
+
+**Crash-window residual**: a crash between the debit and the settle leaves the
+order pending with an orphan `order_payment:<id>` debit. The buyer's re-tap
+settles on that orphan without a second debit, so the residual an operator can
+observe is only a still-pending order whose buyer never re-tapped. Reconcile
+by inspecting `balance_txs` for `order_payment:<id>` rows without a matching
+settled payment attempt; if the purchase should not complete, return the money
+with `/setbalance <user_id> +<amount> reconcile order <id>`.
+
+The balance rail never enters the review queue: a balance fact is validated
+against the order's exact USD snapshot and required payer before settlement,
+so there is no provider ambiguity to quarantine — ingress accepts or rejects
+it outright.
+
 ## Exit codes
 
 | Code | Meaning |

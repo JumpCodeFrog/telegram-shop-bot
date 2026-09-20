@@ -55,6 +55,16 @@ func (b *Bot) paymentMethodText(lang, method string) string {
 		return b.t(lang, "payment_method_stars")
 	case storage.PaymentMethodCrypto:
 		return b.t(lang, "payment_method_crypto")
+	case storage.PaymentMethodYooKassa:
+		return b.t(lang, "payment_method_yookassa")
+	case storage.PaymentMethodStripe:
+		return b.t(lang, "payment_method_stripe")
+	case storage.PaymentMethodTON:
+		return b.t(lang, "payment_method_ton")
+	case storage.PaymentMethodNowpayments:
+		return b.t(lang, "payment_method_nowpayments")
+	case storage.PaymentMethodBalance:
+		return b.t(lang, "payment_method_balance")
 	default:
 		return escapeHTML(method)
 	}

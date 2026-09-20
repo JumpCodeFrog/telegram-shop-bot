@@ -318,36 +318,7 @@ func TestRecordPaymentAnomalyAcceptsNowpayments(t *testing.T) {
 	}
 }
 
-// TestRecordPaymentAnomalyRejectsBalance pins the fail-closed rule for the
-// balance provider: balance is a DB-only forward-pin with no app-level
-// identity, so the anomaly gate rejects it exactly like any other provider
-// without an app-level identity (sepa).
-func TestRecordPaymentAnomalyRejectsBalance(t *testing.T) {
-	db, err := New(":memory:")
-	if err != nil {
-		t.Fatalf("New(:memory:): %v", err)
-	}
-	defer db.Close()
-
-	store := NewSQLOrderStore(db)
-	anomaly := PaymentAnomaly{
-		ProposedOrderID: 1,
-		Provider:        PaymentMethodBalance,
-		ExternalID:      "bal-anomaly-1",
-		AmountMinor:     100,
-		Currency:        "USD",
-		Scale:           2,
-		Reason:          "amount_mismatch",
-	}
-	if err := store.RecordPaymentAnomaly(context.Background(), anomaly); !errors.Is(err, ErrPaymentReceiptMismatch) {
-		t.Fatalf("balance anomaly: err=%v, want ErrPaymentReceiptMismatch", err)
-	}
-	var anomalies int
-	if err := db.Conn().QueryRowContext(context.Background(),
-		`SELECT COUNT(*) FROM payment_anomalies WHERE provider = ?`, PaymentMethodBalance).Scan(&anomalies); err != nil {
-		t.Fatal(err)
-	}
-	if anomalies != 0 {
-		t.Fatalf("balance anomalies=%d, want 0", anomalies)
-	}
-}
+// The balance provider's anomaly gate is now accepted app-side; its
+// acceptance leg (preserved under its own provider identity, durable
+// quarantine signal) lives in balance_acceptance_test.go:
+// TestBalanceAnomalyAccepted.

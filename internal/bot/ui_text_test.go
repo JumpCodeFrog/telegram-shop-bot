@@ -33,6 +33,40 @@ func TestOrderStatusText_Localized(t *testing.T) {
 	}
 }
 
+func TestPaymentMethodText_AllProvidersLocalized(t *testing.T) {
+	t.Parallel()
+
+	b := newTextBot(t)
+
+	enNames := map[string]string{
+		storage.PaymentMethodStars:       "Telegram Stars",
+		storage.PaymentMethodCrypto:      "CryptoBot (USDT)",
+		storage.PaymentMethodYooKassa:    "YooKassa (RUB card)",
+		storage.PaymentMethodStripe:      "Stripe (USD card)",
+		storage.PaymentMethodTON:         "TON",
+		storage.PaymentMethodNowpayments: "NOWPayments",
+		storage.PaymentMethodBalance:     "Balance",
+	}
+	for method, want := range enNames {
+		if got := b.paymentMethodText("en", method); got != want {
+			t.Errorf("en paymentMethodText(%q) = %q, want %q", method, got, want)
+		}
+	}
+
+	// Russian localizes the provider display names too.
+	if got := b.paymentMethodText("ru", storage.PaymentMethodYooKassa); got != "ЮKassa (карта ₽)" {
+		t.Errorf("ru paymentMethodText(yookassa) = %q", got)
+	}
+	if got := b.paymentMethodText("ru", storage.PaymentMethodBalance); got != "Баланс" {
+		t.Errorf("ru paymentMethodText(balance) = %q", got)
+	}
+
+	// Unknown methods fall back to the raw, HTML-escaped string.
+	if got := b.paymentMethodText("en", "we<ird>"); got != "we&lt;ird&gt;" {
+		t.Errorf("unknown method fallback = %q", got)
+	}
+}
+
 func TestFormatProductText_EscapesHTML(t *testing.T) {
 	t.Parallel()
 

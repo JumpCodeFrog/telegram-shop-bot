@@ -111,6 +111,8 @@ func (b *Bot) routeMessage(msg *tgbotapi.Message) {
 		b.handleDeleteProduct(msg)
 	case "orders_all":
 		b.handleOrdersAll(msg)
+	case "order":
+		b.handleOrderCard(msg)
 	case "setdelivered":
 		b.handleSetDelivered(msg)
 	case "reviews":
@@ -137,6 +139,18 @@ func (b *Bot) routeMessage(msg *tgbotapi.Message) {
 	// Analytics.
 	case "analytics":
 		b.handleAnalytics(msg)
+
+	// Payment review queue.
+	case "payreview":
+		b.handlePayReview(msg)
+
+	// Payment provider status.
+	case "paystatus":
+		b.handlePayStatus(msg)
+
+	// Balance adjustments.
+	case "setbalance":
+		b.handleSetBalance(msg)
 
 	// Export.
 	case "export_orders":
@@ -243,6 +257,9 @@ func (b *Bot) handleCallback(cb *tgbotapi.CallbackQuery) {
 	case strings.HasPrefix(data, "pay:nowpayments:"):
 		b.onPayNowpayments(cb.ID, chatID, userID, msgID, data, lang)
 
+	case strings.HasPrefix(data, "pay:balance:"):
+		b.onPayBalance(cb.ID, chatID, userID, msgID, data, lang)
+
 	case strings.HasPrefix(data, "admin:togglestock:"):
 		b.ack(cb.ID)
 		if b.isAdmin(userID) {
@@ -267,6 +284,18 @@ func (b *Bot) handleCallback(cb *tgbotapi.CallbackQuery) {
 		b.ack(cb.ID)
 		if b.isAdmin(userID) {
 			b.onAdminPhotoAdd(chatID, userID, data, lang)
+		}
+
+	case strings.HasPrefix(data, "admin:payrevdo:"):
+		b.ack(cb.ID)
+		if b.isAdmin(userID) {
+			b.onAdminPayReviewCallback(chatID, msgID, userID, data, lang)
+		}
+
+	case strings.HasPrefix(data, "admin:payrev:"):
+		b.ack(cb.ID)
+		if b.isAdmin(userID) {
+			b.onAdminPayReviewCallback(chatID, msgID, userID, data, lang)
 		}
 
 	case strings.HasPrefix(data, "analytics:"):

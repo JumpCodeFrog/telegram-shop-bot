@@ -90,4 +90,26 @@ type SubscriptionStore interface {
 	ExpireOverdue(ctx context.Context) (int64, error)
 }
 
+// BalanceStore manages the internal USD balance (users.balance_usd). All
+// methods address the user by TELEGRAM id — the identity the bot and shop
+// layers hold (orders.user_id); the balance_txs audit rows reference the
+// internal users.id to satisfy their foreign key.
+type BalanceStore interface {
+	// GetBalance returns the user's current USD balance, or ErrNotFound for
+	// an unknown user.
+	GetBalance(ctx context.Context, userID int64) (float64, error)
+	// AdjustBalance applies a signed cent-snapped adjustment atomically:
+	// the UPDATE's WHERE clause rejects any debit that would overdraw the
+	// balance (ErrInsufficientFunds) or name an unknown user (ErrNotFound),
+	// and the balance_txs audit row is written in the same transaction.
+	// adminID > 0 marks an operator adjustment (stored in ref_id).
+	AdjustBalance(ctx context.Context, userID int64, deltaUSD float64, reason string, adminID int64) (newBalance float64, err error)
+	// OrderBalanceNet returns the order's net balance effect: the signed
+	// sum of its order_payment debit and settlement_failed compensation
+	// rows. Net < 0 means money was taken for the order and never
+	// returned (an orphan debit from a crash between debit and settle);
+	// net >= 0 means no live debit covers the order.
+	OrderBalanceNet(ctx context.Context, userID, orderID int64) (float64, error)
+}
+
 // UISettingsStore is declared in ui_settings.go to keep all its code in one file.

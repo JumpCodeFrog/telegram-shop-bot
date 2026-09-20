@@ -64,6 +64,8 @@ type Bot struct {
 	analytics       storage.AnalyticsStore
 	photos          storage.ProductPhotoStore
 	reviews         storage.ReviewStore
+	payLedger       *storage.SQLPaymentLedgerStore
+	balances        storage.BalanceStore
 	referrals       *storage.ReferralStore
 	referralService *service.ReferralService
 	stars           *payment.StarsPayment
@@ -152,6 +154,7 @@ func NewWithAPI(cfg *config.Config, api *tgbotapi.BotAPI, db *storage.DB, metric
 		return i18nSvc.T(lang, key)
 	}
 
+	balanceStore := storage.NewSQLBalanceStore(db.Conn())
 	paymentDeps := shop.PaymentDeps{
 		Users:     us,
 		Loyalty:   loyaltySvc,
@@ -160,6 +163,7 @@ func NewWithAPI(cfg *config.Config, api *tgbotapi.BotAPI, db *storage.DB, metric
 		Promos:    promoStore,
 		Cache:     cachedPS,
 		Metrics:   metrics,
+		Balances:  balanceStore,
 	}
 
 	b := &Bot{
@@ -189,6 +193,8 @@ func NewWithAPI(cfg *config.Config, api *tgbotapi.BotAPI, db *storage.DB, metric
 		uiSettings:      storage.NewSQLUISettingsStore(db.Conn()),
 		photos:          storage.NewSQLProductPhotoStore(db),
 		reviews:         storage.NewSQLReviewStore(db),
+		payLedger:       storage.NewSQLPaymentLedgerStore(db),
+		balances:        balanceStore,
 		subs:            storage.NewSQLSubscriptionStore(db),
 	}
 	b.reloadButtonStyles(context.Background())

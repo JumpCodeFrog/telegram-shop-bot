@@ -40,6 +40,7 @@ A full-featured e-commerce bot for Telegram — catalog, cart, Telegram Stars & 
 - **USD cards via Stripe** (optional)
 - **TON on-chain transfers** (optional)
 - **300+ coins via NOWPayments** (optional)
+- **Balance payments** — spend an admin-granted USD balance at checkout
 - **Mini App** — full shop UI inside Telegram (opt-in via `WEBAPP_URL`)
 - **Reviews & ratings** — 1–5 ⭐ after delivery, average shown on the product card
 - Promo codes with category limits + personal one-off codes
@@ -53,7 +54,10 @@ A full-featured e-commerce bot for Telegram — catalog, cart, Telegram Stars & 
 
 **🔧 Admin**
 - Manage products & categories (photos straight from Telegram, up to 10 per product)
-- Order management & status updates
+- Order management & status updates; full order card: `/order <id>`
+- **Payment review queue** — `/payreview` triages quarantined payments in chat (two-tap settle/refund/dismiss)
+- **Provider status** — `/paystatus` shows every payment rail's configuration & webhook URLs
+- **Balance management** — `/setbalance` adjusts a buyer's USD balance (audited in `balance_txs`)
 - Promo code CRUD
 - Review moderation: `/reviews`
 - Analytics: `/analytics` (14-day revenue chart, top buyers, promo report), CSV export with date range
@@ -221,7 +225,11 @@ docker compose logs -f bot
 | `/editcategory` / `/deletecategory` / `/listcategories` | Manage categories |
 | `/addpromo` / `/listpromos` / `/deletepromo` | Manage promo codes |
 | `/orders_all` | All orders |
+| `/order <id>` | Order card: buyer, items, totals, status, payment method & id |
 | `/setdelivered <id>` | Mark an order delivered (triggers review request) |
+| `/payreview` | Payment review queue — quarantined payments, two-tap settle/refund/dismiss |
+| `/paystatus` | Payment provider status per rail (config, rates, webhook URLs) |
+| `/setbalance <user_id> <±amount> [reason]` | Adjust a user's USD balance |
 | `/reviews` | Latest reviews with delete buttons |
 | `/analytics` | Revenue chart, top buyers, promo report |
 | `/export_orders [from] [to]` | CSV export, optional date range |
@@ -247,6 +255,8 @@ Set `TON_WALLET_ADDRESS` and `USD_PER_TON` (USD per 1 TON, e.g. `5.25`) together
 
 **NOWPayments (300+ coins)** — optional. Hosted crypto invoices: the buyer is redirected to a NOWPayments invoice page offering 300+ coins (BTC, ETH, USDT, …), and the order settles when NOWPayments sends a signed IPN callback.  
 Set `NOWPAYMENTS_API_KEY`, `NOWPAYMENTS_IPN_SECRET` and `NOWPAYMENTS_RETURN_URL` (public HTTPS) — all three must be set together — and register `<WEBHOOK_URL>/nowpayments-webhook` as the IPN callback URL in the NOWPayments dashboard. IPN callbacks are HMAC-SHA512-signed over the canonicalized (recursively key-sorted) JSON body: once the signature verifies, the signed body itself settles the order — no API refetch (the CryptoBot/Stripe pattern). Only `payment_status: finished` settles; every other status is acknowledged without side effects. Invoices charge the order's own USD total, so the signed amount must match exactly — unlike TON there is no overpay tolerance. ⚠️ Confirm the byte-level canonicalization agreement with NOWPayments' signer with ONE live test payment before enabling the rail in production (verification fails closed: a mismatch rejects genuine IPNs, it can never accept a forged one). Subscriptions remain Stars-only.
+
+**Balance** — internal, no configuration. Buyers with a positive USD balance (granted by an admin via `/setbalance`) see a "Pay (balance)" button at checkout for non-subscription carts; the tap settles the order synchronously and debits the balance — no provider round-trip. Subscriptions remain Stars-only.
 
 **Stars subscriptions** — a product created as a "30-day subscription" is sold as a recurring Stars payment (`subscription_period=2592000`). Subscriptions are Stars-only; users manage them via `/mysubs`.
 

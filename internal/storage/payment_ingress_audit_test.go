@@ -209,16 +209,8 @@ func TestAppendPaymentIngressAuditAcceptsTONAndNowpayments(t *testing.T) {
 		}
 	}
 
-	// The allowlist still fails closed for providers with no app-level
-	// identity: balance is a DB-only forward-pin and stays rejected here.
-	tx, err := db.Conn().BeginTx(ctx, nil)
-	if err != nil {
-		t.Fatalf("begin balance tx: %v", err)
-	}
-	defer tx.Rollback()
-	if err := appendPaymentIngressAudit(ctx, tx, orderID, PaymentMethodBalance,
-		PaymentEventCaptured, PaymentIngressTargetAnomaly, anomalyID,
-		PaymentIngressAudit{Actor: "operator:balance", Reason: "balance quarantine reviewed"}); !errors.Is(err, ErrPaymentReviewConflict) {
-		t.Fatalf("balance audit: err=%v, want ErrPaymentReviewConflict", err)
-	}
+	// The balance provider is now accepted app-side; its ingress-audit
+	// acceptance leg (operator audit row persisted under the balance
+	// identity) lives in balance_acceptance_test.go:
+	// TestBalanceCaptureIngressRequiresPositivePayer.
 }

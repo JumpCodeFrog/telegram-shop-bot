@@ -45,6 +45,7 @@ const (
 	BtnKeyPayStripe       = "pay_stripe"
 	BtnKeyPayTON          = "pay_ton"
 	BtnKeyPayNowpayments  = "pay_nowpayments"
+	BtnKeyPayBalance      = "pay_balance"
 	BtnKeyPayCancel       = "pay_cancel"
 )
 
@@ -71,6 +72,7 @@ var AllButtonKeys = []string{
 	BtnKeyPayStripe,
 	BtnKeyPayTON,
 	BtnKeyPayNowpayments,
+	BtnKeyPayBalance,
 	BtnKeyPayCancel,
 }
 
@@ -119,6 +121,8 @@ func ButtonKeyLabel(key string) string {
 		return "💎 TON"
 	case BtnKeyPayNowpayments:
 		return "🪙 Крипта (NOWPayments)"
+	case BtnKeyPayBalance:
+		return "💰 Баланс"
 	case BtnKeyPayCancel:
 		return "❌ Отмена"
 	default:
