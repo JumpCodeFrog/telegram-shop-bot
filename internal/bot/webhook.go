@@ -369,6 +369,116 @@ func (b *Bot) StripeWebhookHandler() http.HandlerFunc {
 	}
 }
 
+// NowpaymentsWebhookHandler processes NOWPayments IPN callbacks. NOWPayments
+// signs every IPN with the endpoint's HMAC-SHA512 secret over the
+// canonicalized body: once the signature verifies, the body itself is
+// authoritative and settles the order WITHOUT any API refetch (the
+// CryptoBot/Stripe pattern, unlike the unsigned YooKassa flow). An invalid
+// signature is unauthenticated junk: rejected with 403, recorded nowhere.
+func (b *Bot) NowpaymentsWebhookHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if b.nowpayments == nil || !b.nowpayments.Configured() {
+			http.Error(w, "service unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1 MB
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			b.logger.Error("nowpayments webhook: read body", "error", err)
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		defer r.Body.Close()
+
+		if err := b.nowpayments.VerifyIPNSignature(r.Header.Get("x-nowpayments-sig"), body); err != nil {
+			b.logger.Error("nowpayments webhook: invalid signature", "error", err)
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+
+		ctx := r.Context()
+		ipn, err := b.nowpayments.ParseIPN(body)
+		if err != nil {
+			// The signature was valid, so a body that still fails to parse is
+			// a real anomaly: quarantine a digest, ACK once it is durable.
+			digest := sha256.Sum256(body)
+			recordErr := b.order.RecordPaymentAnomaly(ctx, storage.PaymentAnomaly{
+				Provider: storage.PaymentMethodNowpayments, RawPayload: fmt.Sprintf("sha256:%x", digest), Reason: "webhook_parse_failure",
+			})
+			if recordErr == nil || errors.Is(recordErr, storage.ErrPaymentNeedsReview) {
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+			b.logger.Error("nowpayments webhook: signed payload was not quarantined", "error", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+
+		if ipn.PaymentStatus != "finished" {
+			// waiting/confirming/partially_paid/failed/expired/...: normal
+			// lifecycle noise — acknowledge, settle nothing, record nothing.
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		receipt, receiptErr := ipn.PaymentReceipt()
+		if receiptErr != nil {
+			anomaly, _ := ipn.PaymentAnomaly("webhook_invalid_receipt")
+			recordErr := b.order.RecordPaymentAnomaly(ctx, anomaly)
+			if recordErr == nil || errors.Is(recordErr, storage.ErrPaymentNeedsReview) {
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+			b.logger.Error("nowpayments webhook: invalid receipt was not quarantined", "payment_id", ipn.PaymentID)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+
+		outcome, err := b.order.ConfirmPaymentReceipt(ctx, receipt)
+		if err != nil {
+			// Same idempotent-ACK error classes as the stripe webhook:
+			if errors.Is(err, storage.ErrOrderStatusConflict) || errors.Is(err, storage.ErrNotFound) ||
+				errors.Is(err, storage.ErrPaymentNeedsReview) || errors.Is(err, storage.ErrPaymentIdentityConflict) ||
+				errors.Is(err, storage.ErrPaymentReceiptMismatch) {
+				b.logger.Info("nowpayments webhook ignored (idempotent)", "payment_id", ipn.PaymentID, "reason", err)
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+			if errors.Is(err, storage.ErrProductOutOfStock) {
+				anomaly, _ := ipn.PaymentAnomaly("out_of_stock_after_charge")
+				if recordErr := b.order.RecordPaymentAnomaly(ctx, anomaly); recordErr == nil ||
+					errors.Is(recordErr, storage.ErrPaymentNeedsReview) {
+					w.WriteHeader(http.StatusOK)
+					return
+				}
+			}
+			b.logger.Error("nowpayments webhook: confirm payment", "payment_id", ipn.PaymentID, "error", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+
+		if b.metrics != nil {
+			b.metrics.SuccessfulPayments.WithLabelValues("nowpayments").Inc()
+		}
+		order := outcome.Order
+		lang := b.userLang(ctx, order.UserID)
+		b.send(tgbotapi.NewMessage(order.UserID, fmt.Sprintf(b.t(lang, "payment_success"), order.ID)))
+		b.NotifyPaymentOutcome(ctx, outcome)
+		b.notifyAdmins(ctx, AdminEventOrderPaid, fmt.Sprintf(b.t("en", "admin_order_paid_nowpayments"),
+			order.ID, order.UserID, order.TotalUSD))
+		b.outWebhook.Send(service.OutboundWebhookEvent{
+			Event: "order.paid", OrderID: order.ID, UserID: order.UserID,
+			TotalUSD: order.TotalUSD, TotalStars: order.TotalStars,
+			Method: "nowpayments", PaymentID: ipn.PaymentID,
+		})
+		w.WriteHeader(http.StatusOK)
+	}
+}
+
 // TelegramWebhookHandler returns an http.HandlerFunc that processes incoming
 // Telegram updates delivered via webhook.
 func (b *Bot) TelegramWebhookHandler() http.HandlerFunc {

@@ -158,6 +158,7 @@
   "admin_order_paid_crypto": "💎 订单 #%d 已付款（Crypto）— 用户 %d — $%.2f",
   "admin_order_paid_yookassa": "💳 订单 #%d 已通过银行卡付款（YooKassa）\n用户：%d\n金额：%.2f ₽",
   "admin_order_paid_stripe": "💳 订单 #%d 已通过银行卡付款（Stripe）— 用户 %d — $%.2f",
+  "admin_order_paid_nowpayments": "🪙 订单 #%d 已通过加密货币付款（NOWPayments）— 用户 %d — $%.2f",
   "admin_analytics_title": "📊 最近 %d 天统计",
   "admin_analytics_total_orders": "订单总数（历史）：%d",
   "admin_analytics_paid_orders": "已付款订单（历史）：%d",

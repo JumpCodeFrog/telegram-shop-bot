@@ -158,6 +158,7 @@
   "admin_order_paid_crypto": "💎 Order #%d paid (Crypto) — user %d — $%.2f",
   "admin_order_paid_yookassa": "💳 Order #%d paid by card (YooKassa)\nUser: %d\nAmount: %.2f ₽",
   "admin_order_paid_stripe": "💳 Order #%d paid by card (Stripe) — user %d — $%.2f",
+  "admin_order_paid_nowpayments": "🪙 Order #%d paid in crypto (NOWPayments) — user %d — $%.2f",
   "admin_analytics_title": "📊 Statistics for the last %d days",
   "admin_analytics_total_orders": "Total orders (all time): %d",
   "admin_analytics_paid_orders": "Paid orders (all time): %d",
