@@ -94,11 +94,14 @@ func RunDoctor(ctx context.Context, opts DoctorOptions) DoctorReport {
 		add(CheckWarn, "Configuration file", "not found; checking process environment")
 	}
 
-	// YooKassa and Stripe credentials are diagnosed from the raw values so a
-	// partial or non-HTTPS configuration still gets a labeled, actionable line
-	// even though configuration loading rejects it outright below.
+	// YooKassa, Stripe, TON and NOWPayments credentials are diagnosed from the
+	// raw values so a partial or non-HTTPS configuration still gets a labeled,
+	// actionable line even though configuration loading rejects it outright
+	// below.
 	checkYooKassaPayments(values, add)
 	checkStripePayments(values, add)
+	checkTONPayments(values, add)
+	checkNowpaymentsPayments(values, add)
 
 	cfg, err := config.LoadFromMap(values)
 	if err != nil {
@@ -220,6 +223,8 @@ var knownEnvironmentKeys = []string{
 	"ADMIN_GROUP_ID", "TOPIC_ORDERS_NEW", "TOPIC_ORDERS_PAID", "TOPIC_ORDERS_DELIVERED",
 	"YOOKASSA_SHOP_ID", "YOOKASSA_SECRET_KEY", "YOOKASSA_RETURN_URL", "USD_TO_RUB_RATE",
 	"STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET", "STRIPE_RETURN_URL",
+	"TON_WALLET_ADDRESS", "USD_PER_TON", "TON_API_KEY",
+	"NOWPAYMENTS_API_KEY", "NOWPAYMENTS_IPN_SECRET", "NOWPAYMENTS_RETURN_URL",
 }
 
 // checkYooKassaPayments reports the YooKassa RUB rail state: not configured,
@@ -270,6 +275,61 @@ func checkStripePayments(values map[string]string, add func(CheckStatus, string,
 		return
 	}
 	add(CheckOK, "Stripe payments", "configured")
+}
+
+// checkTONPayments reports the TON on-chain rail state: not configured,
+// configured, or partially configured (address without rate, rate without
+// address, or an api key alone). It reuses the shared configuration
+// validation so the doctor and the bot can never disagree, and it never
+// prints credential values. Unlike YooKassa the rate is mandatory once the
+// rail is enabled, so a missing or invalid rate is a failure, not a hidden
+// button.
+func checkTONPayments(values map[string]string, add func(CheckStatus, string, string)) {
+	address := strings.TrimSpace(values["TON_WALLET_ADDRESS"])
+	apiKey := strings.TrimSpace(values["TON_API_KEY"])
+	rate := 0.0
+	if raw := strings.TrimSpace(values["USD_PER_TON"]); raw != "" {
+		// An unparseable rate stays zero and fails the shared validation
+		// below with an actionable, variable-naming message.
+		if parsed, err := strconv.ParseFloat(raw, 64); err == nil &&
+			!math.IsNaN(parsed) && !math.IsInf(parsed, 0) {
+			rate = parsed
+		}
+	}
+	if err := config.ValidateTONConfig(address, rate, apiKey); err != nil {
+		add(CheckFail, "TON payments", err.Error())
+		return
+	}
+	if address == "" {
+		add(CheckOK, "TON payments", "not configured")
+		return
+	}
+	if apiKey == "" {
+		add(CheckWarn, "TON payments", "TON_API_KEY is not set; toncenter rate limits apply to the polling worker")
+		return
+	}
+	add(CheckOK, "TON payments", "configured")
+}
+
+// checkNowpaymentsPayments reports the NOWPayments crypto-invoice rail state:
+// not configured, configured, or partially/invalidly configured. It reuses
+// the shared configuration validation so the doctor and the bot can never
+// disagree, and it never prints credential values. NOWPayments invoices are
+// USD-priced, so like Stripe there is no exchange rate gating the checkout
+// button.
+func checkNowpaymentsPayments(values map[string]string, add func(CheckStatus, string, string)) {
+	apiKey := strings.TrimSpace(values["NOWPAYMENTS_API_KEY"])
+	ipnSecret := strings.TrimSpace(values["NOWPAYMENTS_IPN_SECRET"])
+	returnURL := strings.TrimSpace(values["NOWPAYMENTS_RETURN_URL"])
+	if err := config.ValidateNowpaymentsConfig(apiKey, ipnSecret, returnURL); err != nil {
+		add(CheckFail, "NOWPayments payments", err.Error())
+		return
+	}
+	if apiKey == "" {
+		add(CheckOK, "NOWPayments payments", "not configured")
+		return
+	}
+	add(CheckOK, "NOWPayments payments", "configured")
 }
 
 func checkEnvPermissions(path string, add func(CheckStatus, string, string)) {

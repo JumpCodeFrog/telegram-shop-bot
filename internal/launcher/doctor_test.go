@@ -545,6 +545,286 @@ func TestRunDoctorPassesConfiguredStripe(t *testing.T) {
 	}
 }
 
+// tonDoctorTestAddress is a well-formed 48-char base64url TON friendly address.
+const tonDoctorTestAddress = "EQCD39VS5jcptHL8vMjEXrzGaRcCVYto7HUn4bpAOg8xqB2N"
+
+func TestRunDoctorReportsTONAndNowpaymentsNotConfigured(t *testing.T) {
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, ".env")
+	dbPath := filepath.Join(dir, "shop.db")
+	content := "BOT_TOKEN=" + testToken + "\nADMIN_IDS=42\nDB_PATH=" + dbPath + "\n"
+	if err := os.WriteFile(envPath, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	report := RunDoctor(context.Background(), DoctorOptions{
+		EnvPath:    envPath,
+		Out:        &output,
+		Inspector:  &fakeInspector{state: TelegramState{Identity: BotIdentity{ID: 7, Username: "shop_bot"}}},
+		LookupEnv:  func(string) (string, bool) { return "", false },
+		CheckRedis: refusedRedis,
+	})
+	if report.ExitCode() != 0 {
+		t.Fatalf("ExitCode() = %d, want 0:\n%s", report.ExitCode(), output.String())
+	}
+	if !strings.Contains(output.String(), "[OK] TON payments: not configured") {
+		t.Fatalf("missing TON not-configured line:\n%s", output.String())
+	}
+	if !strings.Contains(output.String(), "[OK] NOWPayments payments: not configured") {
+		t.Fatalf("missing NOWPayments not-configured line:\n%s", output.String())
+	}
+}
+
+func TestRunDoctorFailsOnPartialTONCredentials(t *testing.T) {
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, ".env")
+	dbPath := filepath.Join(dir, "shop.db")
+	content := "BOT_TOKEN=" + testToken + "\nADMIN_IDS=42\nDB_PATH=" + dbPath +
+		"\nTON_WALLET_ADDRESS=" + tonDoctorTestAddress + "\n"
+	if err := os.WriteFile(envPath, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	report := RunDoctor(context.Background(), DoctorOptions{
+		EnvPath:    envPath,
+		Out:        &output,
+		Inspector:  &fakeInspector{},
+		LookupEnv:  func(string) (string, bool) { return "", false },
+		CheckRedis: refusedRedis,
+	})
+	if report.ExitCode() != 1 {
+		t.Fatalf("ExitCode() = %d, want 1", report.ExitCode())
+	}
+	if !strings.Contains(output.String(), "[FAIL] TON payments") ||
+		!strings.Contains(output.String(), "USD_PER_TON must be set and positive when TON_WALLET_ADDRESS is set") {
+		t.Fatalf("missing partial credential failure:\n%s", output.String())
+	}
+
+	// Partial credentials supplied only through the process environment are
+	// still diagnosed: the environment overlay must know the TON keys.
+	missingEnv := filepath.Join(dir, "missing.env")
+	overlayLookup := func(key string) (string, bool) {
+		switch key {
+		case "BOT_TOKEN":
+			return testToken, true
+		case "ADMIN_IDS":
+			return "42", true
+		case "DB_PATH":
+			return dbPath, true
+		case "TON_WALLET_ADDRESS":
+			return tonDoctorTestAddress, true
+		}
+		return "", false
+	}
+	var overlayOut bytes.Buffer
+	report = RunDoctor(context.Background(), DoctorOptions{
+		EnvPath:    missingEnv,
+		Out:        &overlayOut,
+		Inspector:  &fakeInspector{},
+		LookupEnv:  overlayLookup,
+		CheckRedis: refusedRedis,
+	})
+	if report.ExitCode() != 1 || !strings.Contains(overlayOut.String(), "[FAIL] TON payments") {
+		t.Fatalf("overlay report = %+v, output:\n%s", report, overlayOut.String())
+	}
+
+	// A rate without an address is the other half of the matrix, diagnosed
+	// from the overlay as well.
+	rateOnlyLookup := func(key string) (string, bool) {
+		switch key {
+		case "BOT_TOKEN":
+			return testToken, true
+		case "ADMIN_IDS":
+			return "42", true
+		case "DB_PATH":
+			return dbPath, true
+		case "USD_PER_TON":
+			return "5.25", true
+		}
+		return "", false
+	}
+	var rateOnlyOut bytes.Buffer
+	report = RunDoctor(context.Background(), DoctorOptions{
+		EnvPath:    missingEnv,
+		Out:        &rateOnlyOut,
+		Inspector:  &fakeInspector{},
+		LookupEnv:  rateOnlyLookup,
+		CheckRedis: refusedRedis,
+	})
+	if report.ExitCode() != 1 || !strings.Contains(rateOnlyOut.String(), "[FAIL] TON payments") ||
+		!strings.Contains(rateOnlyOut.String(), "USD_PER_TON requires TON_WALLET_ADDRESS to be set") {
+		t.Fatalf("rate-only report = %+v, output:\n%s", report, rateOnlyOut.String())
+	}
+}
+
+func TestRunDoctorWarnsWhenTONAPIKeyMissing(t *testing.T) {
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, ".env")
+	dbPath := filepath.Join(dir, "shop.db")
+	content := "BOT_TOKEN=" + testToken + "\nADMIN_IDS=42\nDB_PATH=" + dbPath +
+		"\nTON_WALLET_ADDRESS=" + tonDoctorTestAddress + "\nUSD_PER_TON=5.25\n"
+	if err := os.WriteFile(envPath, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	report := RunDoctor(context.Background(), DoctorOptions{
+		EnvPath:    envPath,
+		Out:        &output,
+		Inspector:  &fakeInspector{state: TelegramState{Identity: BotIdentity{ID: 7, Username: "shop_bot"}}},
+		LookupEnv:  func(string) (string, bool) { return "", false },
+		CheckRedis: refusedRedis,
+	})
+	if report.ExitCode() != 0 || !report.HasWarnings() {
+		t.Fatalf("report = %+v", report)
+	}
+	if !strings.Contains(output.String(), "[WARN] TON payments") ||
+		!strings.Contains(output.String(), "TON_API_KEY") {
+		t.Fatalf("missing API key warning:\n%s", output.String())
+	}
+}
+
+func TestRunDoctorPassesConfiguredTON(t *testing.T) {
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, ".env")
+	dbPath := filepath.Join(dir, "shop.db")
+	content := "BOT_TOKEN=" + testToken + "\nADMIN_IDS=42\nDB_PATH=" + dbPath +
+		"\nTON_WALLET_ADDRESS=" + tonDoctorTestAddress + "\nUSD_PER_TON=5.25\nTON_API_KEY=toncenter_key_do_not_print\n"
+	if err := os.WriteFile(envPath, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	report := RunDoctor(context.Background(), DoctorOptions{
+		EnvPath:    envPath,
+		Out:        &output,
+		Inspector:  &fakeInspector{state: TelegramState{Identity: BotIdentity{ID: 7, Username: "shop_bot", SupportsInlineQueries: true}}},
+		LookupEnv:  func(string) (string, bool) { return "", false },
+		CheckRedis: func(context.Context, string, string) error { return nil },
+	})
+	if report.ExitCode() != 0 {
+		t.Fatalf("ExitCode() = %d, want 0:\n%s", report.ExitCode(), output.String())
+	}
+	if !strings.Contains(output.String(), "[OK] TON payments: configured") {
+		t.Fatalf("missing configured line:\n%s", output.String())
+	}
+	if strings.Contains(output.String(), "toncenter_key_do_not_print") {
+		t.Fatal("doctor output leaked TON API key")
+	}
+}
+
+func TestRunDoctorFailsOnPartialNowpaymentsCredentials(t *testing.T) {
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, ".env")
+	dbPath := filepath.Join(dir, "shop.db")
+	content := "BOT_TOKEN=" + testToken + "\nADMIN_IDS=42\nDB_PATH=" + dbPath + "\nNOWPAYMENTS_API_KEY=np_key_do_not_print\n"
+	if err := os.WriteFile(envPath, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	report := RunDoctor(context.Background(), DoctorOptions{
+		EnvPath:    envPath,
+		Out:        &output,
+		Inspector:  &fakeInspector{},
+		LookupEnv:  func(string) (string, bool) { return "", false },
+		CheckRedis: refusedRedis,
+	})
+	if report.ExitCode() != 1 {
+		t.Fatalf("ExitCode() = %d, want 1", report.ExitCode())
+	}
+	if !strings.Contains(output.String(), "[FAIL] NOWPayments payments") ||
+		!strings.Contains(output.String(), "must be set together") {
+		t.Fatalf("missing partial credential failure:\n%s", output.String())
+	}
+	if strings.Contains(output.String(), "np_key_do_not_print") {
+		t.Fatal("doctor output leaked NOWPayments API key")
+	}
+
+	// Partial credentials supplied only through the process environment are
+	// still diagnosed: the environment overlay must know the NOWPayments keys.
+	missingEnv := filepath.Join(dir, "missing.env")
+	var overlayOut bytes.Buffer
+	report = RunDoctor(context.Background(), DoctorOptions{
+		EnvPath:   missingEnv,
+		Out:       &overlayOut,
+		Inspector: &fakeInspector{},
+		LookupEnv: func(key string) (string, bool) {
+			switch key {
+			case "BOT_TOKEN":
+				return testToken, true
+			case "ADMIN_IDS":
+				return "42", true
+			case "DB_PATH":
+				return dbPath, true
+			case "NOWPAYMENTS_API_KEY":
+				return "np_key_do_not_print", true
+			}
+			return "", false
+		},
+		CheckRedis: refusedRedis,
+	})
+	if report.ExitCode() != 1 || !strings.Contains(overlayOut.String(), "[FAIL] NOWPayments payments") {
+		t.Fatalf("overlay report = %+v, output:\n%s", report, overlayOut.String())
+	}
+}
+
+func TestRunDoctorFailsOnNonHTTPSNowpaymentsReturnURL(t *testing.T) {
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, ".env")
+	dbPath := filepath.Join(dir, "shop.db")
+	content := "BOT_TOKEN=" + testToken + "\nADMIN_IDS=42\nDB_PATH=" + dbPath +
+		"\nNOWPAYMENTS_API_KEY=np_key_do_not_print\nNOWPAYMENTS_IPN_SECRET=np_secret_do_not_print\nNOWPAYMENTS_RETURN_URL=http://shop.example.com/return\n"
+	if err := os.WriteFile(envPath, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	report := RunDoctor(context.Background(), DoctorOptions{
+		EnvPath:    envPath,
+		Out:        &output,
+		Inspector:  &fakeInspector{},
+		LookupEnv:  func(string) (string, bool) { return "", false },
+		CheckRedis: refusedRedis,
+	})
+	if report.ExitCode() != 1 {
+		t.Fatalf("ExitCode() = %d, want 1", report.ExitCode())
+	}
+	if !strings.Contains(output.String(), "[FAIL] NOWPayments payments") ||
+		!strings.Contains(output.String(), "NOWPAYMENTS_RETURN_URL must be a public https:// URL") {
+		t.Fatalf("missing https failure:\n%s", output.String())
+	}
+	if strings.Contains(output.String(), "np_key_do_not_print") ||
+		strings.Contains(output.String(), "np_secret_do_not_print") {
+		t.Fatal("doctor output leaked NOWPayments credentials")
+	}
+}
+
+func TestRunDoctorPassesConfiguredNowpayments(t *testing.T) {
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, ".env")
+	dbPath := filepath.Join(dir, "shop.db")
+	content := "BOT_TOKEN=" + testToken + "\nADMIN_IDS=42\nDB_PATH=" + dbPath +
+		"\nNOWPAYMENTS_API_KEY=np_key_do_not_print\nNOWPAYMENTS_IPN_SECRET=np_secret_do_not_print\nNOWPAYMENTS_RETURN_URL=https://shop.example.com/return\n"
+	if err := os.WriteFile(envPath, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	report := RunDoctor(context.Background(), DoctorOptions{
+		EnvPath:    envPath,
+		Out:        &output,
+		Inspector:  &fakeInspector{state: TelegramState{Identity: BotIdentity{ID: 7, Username: "shop_bot", SupportsInlineQueries: true}}},
+		LookupEnv:  func(string) (string, bool) { return "", false },
+		CheckRedis: func(context.Context, string, string) error { return nil },
+	})
+	if report.ExitCode() != 0 {
+		t.Fatalf("ExitCode() = %d, want 0:\n%s", report.ExitCode(), output.String())
+	}
+	if !strings.Contains(output.String(), "[OK] NOWPayments payments: configured") {
+		t.Fatalf("missing configured line:\n%s", output.String())
+	}
+	if strings.Contains(output.String(), "np_key_do_not_print") ||
+		strings.Contains(output.String(), "np_secret_do_not_print") {
+		t.Fatal("doctor output leaked NOWPayments credentials")
+	}
+}
+
 func TestRunDoctorPassesConfiguredYooKassa(t *testing.T) {
 	dir := t.TempDir()
 	envPath := filepath.Join(dir, ".env")

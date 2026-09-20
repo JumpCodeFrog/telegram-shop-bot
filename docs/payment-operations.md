@@ -32,6 +32,8 @@ telegram-shop-bot payment-review list --provider stars
 telegram-shop-bot payment-review list --provider crypto
 telegram-shop-bot payment-review list --provider yookassa
 telegram-shop-bot payment-review list --provider stripe
+telegram-shop-bot payment-review list --provider ton
+telegram-shop-bot payment-review list --provider nowpayments
 telegram-shop-bot payment-review list --provider unknown
 ```
 
@@ -279,6 +281,165 @@ creating a payment that can never succeed.
 ### Subscriptions
 
 Subscriptions remain Stars-only. The Stripe button is never offered for
+subscription carts.
+
+## 7. TON (on-chain TON) operations
+
+### Security model: no webhook — polling worker
+
+TON has no webhook or signature. A polling worker refetches the watched
+wallet's latest transactions from toncenter every 30 seconds and replays each
+matching transfer into the ledger, where repeats are idempotent no-ops keyed
+by the `<lt>:<hash>` external id. toncenter's `getTransactions` returns only
+finalized (ledger-confirmed) on-chain transactions, so a polled transfer is
+final — there is no pending-state settlement risk. A transient toncenter
+failure just defers settlement to the next tick.
+
+Known window limitation: each poll reads only the wallet's latest 50
+transactions with no cursor or pagination. A backlog deeper than 50 inbound
+transfers between two ticks leaves the older tail unsettled until the window
+covers it again (see the comment in `worker/ton_polling.go`); at
+orders-per-30s realities the window is ample.
+
+### Memo identification is mandatory
+
+A transfer settles only when its comment is exactly `order-<id>` — the
+`ton://transfer` deeplink the bot shows prefills it, and the instructions
+display it in a code block for manual payers. A payer who forgets or mangles
+the memo sends money the bot can never match: the transfer never becomes a
+receipt, never enters the ledger, and is visible only on-chain. The operator
+resolution is manual: find the transfer in a tonviewer link to the watched
+wallet (`https://tonviewer.com/<TON_WALLET_ADDRESS>`), identify the sender,
+and refund from the wallet. There is no TON capture-ingress CLI:
+`payment-review ingest-stars` reads the Telegram Bot API and cannot serve
+this rail.
+
+### Overpay-tolerant settlement, rate snapshot
+
+`orders.total_ton_nano` is frozen at order creation from `USD_PER_TON`.
+Changing the environment variable later changes only future orders; it never
+reprices existing ones, and a zero snapshot (TON disabled when the order was
+created) never settles. Settlement is overpay-tolerant: a transfer of at
+least the frozen snapshot settles and the ledger records the ACTUAL received
+nanoton amount. An underpay quarantines as `receipt_mismatch` with the actual
+facts preserved.
+
+### What quarantined TON facts look like
+
+Quarantined facts are `payment_anomalies` rows with provider `ton` and the
+order in `needs_review`:
+
+| Reason | Meaning |
+|---|---|
+| `receipt_mismatch` | Underpay below the frozen snapshot (or a zero snapshot) |
+| `unknown_order` | Memo names an order that does not exist |
+| `second_charge` | A distinct second transfer for an already settled order |
+| `out_of_stock_after_charge` | Paid transfer whose product went out of stock before fulfillment; durable — never retried |
+
+TON facts carry no payer id (on-chain transfers have no Telegram payer
+identity), so payer checks compare money and order linkage only.
+
+### Resolve flow
+
+```bash
+make payment-review PROVIDER=ton
+```
+
+The semantics are identical to the flows above: the list exits `1` while
+targets exist and prints local ids and reason codes only; resolve previews
+read-only first and then applies with `--apply --confirm-order N`. A
+quarantined capture still requires a durable succeeded refund before it can
+be resolved to `settled`.
+
+### Refunds
+
+Refunds are operator-driven: send them from the watched wallet. Nothing in
+this bot refunds automatically. The ledger records a refund through its
+refund ingestion path (`RecordRefund` / `IngestProviderRefund`), which
+validates it against the immutable captured attempt (exact parent identity,
+money tuple, cumulative amount) and appends durable review evidence for
+anything that disagrees. There is no dedicated refund-ingress CLI for TON.
+
+### Subscriptions
+
+Subscriptions remain Stars-only. The TON button is never offered for
+subscription carts.
+
+## 8. NOWPayments (USD crypto invoice) operations
+
+### Security model: signed IPN, no refetch
+
+NOWPayments IPN callbacks are signed. Every `/nowpayments-webhook` request
+must carry an `x-nowpayments-sig` header whose HMAC-SHA512 over the
+canonicalized body verifies against `NOWPAYMENTS_IPN_SECRET`. The canonical
+form is: JSON object keys sorted recursively, compact separators, no HTML
+escaping, no trailing newline. Once the signature verifies, the body itself
+is authoritative: settlement happens from the verified body WITHOUT any API
+refetch (the Stripe pattern, unlike the unsigned YooKassa flow). An invalid
+signature is unauthenticated junk: the endpoint answers `403` and records
+nothing — no anomaly, no event, no order change.
+
+Canonicalization interop note: byte-level agreement between this Go
+canonicalization and NOWPayments' PHP-side signer is verified fail-closed — a
+mismatch rejects genuine IPNs, it can never accept a forged one — but it
+should be confirmed with ONE live test payment before enabling the rail in
+production.
+
+### Finished-only settlement
+
+Only an IPN with `payment_status` `finished` can settle. The other statuses
+(`waiting`, `confirming`, `confirmed`, `sending`, `partially_paid`, `failed`,
+`refunded`, `expired`) are normal lifecycle noise: the endpoint acknowledges
+them and settles and records nothing.
+
+### What quarantined NOWPayments facts look like
+
+Quarantined facts are `payment_anomalies` rows with provider `nowpayments`
+and the order in `needs_review`:
+
+| Reason | Meaning |
+|---|---|
+| `webhook_parse_failure` | Signature-valid body that still fails to parse, stored as a sha256 digest only |
+| `webhook_invalid_receipt` | Signed finished IPN that cannot produce a valid receipt |
+| `receipt_mismatch` | Valid receipt that disagrees with the order's money tuple |
+| `out_of_stock_after_charge` | Paid invoice whose product went out of stock before fulfillment |
+
+NOWPayments facts carry no payer id (the provider has no Telegram payer
+identity), so payer checks compare money and order linkage only.
+
+### Resolve flow
+
+```bash
+make payment-review PROVIDER=nowpayments
+```
+
+The semantics are identical to the flows above: the list exits `1` while
+targets exist and prints local ids and reason codes only; resolve previews
+read-only first and then applies with `--apply --confirm-order N`. A
+quarantined capture still requires a durable succeeded refund before it can
+be resolved to `settled`.
+
+### Refunds
+
+Refunds are operator-driven: initiate them in the NOWPayments dashboard.
+Nothing in this bot refunds automatically. The ledger records a refund
+through its refund ingestion path (`RecordRefund` / `IngestProviderRefund`),
+which validates it against the immutable captured attempt (exact parent
+identity, money tuple, cumulative amount) and appends durable review evidence
+for anything that disagrees. There is no dedicated refund-ingress CLI for
+NOWPayments: `payment-review ingest-stars` reads the Telegram Bot API and
+cannot serve this rail.
+
+### USD-priced amounts
+
+NOWPayments invoices charge the order's own USD total: there is no rate
+snapshot and no converted currency, so `orders.total_usd` IS the charged fact
+that receipts are validated against. The signed IPN echoes our own invoice,
+so the USD cents match exactly — unlike TON there is no overpay tolerance.
+
+### Subscriptions
+
+Subscriptions remain Stars-only. The NOWPayments button is never offered for
 subscription carts.
 
 ## Exit codes
