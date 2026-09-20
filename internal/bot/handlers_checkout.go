@@ -298,7 +298,9 @@ func paymentMethodKeyboard(orderID int64, cryptoEnabled, yookassaOK, stripeOK, t
 		starsLabel = fmt.Sprintf("⭐ %s (%d ⭐)", b.t(lang, "btn_pay_stars"), totalStars)
 		rubLabel = fmt.Sprintf("💳 %s (%.2f ₽)", b.t(lang, "btn_pay_rub"), totalRUB)
 		stripeLabel = b.t(lang, "btn_pay_stripe")
-		tonLabel = fmt.Sprintf("%s (%s TON)", b.t(lang, "btn_pay_ton"), formatTON(totalTONNano))
+		// btn_pay_ton already names the currency ("💎 TON"), so the amount
+		// goes bare — mirroring rubLabel's "💳 %s (%.2f ₽)" shape.
+		tonLabel = fmt.Sprintf("%s (%s)", b.t(lang, "btn_pay_ton"), formatTON(totalTONNano))
 		nowpaymentsLabel = b.t(lang, "btn_pay_nowpayments")
 		balanceLabel = fmt.Sprintf("💰 %s ($%.2f)", b.t(lang, "btn_pay_balance"), totalUSD)
 		termsLabel = b.t(lang, "btn_terms")

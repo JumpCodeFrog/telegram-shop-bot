@@ -869,3 +869,45 @@ func TestNowpaymentsWebhookURLDerivesFromBase(t *testing.T) {
 		}
 	}
 }
+
+func TestIsHTTPSURL(t *testing.T) {
+	// The scheme compare is case-insensitive per RFC 3986 (an uppercase
+	// HTTPS:// must be accepted); a bare scheme without a host is not a
+	// usable public URL.
+	for _, tc := range []struct {
+		raw  string
+		want bool
+	}{
+		{"https://shop.example.com/return", true},
+		{"HTTPS://shop.example.com/return", true},
+		{"https://shop.example.com", true},
+		{"http://shop.example.com/return", false},
+		{"https://", false},
+		{"https:///path-only", false},
+		{"ftp://shop.example.com", false},
+		{"", false},
+		{"not a url", false},
+	} {
+		if got := isHTTPSURL(tc.raw); got != tc.want {
+			t.Errorf("isHTTPSURL(%q) = %v, want %v", tc.raw, got, tc.want)
+		}
+	}
+}
+
+func TestProviderReturnURLHTTPSValidationShared(t *testing.T) {
+	// Every provider return-URL validator accepts an uppercase HTTPS scheme
+	// and rejects a hostless https:// — the shared isHTTPSURL contract.
+	validators := map[string]func(returnURL string) error{
+		"yookassa":    func(u string) error { return ValidateYooKassaConfig("123", "live_abc", u) },
+		"stripe":      func(u string) error { return ValidateStripeConfig("sk_test_abc", "whsec_abc", u) },
+		"nowpayments": func(u string) error { return ValidateNowpaymentsConfig("np-api-key", "np-ipn-secret", u) },
+	}
+	for name, validate := range validators {
+		if err := validate("HTTPS://shop.example.com/return"); err != nil {
+			t.Errorf("%s: uppercase HTTPS scheme rejected: %v", name, err)
+		}
+		if err := validate("https://"); err == nil {
+			t.Errorf("%s: hostless https:// accepted", name)
+		}
+	}
+}

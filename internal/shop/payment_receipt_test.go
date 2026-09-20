@@ -355,11 +355,13 @@ func TestInitialSubscriptionExactReplayKeepsPersistedExpiry(t *testing.T) {
 	}
 	var second time.Time
 	var attempts, anomalies int
+	var paymentState string
 	_ = db.Conn().QueryRow(`SELECT expires_at FROM subscriptions WHERE order_id=?`, orderID).Scan(&second)
 	_ = db.Conn().QueryRow(`SELECT COUNT(*) FROM payment_attempts WHERE order_id=?`, orderID).Scan(&attempts)
 	_ = db.Conn().QueryRow(`SELECT COUNT(*) FROM payment_anomalies`).Scan(&anomalies)
-	if !first.Equal(second) || attempts != 1 || anomalies != 0 {
-		t.Fatalf("first=%v second=%v attempts=%d anomalies=%d", first, second, attempts, anomalies)
+	_ = db.Conn().QueryRow(`SELECT payment_state FROM orders WHERE id=?`, orderID).Scan(&paymentState)
+	if !first.Equal(second) || attempts != 1 || anomalies != 0 || paymentState != storage.PaymentStateSettled {
+		t.Fatalf("first=%v second=%v attempts=%d anomalies=%d payment_state=%s", first, second, attempts, anomalies, paymentState)
 	}
 }
 
@@ -428,6 +430,7 @@ func TestInitialSubscriptionReplayWithChangedProviderExpiryQuarantines(t *testin
 	}
 	var anomalies, attempts int
 	var persistedExpiry time.Time
+	var paymentState string
 	rawConflict := "entitlement_expires_at:" + receipt.SubscriptionExpiresAt.UTC().Format(time.RFC3339Nano)
 	_ = db.Conn().QueryRow(`SELECT COUNT(*) FROM payment_anomalies
 		WHERE external_id='initial-provider-expiry' AND raw_payload=?`, rawConflict).Scan(&anomalies)
@@ -435,9 +438,13 @@ func TestInitialSubscriptionReplayWithChangedProviderExpiryQuarantines(t *testin
 		WHERE provider='stars' AND external_id='initial-provider-expiry'`).Scan(&attempts)
 	_ = db.Conn().QueryRow(`SELECT entitlement_expires_at FROM payment_attempts
 		WHERE provider='stars' AND external_id='initial-provider-expiry'`).Scan(&persistedExpiry)
-	if anomalies != 1 || attempts != 1 || !persistedExpiry.Equal(originalExpiry) {
-		t.Fatalf("anomalies=%d attempts=%d persisted=%v original=%v",
-			anomalies, attempts, persistedExpiry, originalExpiry)
+	// The changed-expiry replay quarantines: the order must sit in
+	// needs_review, not settled with the operator-unseen expiry.
+	_ = db.Conn().QueryRow(`SELECT payment_state FROM orders WHERE id=?`, orderID).Scan(&paymentState)
+	if anomalies != 1 || attempts != 1 || !persistedExpiry.Equal(originalExpiry) ||
+		paymentState != storage.PaymentStateNeedsReview {
+		t.Fatalf("anomalies=%d attempts=%d persisted=%v original=%v payment_state=%s",
+			anomalies, attempts, persistedExpiry, originalExpiry, paymentState)
 	}
 }
 

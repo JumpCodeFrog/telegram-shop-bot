@@ -115,6 +115,10 @@ func (t *TONPayment) GetTransactions(ctx context.Context, limit int) ([]TONTrans
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
+	// toncenter's getTransactions accepts limit in [1, 100]; clamp
+	// client-side so a caller mistake never becomes a 400 from the API.
+	limit = max(1, min(limit, 100))
+
 	query := url.Values{}
 	query.Set("address", t.walletAddress)
 	query.Set("limit", strconv.Itoa(limit))

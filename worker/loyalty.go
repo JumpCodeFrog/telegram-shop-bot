@@ -19,8 +19,16 @@ const (
 	loyaltyBackoffMax = 30 * time.Second
 )
 
+// loyaltyStore is the minimal storage surface LoyaltyWorker needs.
+// *storage.LoyaltyStoreImpl satisfies it; the seam keeps the worker
+// decoupled from the concrete store (АРХ-3).
+type loyaltyStore interface {
+	AddPoints(ctx context.Context, userID int64, pts int, reason string, refID string) error
+	GetPoints(ctx context.Context, userID int64) (int, string, error)
+}
+
 type LoyaltyWorker struct {
-	db      *storage.LoyaltyStoreImpl
+	db      loyaltyStore
 	service *service.LoyaltyService
 	i18n    *service.I18nService
 	users   storage.UserStore
@@ -29,7 +37,7 @@ type LoyaltyWorker struct {
 	stream  string
 }
 
-func NewLoyaltyWorker(db *storage.LoyaltyStoreImpl, svc *service.LoyaltyService, rdb *redis.Client, bot *tgbotapi.BotAPI, i18n *service.I18nService, users storage.UserStore) *LoyaltyWorker {
+func NewLoyaltyWorker(db loyaltyStore, svc *service.LoyaltyService, rdb *redis.Client, bot *tgbotapi.BotAPI, i18n *service.I18nService, users storage.UserStore) *LoyaltyWorker {
 	return &LoyaltyWorker{
 		db:      db,
 		service: svc,
