@@ -24,7 +24,7 @@ func TestPaymentMethodKeyboard_BalanceRowAfterNowpayments(t *testing.T) {
 	if got := styledCallbacks(keyboard); !slices.Equal(got, want) {
 		t.Fatalf("callbacks = %v, want %v", got, want)
 	}
-	assertPaymentButton(t, keyboard[6][0], "💰 Pay $25.00 (balance)", "pay:balance:15")
+	assertPaymentButton(t, keyboard[6][0], "💰 Pay $19.99 (balance)", "pay:balance:15")
 }
 
 func TestPaymentMethodKeyboard_BalanceRowHiddenAtZero(t *testing.T) {

@@ -287,7 +287,7 @@ func paymentMethodKeyboard(orderID int64, cryptoEnabled, yookassaOK, stripeOK, t
 	stripeLabel := fmt.Sprintf("💳 Pay $%.2f", totalUSD)
 	tonLabel := fmt.Sprintf("💎 Pay %s TON", formatTON(totalTONNano))
 	nowpaymentsLabel := "🪙 Pay crypto"
-	balanceLabel := fmt.Sprintf("💰 Pay $%.2f (balance)", balanceUSD)
+	balanceLabel := fmt.Sprintf("💰 Pay $%.2f (balance)", totalUSD)
 	termsLabel := "📄 Terms"
 	paySupportLabel := "🆘 Payment support"
 	cancelLabel := "❌ Cancel order"
@@ -300,7 +300,7 @@ func paymentMethodKeyboard(orderID int64, cryptoEnabled, yookassaOK, stripeOK, t
 		stripeLabel = b.t(lang, "btn_pay_stripe")
 		tonLabel = fmt.Sprintf("%s (%s TON)", b.t(lang, "btn_pay_ton"), formatTON(totalTONNano))
 		nowpaymentsLabel = b.t(lang, "btn_pay_nowpayments")
-		balanceLabel = fmt.Sprintf("💰 %s ($%.2f)", b.t(lang, "btn_pay_balance"), balanceUSD)
+		balanceLabel = fmt.Sprintf("💰 %s ($%.2f)", b.t(lang, "btn_pay_balance"), totalUSD)
 		termsLabel = b.t(lang, "btn_terms")
 		paySupportLabel = b.t(lang, "btn_paysupport")
 		cancelLabel = b.t(lang, "btn_cancel_order")

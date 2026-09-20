@@ -72,12 +72,32 @@ func (s *OrderService) ConfirmBalancePayment(ctx context.Context, orderID, userI
 		return nil, storage.ErrInvalidMoney
 	}
 
-	// Debit first: the store's UPDATE guard makes the funds check and the
-	// mutation one atomic statement. No settle work happens before the
-	// money is durably reserved.
-	if _, err := s.payments.Balances.AdjustBalance(ctx, userID, -amountUSD,
-		fmt.Sprintf("order_payment:%d", orderID), 0); err != nil {
+	// Crash-window idempotency: a prior tap may have crashed between the
+	// debit and the settle, leaving the order pending with an orphan debit
+	// that every pre-debit guard above still passes. The order's net
+	// ledger effect decides: net < 0 means money was taken for this order
+	// and never returned, so the orphan debit covers it and the debit is
+	// skipped; net >= 0 means no prior debit (or a compensated one — the
+	// money was legitimately returned, so the re-tap debits again). Each
+	// orphan debit deepens the net-negative, so N crash loops still settle
+	// exactly once.
+	net, err := s.payments.Balances.OrderBalanceNet(ctx, userID, orderID)
+	if err != nil {
 		return nil, err
+	}
+	debited := false
+	if net < 0 {
+		s.logger.Warn("balance debit skipped: prior orphan debit covers the order",
+			"order_id", orderID, "user_id", userID, "order_net", net)
+	} else {
+		// Debit first: the store's UPDATE guard makes the funds check and
+		// the mutation one atomic statement. No settle work happens before
+		// the money is durably reserved.
+		if _, err := s.payments.Balances.AdjustBalance(ctx, userID, -amountUSD,
+			fmt.Sprintf("order_payment:%d", orderID), 0); err != nil {
+			return nil, err
+		}
+		debited = true
 	}
 
 	fact := storage.PaymentFact{
@@ -100,6 +120,12 @@ func (s *OrderService) ConfirmBalancePayment(ctx context.Context, orderID, userI
 	if err != nil {
 		// Compensating credit: the debit must never survive a failed settle
 		// — including the lost-CAS conflict of a concurrent double-tap.
+		// Only a debit made by THIS call is compensated: crediting a
+		// skipped orphan debit would mint money (a concurrent tap may have
+		// settled on it, or it legitimately awaits its own settle).
+		if !debited {
+			return nil, err
+		}
 		if _, creditErr := s.payments.Balances.AdjustBalance(ctx, userID, amountUSD,
 			fmt.Sprintf("settlement_failed:%d", orderID), 0); creditErr != nil {
 			s.logger.Error("balance compensation credit failed",

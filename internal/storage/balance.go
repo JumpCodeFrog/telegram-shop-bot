@@ -32,6 +32,23 @@ func (s *SQLBalanceStore) GetBalance(ctx context.Context, userID int64) (float64
 	return balance, nil
 }
 
+// OrderBalanceNet sums the order's order_payment and settlement_failed
+// audit rows (the deterministic type strings written by the shop balance
+// rail). The user is addressed by telegram id like the rest of the store;
+// the rows themselves key on the internal users.id.
+func (s *SQLBalanceStore) OrderBalanceNet(ctx context.Context, userID, orderID int64) (float64, error) {
+	var net float64
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT COALESCE(SUM(amount_usd), 0) FROM balance_txs
+		 WHERE user_id = (SELECT id FROM users WHERE telegram_id = ?)
+		   AND type IN (?, ?)`,
+		userID, fmt.Sprintf("order_payment:%d", orderID),
+		fmt.Sprintf("settlement_failed:%d", orderID)).Scan(&net); err != nil {
+		return 0, fmt.Errorf("balance store: order balance net: %w", err)
+	}
+	return net, nil
+}
+
 // AdjustBalance moves the balance by deltaUSD and appends the audit row in
 // ONE transaction. Money math happens in integer cents at the boundary:
 // round(delta*100) — a sub-cent or zero delta is rejected as meaningless,

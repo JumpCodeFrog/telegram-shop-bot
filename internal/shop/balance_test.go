@@ -284,6 +284,126 @@ func (c *conflictSettleOrderStore) UpdateOrderStatus(_ context.Context, _ int64,
 	return storage.ErrOrderStatusConflict
 }
 
+// orderBalanceTxSum returns the order's net ledger effect: the signed sum
+// of its order_payment debits and settlement_failed compensations.
+func orderBalanceTxSum(t *testing.T, db *storage.DB, orderID int64) float64 {
+	t.Helper()
+	var sum float64
+	if err := db.Conn().QueryRow(`SELECT COALESCE(SUM(amount_usd), 0) FROM balance_txs
+		WHERE type IN (?, ?)`,
+		fmt.Sprintf("order_payment:%d", orderID), fmt.Sprintf("settlement_failed:%d", orderID)).Scan(&sum); err != nil {
+		t.Fatal(err)
+	}
+	return sum
+}
+
+// TestConfirmBalancePaymentOrphanDebitRetapSkipsSecondDebit pins the crash
+// window: a prior tap debited and the process died before settle, leaving
+// the order pending with an orphan debit that every pre-debit guard still
+// passes. The re-tap must settle on the orphan debit, not debit a second
+// time.
+func TestConfirmBalancePaymentOrphanDebitRetapSkipsSecondDebit(t *testing.T) {
+	svc, balances, orders, db, productID := newBalanceShopEnv(t, 25.00)
+	orderID := seedBalanceOrder(t, orders, productID, 10.00)
+	ctx := context.Background()
+
+	// The orphan debit: same row shape the production debit writes.
+	if _, err := balances.AdjustBalance(ctx, 42, -10.00, fmt.Sprintf("order_payment:%d", orderID), 0); err != nil {
+		t.Fatal(err)
+	}
+
+	outcome, err := svc.ConfirmBalancePayment(ctx, orderID, 42)
+	if err != nil {
+		t.Fatalf("ConfirmBalancePayment: %v", err)
+	}
+	if outcome == nil || outcome.Order == nil || outcome.Order.Status != storage.OrderStatusPaid {
+		t.Fatalf("outcome=%+v, want paid order", outcome)
+	}
+	if got := orderBalanceTxSum(t, db, orderID); got != -10.00 {
+		t.Fatalf("order net balance txs = %v, want -10.00 (single debit)", got)
+	}
+	if got, _ := balances.GetBalance(ctx, 42); got != 15.00 {
+		t.Fatalf("balance = %v, want 15.00", got)
+	}
+	var attempts int
+	_ = db.Conn().QueryRow(`SELECT COUNT(*) FROM payment_attempts WHERE order_id=?`, orderID).Scan(&attempts)
+	if attempts != 1 {
+		t.Fatalf("attempts=%d, want 1", attempts)
+	}
+}
+
+// TestConfirmBalancePaymentCompensatedRetapDebitsAgain: a debit that was
+// compensated returned the money legitimately, so a later re-tap must
+// debit again — net: one paid order, one live debit.
+func TestConfirmBalancePaymentCompensatedRetapDebitsAgain(t *testing.T) {
+	svc, balances, orders, db, productID := newBalanceShopEnv(t, 25.00)
+	orderID := seedBalanceOrder(t, orders, productID, 10.00)
+	ctx := context.Background()
+
+	if _, err := balances.AdjustBalance(ctx, 42, -10.00, fmt.Sprintf("order_payment:%d", orderID), 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := balances.AdjustBalance(ctx, 42, 10.00, fmt.Sprintf("settlement_failed:%d", orderID), 0); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := svc.ConfirmBalancePayment(ctx, orderID, 42); err != nil {
+		t.Fatalf("ConfirmBalancePayment: %v", err)
+	}
+	// Two debits + one compensation: exactly one live debit for the paid order.
+	if got := orderBalanceTxSum(t, db, orderID); got != -10.00 {
+		t.Fatalf("order net balance txs = %v, want -10.00 (one live debit)", got)
+	}
+	var debitTxs int
+	_ = db.Conn().QueryRow(`SELECT COUNT(*) FROM balance_txs WHERE amount_usd = -10.00 AND type = ?`,
+		fmt.Sprintf("order_payment:%d", orderID)).Scan(&debitTxs)
+	if debitTxs != 2 {
+		t.Fatalf("debit txs=%d, want 2 (orphan pair + re-tap)", debitTxs)
+	}
+	if got, _ := balances.GetBalance(ctx, 42); got != 15.00 {
+		t.Fatalf("balance = %v, want 15.00", got)
+	}
+	order, _ := svc.GetOrder(ctx, orderID)
+	if order.Status != storage.OrderStatusPaid {
+		t.Fatalf("order status = %q, want paid", order.Status)
+	}
+}
+
+// TestConfirmBalancePaymentDoubleOrphanRetapSettlesOnce: two crash loops
+// left two orphan debits (net -20); the re-tap settles once and debits
+// nothing more.
+func TestConfirmBalancePaymentDoubleOrphanRetapSettlesOnce(t *testing.T) {
+	svc, balances, orders, db, productID := newBalanceShopEnv(t, 25.00)
+	orderID := seedBalanceOrder(t, orders, productID, 10.00)
+	ctx := context.Background()
+
+	for i := 0; i < 2; i++ {
+		if _, err := balances.AdjustBalance(ctx, 42, -10.00, fmt.Sprintf("order_payment:%d", orderID), 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	outcome, err := svc.ConfirmBalancePayment(ctx, orderID, 42)
+	if err != nil {
+		t.Fatalf("ConfirmBalancePayment: %v", err)
+	}
+	if outcome == nil || outcome.Order == nil || outcome.Order.Status != storage.OrderStatusPaid {
+		t.Fatalf("outcome=%+v, want paid order", outcome)
+	}
+	if got := orderBalanceTxSum(t, db, orderID); got != -20.00 {
+		t.Fatalf("order net balance txs = %v, want -20.00 (no third debit)", got)
+	}
+	var debitTxs int
+	_ = db.Conn().QueryRow(`SELECT COUNT(*) FROM balance_txs WHERE amount_usd < 0 AND type = ?`,
+		fmt.Sprintf("order_payment:%d", orderID)).Scan(&debitTxs)
+	if debitTxs != 2 {
+		t.Fatalf("debit txs=%d, want 2 (the two orphans, no third)", debitTxs)
+	}
+	if got, _ := balances.GetBalance(ctx, 42); got != 5.00 {
+		t.Fatalf("balance = %v, want 5.00", got)
+	}
+}
+
 func TestConfirmBalancePaymentRequiresBalanceStore(t *testing.T) {
 	orders := newMockOrderStore()
 	orders.orders[7] = &storage.Order{ID: 7, UserID: 42, Status: storage.OrderStatusPending, TotalUSD: 10.00}
@@ -297,8 +417,14 @@ func TestConfirmBalancePaymentRequiresBalanceStore(t *testing.T) {
 type mockBalanceStore struct {
 	balance   float64
 	adjusts   []float64
+	net       float64
 	getErr    error
 	adjustErr error
+	netErr    error
+}
+
+func (m *mockBalanceStore) OrderBalanceNet(_ context.Context, _, _ int64) (float64, error) {
+	return m.net, m.netErr
 }
 
 func (m *mockBalanceStore) GetBalance(_ context.Context, _ int64) (float64, error) {

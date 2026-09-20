@@ -104,6 +104,12 @@ type BalanceStore interface {
 	// and the balance_txs audit row is written in the same transaction.
 	// adminID > 0 marks an operator adjustment (stored in ref_id).
 	AdjustBalance(ctx context.Context, userID int64, deltaUSD float64, reason string, adminID int64) (newBalance float64, err error)
+	// OrderBalanceNet returns the order's net balance effect: the signed
+	// sum of its order_payment debit and settlement_failed compensation
+	// rows. Net < 0 means money was taken for the order and never
+	// returned (an orphan debit from a crash between debit and settle);
+	// net >= 0 means no live debit covers the order.
+	OrderBalanceNet(ctx context.Context, userID, orderID int64) (float64, error)
 }
 
 // UISettingsStore is declared in ui_settings.go to keep all its code in one file.
