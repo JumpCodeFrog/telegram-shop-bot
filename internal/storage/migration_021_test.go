@@ -1,58 +1,11 @@
 package storage
 
 import (
-	"database/sql"
 	"fmt"
-	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 )
-
-// preCryptoExpansionRebuildDB applies every migration before 021, leaving the
-// schema exactly where production databases stood after migration 020 — the
-// state in which any ton/nowpayments/balance ledger INSERT fails the provider
-// CHECK.
-func preCryptoExpansionRebuildDB(t *testing.T) *DB {
-	t.Helper()
-	conn, err := sql.Open("sqlite", dsn(filepath.Join(t.TempDir(), "v20.db")))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = conn.Close() })
-	if _, err := conn.Exec(`CREATE TABLE schema_migrations (version TEXT PRIMARY KEY)`); err != nil {
-		t.Fatal(err)
-	}
-	db := &DB{conn: conn}
-	entries, err := migrationsFS.ReadDir("migrations")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, entry := range entries {
-		if entry.Name() == "021_ledger_provider_crypto_expansion.sql" {
-			break
-		}
-		statements, err := migrationsFS.ReadFile("migrations/" + entry.Name())
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := db.applyMigration(entry.Name(), string(statements)); err != nil {
-			t.Fatalf("apply %s: %v", entry.Name(), err)
-		}
-	}
-	return db
-}
-
-func applyCryptoExpansionRebuild(t *testing.T, db *DB) {
-	t.Helper()
-	statements, err := migrationsFS.ReadFile("migrations/021_ledger_provider_crypto_expansion.sql")
-	if err != nil {
-		t.Fatalf("read 021_ledger_provider_crypto_expansion.sql: %v", err)
-	}
-	if err := db.applyMigration("021_ledger_provider_crypto_expansion.sql", string(statements)); err != nil {
-		t.Fatalf("apply 021_ledger_provider_crypto_expansion.sql: %v", err)
-	}
-}
 
 // seedCryptoExpansionLegacyRows extends the shared stars/crypto fixture with
 // yookassa/stripe rows (the provider identities migration 020 admitted), so
@@ -100,44 +53,15 @@ func seedCryptoExpansionLegacyRows(t *testing.T, db *DB) {
 	}
 }
 
-// cryptoExpansionLedgerTables enumerates the six rebuilt tables with their
-// declared column order (unchanged by the rebuild — only CHECK literals move).
-func cryptoExpansionLedgerTables() []struct {
-	name string
-	cols []string
-} {
-	return []struct {
-		name string
-		cols []string
-	}{
-		{"payment_attempts", []string{"id", "order_id", "provider", "external_id", "payer_id",
-			"amount_minor", "currency", "scale", "status", "entitlement_expires_at",
-			"occurred_at", "created_at"}},
-		{"payment_events", []string{"id", "order_id", "payment_attempt_id", "provider",
-			"event_kind", "external_id", "amount_minor", "currency", "scale", "disposition",
-			"occurred_at", "created_at"}},
-		{"payment_anomalies", []string{"id", "fingerprint", "proposed_order_id", "provider",
-			"event_kind", "external_id", "related_external_id", "payer_id", "amount_minor",
-			"currency", "scale", "raw_amount", "raw_payload", "reason", "occurred_at"}},
-		{"refunds", []string{"id", "order_id", "provider", "external_id", "payment_external_id",
-			"payer_id", "amount_minor", "currency", "scale", "status", "requested_at",
-			"completed_at", "created_at"}},
-		{"payment_resolutions", []string{"id", "order_id", "provider", "target_kind", "target_id",
-			"decision", "actor", "reason", "resulting_payment_state", "resolved_at"}},
-		{"payment_ingress_audits", []string{"id", "order_id", "provider", "event_kind",
-			"target_kind", "target_id", "actor", "reason", "applied_at"}},
-	}
-}
-
 // TestMigration021PreservesLegacyLedgerRows rebuilds the six ledger tables on
 // a database holding stars/crypto/yookassa/stripe rows and proves the rebuild
 // is lossless: identical columns, identical values, all 7 provider indexes,
 // all 13 six-table triggers, and no leftover *_new tables.
 func TestMigration021PreservesLegacyLedgerRows(t *testing.T) {
-	db := preCryptoExpansionRebuildDB(t)
+	db := migrationDBBefore(t, "021_ledger_provider_crypto_expansion.sql")
 	seedCryptoExpansionLegacyRows(t, db)
 
-	tables := cryptoExpansionLedgerTables()
+	tables := ledgerRebuildTables()
 	before := make(map[string][][]string, len(tables))
 	for _, table := range tables {
 		cols, rows := ledgerTableDump(t, db, table.name)
@@ -147,7 +71,7 @@ func TestMigration021PreservesLegacyLedgerRows(t *testing.T) {
 		before[table.name] = rows
 	}
 
-	applyCryptoExpansionRebuild(t, db)
+	applyMigrationFile(t, db, "021_ledger_provider_crypto_expansion.sql")
 
 	for _, table := range tables {
 		cols, rows := ledgerTableDump(t, db, table.name)
@@ -159,41 +83,7 @@ func TestMigration021PreservesLegacyLedgerRows(t *testing.T) {
 		}
 	}
 
-	indexes := schemaObjectNames(t, db, "index")
-	for _, name := range []string{
-		"idx_payment_attempts_order", "idx_payment_events_order_time",
-		"idx_payment_anomalies_provider_time", "idx_refunds_order",
-		"idx_refunds_payment_identity", "idx_payment_resolutions_order",
-		"idx_payment_ingress_audits_order",
-		// order_events is not rebuilt; its index must survive regardless.
-		"idx_order_events_order_time",
-	} {
-		if !indexes[name] {
-			t.Errorf("index %s missing after rebuild: %v", name, indexes)
-		}
-	}
-
-	triggers := schemaObjectNames(t, db, "trigger")
-	for _, name := range []string{
-		"payment_attempts_identity_no_update", "payment_attempts_entitlement_once",
-		"payment_attempts_no_delete", "refunds_identity_no_update", "refunds_no_delete",
-		"payment_events_no_update", "payment_events_no_delete",
-		"payment_anomalies_no_update", "payment_anomalies_no_delete",
-		"payment_resolutions_no_update", "payment_resolutions_no_delete",
-		"payment_ingress_audits_no_update", "payment_ingress_audits_no_delete",
-		// order_events is not rebuilt; its triggers must survive regardless.
-		"order_events_no_update", "order_events_no_delete",
-	} {
-		if !triggers[name] {
-			t.Errorf("trigger %s missing after rebuild: %v", name, triggers)
-		}
-	}
-
-	for name := range schemaObjectNames(t, db, "table") {
-		if strings.HasSuffix(name, "_new") {
-			t.Errorf("temporary table %s left behind by rebuild", name)
-		}
-	}
+	assertLedgerRebuildInventory(t, db)
 
 	// FK integrity: every parked payment_events row still references an
 	// existing payment_attempts row after the parent was dropped and rebuilt.
@@ -215,8 +105,8 @@ func TestMigration021PreservesLegacyLedgerRows(t *testing.T) {
 // also keeps 'unknown') while still rejecting an unapproved provider with a
 // CHECK constraint failure.
 func TestMigration021AcceptsCryptoExpansionProviders(t *testing.T) {
-	db := preCryptoExpansionRebuildDB(t)
-	applyCryptoExpansionRebuild(t, db)
+	db := migrationDBBefore(t, "021_ledger_provider_crypto_expansion.sql")
+	applyMigrationFile(t, db, "021_ledger_provider_crypto_expansion.sql")
 	if _, err := db.Conn().Exec(`INSERT INTO orders (user_id, total_usd, total_stars, status)
 		VALUES (42, 1, 100, 'pending')`); err != nil {
 		t.Fatal(err)
@@ -312,45 +202,11 @@ func TestMigration021AcceptsCryptoExpansionProviders(t *testing.T) {
 // and no-delete protection must all still abort after the tables are dropped
 // and renamed.
 func TestMigration021ImmutabilityTriggersSurviveRebuild(t *testing.T) {
-	db := preCryptoExpansionRebuildDB(t)
+	db := migrationDBBefore(t, "021_ledger_provider_crypto_expansion.sql")
 	seedLegacyLedgerRows(t, db)
-	applyCryptoExpansionRebuild(t, db)
+	applyMigrationFile(t, db, "021_ledger_provider_crypto_expansion.sql")
 
-	aborts := []struct {
-		note      string
-		want      string
-		statement string
-	}{
-		{"payment_attempts amount update", "identity is immutable",
-			`UPDATE payment_attempts SET amount_minor = 999 WHERE id = 1`},
-		{"payment_attempts identity update", "identity is immutable",
-			`UPDATE payment_attempts SET provider = 'crypto', external_id = 'tampered' WHERE id = 1`},
-		{"payment_attempts entitlement update", "entitlement expiry is immutable",
-			`UPDATE payment_attempts SET entitlement_expires_at = NULL WHERE id = 1`},
-		{"refunds identity update", "identity is immutable",
-			`UPDATE refunds SET provider = 'crypto', external_id = 'tampered' WHERE id = 1`},
-		{"payment_events update", "payment_events are append-only",
-			`UPDATE payment_events SET amount_minor = 999 WHERE id = 1`},
-		{"payment_anomalies update", "payment_anomalies are append-only",
-			`UPDATE payment_anomalies SET amount_minor = 999 WHERE id = 1`},
-		{"payment_resolutions update", "payment_resolutions are append-only",
-			`UPDATE payment_resolutions SET reason = 'tampered' WHERE id = 1`},
-		{"payment_ingress_audits update", "payment_ingress_audits are append-only",
-			`UPDATE payment_ingress_audits SET reason = 'tampered' WHERE id = 1`},
-		{"payment_attempts delete", "payment_attempts cannot be deleted",
-			`DELETE FROM payment_attempts WHERE id = 1`},
-		{"refunds delete", "refunds cannot be deleted",
-			`DELETE FROM refunds WHERE id = 1`},
-		{"payment_events delete", "payment_events are append-only",
-			`DELETE FROM payment_events WHERE id = 1`},
-		{"payment_anomalies delete", "payment_anomalies are append-only",
-			`DELETE FROM payment_anomalies WHERE id = 1`},
-		{"payment_resolutions delete", "payment_resolutions are append-only",
-			`DELETE FROM payment_resolutions WHERE id = 1`},
-		{"payment_ingress_audits delete", "payment_ingress_audits are append-only",
-			`DELETE FROM payment_ingress_audits WHERE id = 1`},
-	}
-	for _, tc := range aborts {
+	for _, tc := range ledgerImmutabilityAborts() {
 		_, err := db.Conn().Exec(tc.statement)
 		if err == nil {
 			t.Fatalf("%s: unexpectedly succeeded", tc.note)

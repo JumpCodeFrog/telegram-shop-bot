@@ -65,6 +65,10 @@ type fakeCart struct {
 	// service.ExchangeService.ConvertUSDToRUB; 0 leaves TotalRUB at 0
 	// (RUB payments disabled).
 	rubRate float64
+	// tonRate converts TotalUSD into TotalTONNano exactly like
+	// service.ExchangeService.ConvertUSDToNanoTON; 0 leaves TotalTONNano at
+	// 0 (TON payments disabled).
+	tonRate float64
 }
 
 func (f *fakeCart) userItems(userID int64) map[int64]int {
@@ -87,6 +91,9 @@ func (f *fakeCart) Get(_ context.Context, userID int64) (*shop.CartView, error) 
 	}
 	if f.rubRate > 0 {
 		view.TotalRUB = math.Round(view.TotalUSD*(f.rubRate*100)) / 100
+	}
+	if f.tonRate > 0 {
+		view.TotalTONNano = int64(math.Round(view.TotalUSD * 1e9 / f.tonRate))
 	}
 	return view, nil
 }
@@ -402,6 +409,12 @@ func newFixture(t *testing.T) *fixture {
 		TON:         ton,
 		Nowpayments: nowpayments,
 		Files:       fakeFiles{},
+		// All rails available, mirroring main.go's computation for a fully
+		// configured shop with positive USD_TO_RUB_RATE / USD_PER_TON.
+		YooKassaAvailable:    true,
+		StripeAvailable:      true,
+		TONAvailable:         true,
+		NowpaymentsAvailable: true,
 	}, nil)
 	return &fixture{server: srv, tg: tg, crypto: crypto, yookassa: yookassa, stripe: stripe, ton: ton, nowpayments: nowpayments, orders: orders, cart: cart}
 }
@@ -608,6 +621,123 @@ func TestCartRejectsBadBody(t *testing.T) {
 	rec = f.request(t, http.MethodPost, "/api/cart", `{"product_id":1,"delta":0}`, true)
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("delta=0: status = %d, want 400", rec.Code)
+	}
+}
+
+// TestCartExposesConvertedTotalsAndRailFlags pins the cart payload the Mini
+// App renders its payment buttons from: the converted totals and one
+// availability flag per newer rail.
+func TestCartExposesConvertedTotalsAndRailFlags(t *testing.T) {
+	f := newFixture(t)
+	f.cart.rubRate = 92.5 // 2 × $5 = $10 → 925.00 RUB
+	f.cart.tonRate = 5    // $10 → 2 TON → 2e9 nanoTON
+	f.request(t, http.MethodPost, "/api/cart", `{"product_id":1,"delta":2}`, true)
+
+	rec := f.request(t, http.MethodGet, "/api/cart", "", true)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	got := decodeJSON(t, rec)
+	if got["total_rub"] != 925.0 {
+		t.Errorf("total_rub = %v, want 925", got["total_rub"])
+	}
+	if got["total_ton_nano"] != float64(2_000_000_000) {
+		t.Errorf("total_ton_nano = %v, want 2000000000", got["total_ton_nano"])
+	}
+	for _, key := range []string{"yookassa_enabled", "stripe_enabled", "ton_enabled", "nowpayments_enabled"} {
+		if got[key] != true {
+			t.Errorf("%s = %v, want true (all rails available, positive totals)", key, got[key])
+		}
+	}
+}
+
+// TestCartRailFlagsFollowAvailability pins the config matrix: a rail's flag
+// is false when main marked it unavailable, and — for the converted rails —
+// when the cart's converted total is 0 (rate unset), even if the rail is
+// otherwise available. This mirrors the bot's payment-keyboard predicates.
+func TestCartRailFlagsFollowAvailability(t *testing.T) {
+	setup := func(t *testing.T) *fixture {
+		f := newFixture(t)
+		f.cart.rubRate = 92.5
+		f.cart.tonRate = 5
+		f.request(t, http.MethodPost, "/api/cart", `{"product_id":1}`, true)
+		return f
+	}
+	flag := func(t *testing.T, f *fixture, key string) any {
+		t.Helper()
+		rec := f.request(t, http.MethodGet, "/api/cart", "", true)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+		}
+		return decodeJSON(t, rec)[key]
+	}
+
+	// Each rail unavailable → only its own flag drops.
+	f := setup(t)
+	f.server.deps.YooKassaAvailable = false
+	if got := flag(t, f, "yookassa_enabled"); got != false {
+		t.Errorf("yookassa_enabled = %v, want false (rail unavailable)", got)
+	}
+	if got := flag(t, f, "stripe_enabled"); got != true {
+		t.Errorf("stripe_enabled = %v, want true (unaffected)", got)
+	}
+
+	f = setup(t)
+	f.server.deps.StripeAvailable = false
+	if got := flag(t, f, "stripe_enabled"); got != false {
+		t.Errorf("stripe_enabled = %v, want false (rail unavailable)", got)
+	}
+
+	f = setup(t)
+	f.server.deps.TONAvailable = false
+	if got := flag(t, f, "ton_enabled"); got != false {
+		t.Errorf("ton_enabled = %v, want false (rail unavailable)", got)
+	}
+
+	f = setup(t)
+	f.server.deps.NowpaymentsAvailable = false
+	if got := flag(t, f, "nowpayments_enabled"); got != false {
+		t.Errorf("nowpayments_enabled = %v, want false (rail unavailable)", got)
+	}
+
+	// Available but the converted total is 0 (rate 0 → RUB/TON disabled):
+	// the button must hide rather than offer a zero charge.
+	f = setup(t)
+	f.cart.rubRate = 0
+	if got := flag(t, f, "yookassa_enabled"); got != false {
+		t.Errorf("yookassa_enabled = %v, want false (TotalRUB 0)", got)
+	}
+	if got := flag(t, f, "ton_enabled"); got != true {
+		t.Errorf("ton_enabled = %v, want true (TON unaffected by the RUB rate)", got)
+	}
+
+	f = setup(t)
+	f.cart.tonRate = 0
+	if got := flag(t, f, "ton_enabled"); got != false {
+		t.Errorf("ton_enabled = %v, want false (TotalTONNano 0)", got)
+	}
+	if got := flag(t, f, "yookassa_enabled"); got != true {
+		t.Errorf("yookassa_enabled = %v, want true (RUB unaffected by the TON rate)", got)
+	}
+}
+
+// TestCartRailFlagsHideForSubscriptions mirrors the bot: subscription carts
+// are Stars-only, so every newer rail's flag is false no matter the config.
+func TestCartRailFlagsHideForSubscriptions(t *testing.T) {
+	f := newFixture(t)
+	f.cart.rubRate = 92.5
+	f.cart.tonRate = 5
+	f.request(t, http.MethodPost, "/api/cart", `{"product_id":3}`, true) // Pro Sub
+
+	rec := f.request(t, http.MethodGet, "/api/cart", "", true)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	got := decodeJSON(t, rec)
+	for _, key := range []string{"yookassa_enabled", "stripe_enabled", "ton_enabled", "nowpayments_enabled"} {
+		if got[key] != false {
+			t.Errorf("%s = %v, want false (subscription carts are Stars-only)", key, got[key])
+		}
 	}
 }
 

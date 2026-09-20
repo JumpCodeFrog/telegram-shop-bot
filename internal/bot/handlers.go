@@ -31,7 +31,7 @@ func (b *Bot) routeMessage(msg *tgbotapi.Message) {
 		return
 	}
 
-	routeCtx, routeCancel := handlerCtx()
+	routeCtx, routeCancel := b.handlerCtx()
 	defer routeCancel()
 
 	// Check if user is entering a promo code.
@@ -375,7 +375,7 @@ func (b *Bot) onBack(chatID, userID int64, msgID int, data, lang string) {
 
 	switch {
 	case target == "menu":
-		ctx, cancel := handlerCtx()
+		ctx, cancel := b.handlerCtx()
 		defer cancel()
 		b.sendMainMenu(chatID, userID, msgID, lang, ctx)
 

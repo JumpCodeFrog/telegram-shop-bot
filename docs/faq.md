@@ -32,9 +32,35 @@ Just set `USD_TO_STARS_RATE` to control the price conversion (default: 50 Stars 
 2. Copy the token and set `CRYPTOBOT_TOKEN=<token>` in `.env`.
 3. Restart the bot — crypto payment buttons appear automatically.
 
+### How do I enable YooKassa (RUB card) payments?
+
+1. In the [YooKassa merchant cabinet](https://yookassa.ru/) create a shop and copy its shop ID and secret key.
+2. Set `YOOKASSA_SHOP_ID`, `YOOKASSA_SECRET_KEY`, `YOOKASSA_RETURN_URL` (public HTTPS page the buyer returns to) and `USD_TO_RUB_RATE` (RUB per 1 USD, e.g. `92.5`) in `.env` — the first three must be set together.
+3. Set `WEBHOOK_URL` and register `<WEBHOOK_URL>/yookassa-webhook` as the notification URL in the merchant cabinet.
+4. Restart the bot — the "Pay by card" button appears automatically.
+
+### How do I enable Stripe (USD card) payments?
+
+1. In the Stripe Dashboard get your secret key (`sk_live_…` / `sk_test_…`).
+2. Set `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` and `STRIPE_RETURN_URL` (public HTTPS) in `.env` — all three must be set together.
+3. Set `WEBHOOK_URL`; in the dashboard (Developers → Webhooks) register `<WEBHOOK_URL>/stripe-webhook` for `checkout.session.completed` and copy the endpoint's signing secret (`whsec_…`) into `STRIPE_WEBHOOK_SECRET`.
+4. Restart the bot — the Stripe card button appears automatically.
+
+### How do I enable TON (on-chain) payments?
+
+1. Set `TON_WALLET_ADDRESS` (the shop's 48-character TON wallet) and `USD_PER_TON` (USD per 1 TON, e.g. `5.25`) together in `.env`; `TON_API_KEY` (toncenter) is optional and only lifts rate limits.
+2. Restart the bot — the TON button appears automatically. There is no webhook: a background worker polls the wallet via toncenter every ~30 seconds.
+
+### How do I enable NOWPayments (300+ coins) payments?
+
+1. In the NOWPayments dashboard get your API key.
+2. Set `NOWPAYMENTS_API_KEY`, `NOWPAYMENTS_IPN_SECRET` and `NOWPAYMENTS_RETURN_URL` (public HTTPS) in `.env` — all three must be set together.
+3. Set `WEBHOOK_URL` and register `<WEBHOOK_URL>/nowpayments-webhook` as the IPN callback URL in the dashboard.
+4. Restart the bot — the NOWPayments button appears automatically. Confirm the signed-IPN canonicalization with ONE live test payment before going to production (verification fails closed).
+
 ### How do I disable crypto payments?
 
-Leave `CRYPTOBOT_TOKEN` empty. The "Pay with Crypto" button is hidden automatically.
+Leave `CRYPTOBOT_TOKEN` empty. The "Pay with Crypto" button is hidden automatically. The same all-or-nothing rule disables the other optional rails: leave the YooKassa/Stripe/NOWPayments triples and the TON address+rate pair fully empty and their buttons stay hidden.
 
 ---
 

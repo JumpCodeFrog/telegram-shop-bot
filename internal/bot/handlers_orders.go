@@ -1,8 +1,6 @@
 package bot
 
 import (
-	"context"
-
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
@@ -13,7 +11,8 @@ func (b *Bot) handleOrders(msg *tgbotapi.Message) {
 
 // sendOrders sends the order history. If msgID > 0, it edits the existing message.
 func (b *Bot) sendOrders(chatID, userID int64, msgID int, lang string) {
-	ctx := context.Background()
+	ctx, cancel := b.handlerCtx()
+	defer cancel()
 	orders, err := b.order.GetUserOrders(ctx, userID)
 	if err != nil {
 		b.logger.Error("get user orders", "error", err)

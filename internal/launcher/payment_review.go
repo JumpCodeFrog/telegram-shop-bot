@@ -51,6 +51,8 @@ func RunPaymentReview(ctx context.Context, args []string, opts PaymentReviewOpti
 		return runPaymentReviewResolve(ctx, args[1:], opts)
 	case "ingest-stars":
 		return runPaymentReviewIngestStars(ctx, args[1:], opts)
+	case "ingest-provider":
+		return runPaymentReviewIngestProvider(ctx, args[1:], opts)
 	default:
 		printPaymentReviewUsage(paymentReviewOut(opts))
 		return 2
@@ -62,6 +64,7 @@ func printPaymentReviewUsage(out io.Writer) {
 	fmt.Fprintln(out, "  telegram-shop-bot payment-review list --provider stars|crypto|yookassa|stripe|ton|nowpayments|unknown")
 	fmt.Fprintln(out, "  telegram-shop-bot payment-review resolve --provider stars|crypto|yookassa|stripe|ton|nowpayments|unknown --order N [--event N|--anomaly N|--order-target N] --state STATE [--decision compensated|accepted_refund|dismissed] --actor NAME --reason TEXT [--apply --confirm-order N]")
 	fmt.Fprintln(out, "  telegram-shop-bot payment-review ingest-stars --kind capture|refund --transaction ID --order N --actor NAME --reason TEXT [--apply --confirm-order N]")
+	fmt.Fprintln(out, "  telegram-shop-bot payment-review ingest-provider --provider yookassa|stripe|ton|nowpayments --order N --amount-minor N --currency RUB|USD|TON --external-id ID --occurred-at TS --actor NAME --reason TEXT [--apply --confirm-order N]")
 }
 
 // validPaymentReviewProvider accepts exactly the providers whose quarantined

@@ -257,7 +257,8 @@ The semantics are identical to the Stars, crypto and YooKassa flows above: the
 list exits `1` while targets exist and prints local ids and reason codes only;
 resolve previews read-only first and then applies with
 `--apply --confirm-order N`. A quarantined capture still requires a durable
-succeeded refund before it can be resolved to `settled`.
+succeeded refund before it can be resolved to `settled` — see the Refunds
+paragraph below for how that refund is recorded.
 
 ### Refunds
 
@@ -306,13 +307,44 @@ orders-per-30s realities the window is ample.
 A transfer settles only when its comment is exactly `order-<id>` — the
 `ton://transfer` deeplink the bot shows prefills it, and the instructions
 display it in a code block for manual payers. A payer who forgets or mangles
-the memo sends money the bot can never match: the transfer never becomes a
-receipt, never enters the ledger, and is visible only on-chain. The operator
-resolution is manual: find the transfer in a tonviewer link to the watched
-wallet (`https://tonviewer.com/<TON_WALLET_ADDRESS>`), identify the sender,
-and refund from the wallet. There is no TON capture-ingress CLI:
-`payment-review ingest-stars` reads the Telegram Bot API and cannot serve
-this rail.
+the memo sends money the bot can never match automatically: the transfer
+never becomes a receipt on its own, never enters the ledger, and is visible
+only on-chain. The operator resolution starts on-chain: open a tonviewer
+link to the watched wallet (`https://tonviewer.com/<TON_WALLET_ADDRESS>`),
+find the transfer, and identify the sender and the intended order (usually
+from the buyer's support thread, corroborated by the amount and timing).
+Then either refund from the wallet, or attach the transfer to the order
+through the capture-ingress CLI. Preview first (read-only):
+
+```bash
+telegram-shop-bot payment-review ingest-provider \
+  --provider ton --order 42 --amount-minor 1500000000 --currency TON \
+  --external-id '<lt>:<hash>' --occurred-at 1720000000 \
+  --actor 'operator@example' --reason 'memo-less transfer, buyer identified'
+```
+
+Apply only after the preview reports `outcome=apply`:
+
+```bash
+telegram-shop-bot payment-review ingest-provider \
+  --provider ton --order 42 --amount-minor 1500000000 --currency TON \
+  --external-id '<lt>:<hash>' --occurred-at 1720000000 \
+  --actor 'operator@example' --reason 'memo-less transfer, buyer identified' \
+  --apply --confirm-order 42
+```
+
+`--amount-minor` is the ACTUAL received nanoton (scale 9) and
+`--occurred-at` accepts unix seconds or RFC3339. The same overpay-tolerant
+`>=` rule as the polling worker applies: an underpay previews
+`outcome=quarantine` and, if applied, becomes durable review evidence
+instead of settling; an exact re-run is a replay no-op. A settle through
+this CLI is identical to a polling tick for the ledger and stock, but the
+bot-runtime side effects (buyer notification, loyalty, referral) do not
+fire — confirm with the buyer in their thread. The same subcommand serves
+the other payerless rails with their rail currency and exact frozen order
+amount (`yookassa` RUB, `stripe` USD, `nowpayments` USD). `stars` keeps its
+authenticated `ingest-stars` flow; `balance` is rejected — its captures are
+synthetic admin-panel facts, never provider statements.
 
 ### Overpay-tolerant settlement, rate snapshot
 
@@ -382,7 +414,7 @@ nothing — no anomaly, no event, no order change.
 Canonicalization interop note: byte-level agreement between this Go
 canonicalization and NOWPayments' PHP-side signer is verified fail-closed — a
 mismatch rejects genuine IPNs, it can never accept a forged one — but it
-should be confirmed with ONE live test payment before enabling the rail in
+MUST be confirmed with ONE live test payment before enabling the rail in
 production.
 
 ### Finished-only settlement

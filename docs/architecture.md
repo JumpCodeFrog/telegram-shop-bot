@@ -122,10 +122,12 @@ User taps "⭐ Pay with Stars"
 
 ### PaymentOutcome pipeline
 
-All three confirmation paths — Stars `successful_payment`, the CryptoBot webhook, and the
-CryptoBot polling worker — converge on `OrderService.ConfirmPaymentReceipt`, which validates
-the complete provider fact before entering the idempotent atomic settlement boundary
-(`ErrOrderStatusConflict` on repeats) and returns a `*PaymentOutcome`:
+Every confirmation path — the Stars `successful_payment` handler, the provider webhooks
+(CryptoBot, YooKassa, Stripe, NOWPayments), and the polling workers (TON — its only
+settlement path — and the CryptoBot backup poller) — converges on
+`OrderService.ConfirmPaymentReceipt`, which validates the complete provider fact before
+entering the idempotent atomic settlement boundary (`ErrOrderStatusConflict` on repeats)
+and returns a `*PaymentOutcome`:
 
 ```
 ConfirmPaymentReceipt(ctx, validatedReceipt)
@@ -139,12 +141,22 @@ ConfirmPaymentReceipt(ctx, validatedReceipt)
     → returns PaymentOutcome{Order, PointsAwarded, NewLevel,
                              ReferralReferrer, ReferrerPoints, NewUserPromo}
 
-Bot layer (NotifyPaymentOutcome):
-    → receipt to the buyer, points / level-up messages
-    → referral bonus message to the referrer, welcome promo to the buyer
-    → notifyAdmins(AdminEventOrderPaid, …)             group topic or DM fan-out
-    → subscription order → atomic order/payment/subscription settlement
-      (immutable product/period snapshot, charge id, expires_at)
+Bot layer, per confirmation path:
+    → webhook handlers (Stars successful_payment, CryptoBot, YooKassa,
+      Stripe, NOWPayments) run the settlement side effects inline:
+      success metric, buyer message (stars_receipt for Stars,
+      payment_success for the rest), NotifyPaymentOutcome,
+      notifyAdmins(AdminEventOrderPaid, …)  group topic or DM fan-out,
+      and the order.paid outbound webhook
+    → worker paths (the TON poller — the only TON settlement path — and
+      the CryptoBot poller, a webhook backup) wire AnnouncePaidOutcome as
+      their notify callback: the same full surface (metric, buyer
+      payment_success, NotifyPaymentOutcome, admin notification, outbound
+      webhook) in one place
+    → NotifyPaymentOutcome itself sends only the side-effect messages, all
+      best-effort (the payment is already final): loyalty points /
+      level-up and the welcome promo to the buyer, referral bonus to the
+      referrer
 ```
 
 ---

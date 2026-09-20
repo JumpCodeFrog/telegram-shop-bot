@@ -2,9 +2,19 @@ package config
 
 import (
 	"errors"
+	"net/url"
 	"strconv"
 	"strings"
 )
+
+// isHTTPSURL reports whether raw is a usable public HTTPS URL: a parseable
+// URL whose scheme is https (case-insensitive per RFC 3986, so an uppercase
+// HTTPS:// is accepted) and whose host is non-empty (a bare https:// is
+// not). Every provider return-URL check goes through this one predicate.
+func isHTTPSURL(raw string) bool {
+	u, err := url.Parse(raw)
+	return err == nil && strings.ToLower(u.Scheme) == "https" && u.Host != ""
+}
 
 const maxTelegramUserID int64 = (1 << 52) - 1
 
@@ -91,7 +101,7 @@ func ValidateYooKassaConfig(shopID, secretKey, returnURL string) error {
 	if set != 3 {
 		return errors.New("YOOKASSA_SHOP_ID, YOOKASSA_SECRET_KEY and YOOKASSA_RETURN_URL must be set together")
 	}
-	if !strings.HasPrefix(returnURL, "https://") {
+	if !isHTTPSURL(returnURL) {
 		return errors.New("YOOKASSA_RETURN_URL must be a public https:// URL")
 	}
 	return nil
@@ -122,7 +132,7 @@ func ValidateStripeConfig(secretKey, webhookSecret, returnURL string) error {
 	if set != 3 {
 		return errors.New("STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET and STRIPE_RETURN_URL must be set together")
 	}
-	if !strings.HasPrefix(returnURL, "https://") {
+	if !isHTTPSURL(returnURL) {
 		return errors.New("STRIPE_RETURN_URL must be a public https:// URL")
 	}
 	if !strings.HasPrefix(secretKey, "sk_live_") && !strings.HasPrefix(secretKey, "sk_test_") {
@@ -153,10 +163,12 @@ const tonFriendlyAddressLength = 48
 // address, and the optional toncenter API key is valid only alongside both.
 func ValidateTONConfig(address string, usdPerTON float64, apiKey string) error {
 	if address == "" {
-		if usdPerTON > 0 {
+		switch {
+		case usdPerTON > 0 && apiKey != "":
+			return errors.New("USD_PER_TON and TON_API_KEY require TON_WALLET_ADDRESS to be set")
+		case usdPerTON > 0:
 			return errors.New("USD_PER_TON requires TON_WALLET_ADDRESS to be set")
-		}
-		if apiKey != "" {
+		case apiKey != "":
 			return errors.New("TON_API_KEY requires TON_WALLET_ADDRESS and USD_PER_TON to be set")
 		}
 		return nil
@@ -195,7 +207,7 @@ func ValidateNowpaymentsConfig(apiKey, ipnSecret, returnURL string) error {
 	if set != 3 {
 		return errors.New("NOWPAYMENTS_API_KEY, NOWPAYMENTS_IPN_SECRET and NOWPAYMENTS_RETURN_URL must be set together")
 	}
-	if !strings.HasPrefix(returnURL, "https://") {
+	if !isHTTPSURL(returnURL) {
 		return errors.New("NOWPAYMENTS_RETURN_URL must be a public https:// URL")
 	}
 	return nil

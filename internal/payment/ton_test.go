@@ -188,6 +188,37 @@ func TestTONGetTransactionsMapsAPIErrors(t *testing.T) {
 	}
 }
 
+func TestTONGetTransactionsClampsLimitToToncenterBounds(t *testing.T) {
+	// toncenter's getTransactions accepts limit in [1, 100]; out-of-range
+	// values are clamped client-side so a caller mistake can never become a
+	// 400 from the API.
+	for _, tc := range []struct {
+		name  string
+		limit int
+		want  string
+	}{
+		{name: "zero clamps to 1", limit: 0, want: "1"},
+		{name: "negative clamps to 1", limit: -5, want: "1"},
+		{name: "within bounds passes through", limit: 50, want: "50"},
+		{name: "over the top clamps to 100", limit: 150, want: "100"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if got := r.URL.Query().Get("limit"); got != tc.want {
+					t.Errorf("limit = %q, want %q", got, tc.want)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"ok":true,"result":[]}`))
+			}))
+			defer srv.Close()
+
+			if _, err := newTONTestClient(srv).GetTransactions(context.Background(), tc.limit); err != nil {
+				t.Fatalf("GetTransactions(%d): %v", tc.limit, err)
+			}
+		})
+	}
+}
+
 func TestTONGetTransactionsRequiresConfiguration(t *testing.T) {
 	if _, err := NewTONPayment("", tonTestAPIKey).GetTransactions(context.Background(), 10); !errors.Is(err, ErrTONNotConfigured) {
 		t.Fatalf("GetTransactions unconfigured = %v, want ErrTONNotConfigured", err)

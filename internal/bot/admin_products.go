@@ -1,7 +1,6 @@
 package bot
 
 import (
-	"context"
 	"fmt"
 	"strconv"
 	"strings"
@@ -16,13 +15,15 @@ func (b *Bot) handleAddProduct(msg *tgbotapi.Message) {
 	if !b.isAdmin(msg.From.ID) {
 		return
 	}
-	ctx := context.Background()
+	ctx, cancel := b.handlerCtx()
+	defer cancel()
 	_ = b.fsm.SetAddProductState(ctx, msg.From.ID, &storage.AddProductState{Step: storage.StepName, CreatedAt: time.Now()}, 30*time.Minute)
 	b.send(tgbotapi.NewMessage(msg.Chat.ID, b.t(msg.From.LanguageCode, "admin_add_product_name")))
 }
 
 func (b *Bot) handleAddProductStep(msg *tgbotapi.Message) bool {
-	ctx := context.Background()
+	ctx, cancel := b.handlerCtx()
+	defer cancel()
 	if msg.Text == "/cancel" {
 		state, _ := b.fsm.GetAddProductState(ctx, msg.From.ID)
 		_ = b.fsm.DelAddProductState(ctx, msg.From.ID)
@@ -83,7 +84,8 @@ func (b *Bot) handleAddProductStep(msg *tgbotapi.Message) bool {
 }
 
 func (b *Bot) finishAddProduct(chatID, userID, categoryID int64, lang string) {
-	ctx := context.Background()
+	ctx, cancel := b.handlerCtx()
+	defer cancel()
 	state, _ := b.fsm.GetAddProductState(ctx, userID)
 	_ = b.fsm.DelAddProductState(ctx, userID)
 	if state == nil {
@@ -145,7 +147,9 @@ func (b *Bot) handleEditProduct(msg *tgbotapi.Message) {
 		return
 	}
 
-	product, err := b.products.GetProduct(context.Background(), id)
+	ctx, cancel := b.handlerCtx()
+	defer cancel()
+	product, err := b.products.GetProduct(ctx, id)
 	if err != nil {
 		b.send(tgbotapi.NewMessage(msg.Chat.ID, b.t(lang, "admin_product_not_found")))
 		return
@@ -164,7 +168,8 @@ func (b *Bot) handleEditProductField(msg *tgbotapi.Message, prodID int64, field,
 		return
 	}
 
-	ctx := context.Background()
+	ctx, cancel := b.handlerCtx()
+	defer cancel()
 	product, err := b.products.GetProduct(ctx, prodID)
 	if err != nil {
 		b.send(tgbotapi.NewMessage(msg.Chat.ID, b.t(lang, "admin_product_not_found")))
@@ -228,7 +233,9 @@ func (b *Bot) handleDeleteProduct(msg *tgbotapi.Message) {
 		b.send(tgbotapi.NewMessage(msg.Chat.ID, b.t(lang, "admin_usage_deleteproduct")))
 		return
 	}
-	if err := b.products.DeleteProduct(context.Background(), id); err != nil {
+	ctx, cancel := b.handlerCtx()
+	defer cancel()
+	if err := b.products.DeleteProduct(ctx, id); err != nil {
 		b.logger.Error("delete product", "product_id", id, "error", err)
 		b.send(tgbotapi.NewMessage(msg.Chat.ID, b.t(lang, "admin_product_delete_failed")))
 		return
@@ -244,7 +251,8 @@ func (b *Bot) onAdminToggleStock(chatID int64, data, lang string) {
 		return
 	}
 
-	ctx := context.Background()
+	ctx, cancel := b.handlerCtx()
+	defer cancel()
 	product, err := b.products.GetProduct(ctx, productID)
 	if err != nil {
 		b.logger.Error("get product for stock toggle", "product_id", productID, "error", err)

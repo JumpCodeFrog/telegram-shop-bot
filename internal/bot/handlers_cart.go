@@ -1,7 +1,6 @@
 package bot
 
 import (
-	"context"
 	"fmt"
 	"strconv"
 
@@ -15,7 +14,8 @@ func (b *Bot) handleCart(msg *tgbotapi.Message) {
 
 // sendCart sends the cart view. If msgID > 0, it edits the existing message.
 func (b *Bot) sendCart(chatID, userID int64, msgID int, lang string) {
-	ctx := context.Background()
+	ctx, cancel := b.handlerCtx()
+	defer cancel()
 	view, err := b.cart.Get(ctx, userID)
 	if err != nil {
 		b.logger.Error("get cart", "error", err)
@@ -60,7 +60,8 @@ func (b *Bot) onCartAdd(cbID string, chatID, userID int64, msgID int, data, lang
 		return
 	}
 
-	ctx := context.Background()
+	ctx, cancel := b.handlerCtx()
+	defer cancel()
 	if err := b.cart.Add(ctx, userID, prodID); err != nil {
 		b.logger.Error("add to cart", "error", err)
 		b.alert(cbID, b.t(lang, "error_add_cart"))
@@ -79,7 +80,8 @@ func (b *Bot) onProductQuantityChange(cbID string, chatID, userID int64, msgID i
 		return
 	}
 
-	ctx := context.Background()
+	ctx, cancel := b.handlerCtx()
+	defer cancel()
 	if err := b.cart.ChangeQuantity(ctx, userID, prodID, delta); err != nil {
 		b.logger.Error("change quantity from product card", "product_id", prodID, "delta", delta, "error", err)
 		b.alert(cbID, b.t(lang, "error_short"))
@@ -97,7 +99,8 @@ func (b *Bot) onCartPlus(chatID, userID int64, msgID int, data, lang string) {
 		return
 	}
 
-	ctx := context.Background()
+	ctx, cancel := b.handlerCtx()
+	defer cancel()
 	if err := b.cart.ChangeQuantity(ctx, userID, prodID, 1); err != nil {
 		b.logger.Error("cart plus", "error", err)
 		b.sendOrEditStyled(chatID, 0, b.t(lang, "error_short"), "", nil)
@@ -113,7 +116,8 @@ func (b *Bot) onCartMinus(chatID, userID int64, msgID int, data, lang string) {
 		return
 	}
 
-	ctx := context.Background()
+	ctx, cancel := b.handlerCtx()
+	defer cancel()
 	view, err := b.cart.Get(ctx, userID)
 	if err != nil {
 		b.logger.Error("get cart for minus", "error", err)
@@ -149,7 +153,8 @@ func (b *Bot) onCartDel(chatID, userID int64, msgID int, data, lang string) {
 		return
 	}
 
-	ctx := context.Background()
+	ctx, cancel := b.handlerCtx()
+	defer cancel()
 	if err := b.cart.Remove(ctx, userID, prodID); err != nil {
 		b.logger.Error("cart del", "error", err)
 		b.sendOrEditStyled(chatID, 0, b.t(lang, "error_remove_cart"), "", nil)
@@ -159,7 +164,8 @@ func (b *Bot) onCartDel(chatID, userID int64, msgID int, data, lang string) {
 }
 
 func (b *Bot) onCartCheckout(chatID, userID int64, msgID int, lang string) {
-	ctx := context.Background()
+	ctx, cancel := b.handlerCtx()
+	defer cancel()
 	view, err := b.cart.Get(ctx, userID)
 	if err != nil {
 		b.logger.Error("get cart for checkout", "error", err)

@@ -13,7 +13,7 @@ const inlineResultsLimit = 20
 // handleInlineQuery handles inline queries by returning matching active products.
 // Usage in Telegram: @bot_name <search query>
 func (b *Bot) handleInlineQuery(iq *tgbotapi.InlineQuery) {
-	ctx, cancel := handlerCtx()
+	ctx, cancel := b.handlerCtx()
 	defer cancel()
 
 	lang := iq.From.LanguageCode

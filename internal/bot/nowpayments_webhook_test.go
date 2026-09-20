@@ -15,6 +15,7 @@ import (
 	"crypto/sha512"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -79,6 +80,16 @@ func nowpaymentsIPNBody(paymentID, status string, priceAmount float64, orderID i
 	return fmt.Sprintf(`{ "payment_status": %q,  "order_id": "%d", "price_currency": "usd", `+
 		`"payment_id": %s, "price_amount": %s }`,
 		status, orderID, paymentID, strconv.FormatFloat(priceAmount, 'f', -1, 64))
+}
+
+// nowpaymentsIPNBodyRawOrder builds a finished IPN whose order_id is an
+// arbitrary string. With a non-numeric order_id the IPN parses but
+// PaymentReceipt must refuse to build an order receipt from it
+// (webhook_invalid_receipt quarantine) even though the signature is valid.
+func nowpaymentsIPNBodyRawOrder(paymentID, orderIDRaw string, priceAmount float64) string {
+	return fmt.Sprintf(`{ "payment_status": "finished",  "order_id": %q, "price_currency": "usd", `+
+		`"payment_id": %s, "price_amount": %s }`,
+		orderIDRaw, paymentID, strconv.FormatFloat(priceAmount, 'f', -1, 64))
 }
 
 func postNowpaymentsWebhook(t *testing.T, b *Bot, signature, body string) *httptest.ResponseRecorder {
@@ -407,6 +418,86 @@ func TestNowpaymentsWebhookAmountMismatchQuarantines(t *testing.T) {
 	}
 	if reason != "receipt_mismatch" || externalID != "5077125099" {
 		t.Fatalf("anomaly reason=%q external_id=%q, want receipt_mismatch / 5077125099", reason, externalID)
+	}
+	if got := e.tg.count() - before; got != 0 {
+		t.Fatalf("messages sent = %d, want 0:\n%s", got, dumpCalls(e.tg.since(before)))
+	}
+}
+
+func TestNowpaymentsWebhookInvalidReceiptQuarantines(t *testing.T) {
+	api := newNowpaymentsMock(t)
+	e := newNowpaymentsWebhookEnv(t, api, nil)
+	const buyer = int64(8761)
+	orderID := placeUSDOrder(e, buyer)
+
+	// A validly signed finished IPN whose order_id is not a positive integer:
+	// no receipt can be built, so the provider fact is quarantined
+	// (webhook_invalid_receipt) and ACKed — never settled.
+	body := nowpaymentsIPNBodyRawOrder("5077129998", "ORD-42", 10)
+	before := e.tg.count()
+	rec := postNowpaymentsWebhook(t, e.bot, nowpaymentsIPNSignature(nowpaymentsTestIPNSecret, body), body)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (the invalid receipt is durably quarantined) (%s)", rec.Code, rec.Body.String())
+	}
+	if got := api.count(); got != 0 {
+		t.Fatalf("nowpayments API calls = %d, want 0 (the signed body is authoritative — no refetch)", got)
+	}
+	var reason, externalID string
+	var proposed int64
+	if err := e.db.Conn().QueryRow(`SELECT reason, external_id, proposed_order_id FROM payment_anomalies
+		WHERE provider='nowpayments'`).Scan(&reason, &externalID, &proposed); err != nil {
+		t.Fatalf("no nowpayments anomaly recorded for the invalid receipt: %v", err)
+	}
+	if reason != "webhook_invalid_receipt" || externalID != "5077129998" || proposed != 0 {
+		t.Fatalf("anomaly reason=%q external_id=%q proposed_order_id=%d, want webhook_invalid_receipt / 5077129998 / 0",
+			reason, externalID, proposed)
+	}
+	if got := e.qStr(`SELECT status FROM orders WHERE id = ?`, orderID); got != storage.OrderStatusPending {
+		t.Fatalf("order status = %q, want pending (nothing settled)", got)
+	}
+	if got := e.qStr(`SELECT payment_state FROM orders WHERE id = ?`, orderID); got != storage.PaymentStatePending {
+		t.Fatalf("payment_state = %q, want pending (an orphan fact touches no order)", got)
+	}
+	if got := e.qInt(`SELECT COUNT(*) FROM payment_attempts WHERE provider='nowpayments'`); got != 0 {
+		t.Fatalf("payment attempts = %d, want 0", got)
+	}
+	if got := e.tg.count() - before; got != 0 {
+		t.Fatalf("messages sent = %d, want 0:\n%s", got, dumpCalls(e.tg.since(before)))
+	}
+}
+
+func TestNowpaymentsWebhookQuarantineFailureWithholdsACK(t *testing.T) {
+	api := newNowpaymentsMock(t)
+	e := newNowpaymentsWebhookEnv(t, api, nil)
+	const buyer = int64(8762)
+	orderID := placeUSDOrder(e, buyer)
+	body := nowpaymentsIPNBodyRawOrder("5077129997", "ORD-42", 10)
+
+	// The quarantine write itself fails: the handler must NOT acknowledge a
+	// provider fact it could not durably record — 500 so NOWPayments retries.
+	e.failAnomalyRecording(errors.New("injected quarantine write failure"))
+
+	before := e.tg.count()
+	rec := postNowpaymentsWebhook(t, e.bot, nowpaymentsIPNSignature(nowpaymentsTestIPNSecret, body), body)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 so NOWPayments retries (%s)", rec.Code, rec.Body.String())
+	}
+	if got := api.count(); got != 0 {
+		t.Fatalf("nowpayments API calls = %d, want 0", got)
+	}
+	if got := e.qStr(`SELECT status FROM orders WHERE id = ?`, orderID); got != storage.OrderStatusPending {
+		t.Fatalf("order status = %q, want pending (nothing settled)", got)
+	}
+	if got := e.qStr(`SELECT payment_state FROM orders WHERE id = ?`, orderID); got != storage.PaymentStatePending {
+		t.Fatalf("payment_state = %q, want pending (the failed write left no marker)", got)
+	}
+	if got := e.qInt(`SELECT COUNT(*) FROM payment_anomalies`); got != 0 {
+		t.Fatalf("anomalies = %d, want 0 (no partial quarantine write)", got)
+	}
+	if got := e.qInt(`SELECT COUNT(*) FROM payment_attempts WHERE provider='nowpayments'`); got != 0 {
+		t.Fatalf("payment attempts = %d, want 0", got)
 	}
 	if got := e.tg.count() - before; got != 0 {
 		t.Fatalf("messages sent = %d, want 0:\n%s", got, dumpCalls(e.tg.since(before)))

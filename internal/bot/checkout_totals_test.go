@@ -816,8 +816,11 @@ func TestPaymentKeyboardShowsTONOnlyWhenEnabled(t *testing.T) {
 			for _, button := range row {
 				if button.CallbackData != nil && *button.CallbackData == fmt.Sprintf("pay:ton:%d", orderID) {
 					found = true
-					if !strings.Contains(button.Text, "TON") {
-						t.Errorf("TON button label = %q, want a TON amount", button.Text)
+					// The locale value already names the currency, so the
+					// amount must not repeat it (no "TON ... TON"). $10.00
+					// at 5.25 USD/TON renders as 1.904761905.
+					if button.Text != "💎 TON (1.904761905)" {
+						t.Errorf("TON button label = %q, want %q", button.Text, "💎 TON (1.904761905)")
 					}
 				}
 			}

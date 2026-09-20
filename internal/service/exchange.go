@@ -5,9 +5,11 @@ import (
 	"sync"
 )
 
-// ExchangeService holds the current USD→Stars conversion rate.
-// The rate is set by Telegram's pricing (~50 Stars per $1) and rarely changes.
-// Override at startup via the USD_TO_STARS_RATE environment variable.
+// ExchangeService holds the current USD conversion rates for every payment
+// rail: USD→Stars (set by Telegram's pricing, ~50 Stars per $1, rarely
+// changes), USD→RUB and the USD-per-TON quote. Override them at startup via
+// the USD_TO_STARS_RATE, USD_TO_RUB_RATE and USD_PER_TON environment
+// variables.
 type ExchangeService struct {
 	mu         sync.RWMutex
 	usdToStars int
@@ -23,14 +25,14 @@ func NewExchangeService(usdToStarsRate int, usdToRUBRate float64, usdPerTON floa
 	return &ExchangeService{usdToStars: usdToStarsRate, usdToRUB: usdToRUBRate, usdPerTON: usdPerTON}
 }
 
-// GetUSDToStarsRate returns the current exchange rate.
+// GetUSDToStarsRate returns the current USD→Stars rate.
 func (s *ExchangeService) GetUSDToStarsRate() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.usdToStars
 }
 
-// SetRate updates the exchange rate. Safe for concurrent use.
+// SetRate updates the USD→Stars rate. Safe for concurrent use.
 func (s *ExchangeService) SetRate(rate int) {
 	s.mu.Lock()
 	s.usdToStars = rate
@@ -89,9 +91,13 @@ func (s *ExchangeService) ConvertUSDToNanoTON(amountUSD float64) int64 {
 // for shop-scale amounts, so the float64 product keeps full integer
 // precision and math.Round lands on the correct nearest nanoton.
 func ConvertUSDToNanoTON(usd, usdPerTon float64) int64 {
+	// The IsInf check on the product guards finite-but-absurd inputs:
+	// 1e300 passes the input guards, but usd*1e9 overflows to +Inf and
+	// int64(+Inf) is platform garbage, not a runaway amount we can ship.
 	if usd <= 0 || usdPerTon <= 0 ||
 		math.IsNaN(usd) || math.IsNaN(usdPerTon) ||
-		math.IsInf(usd, 0) || math.IsInf(usdPerTon, 0) {
+		math.IsInf(usd, 0) || math.IsInf(usdPerTon, 0) ||
+		math.IsInf(usd*1e9, 0) {
 		return 0
 	}
 	return int64(math.Round(usd * 1e9 / usdPerTon))

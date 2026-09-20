@@ -2,67 +2,21 @@ package storage
 
 import (
 	"context"
-	"database/sql"
 	"errors"
-	"path/filepath"
 	"testing"
 )
-
-// preOrdersTotalTonNanoDB applies every migration before 022, leaving the
-// orders table exactly where production databases stood after migration 021 —
-// without the total_ton_nano column.
-func preOrdersTotalTonNanoDB(t *testing.T) *DB {
-	t.Helper()
-	conn, err := sql.Open("sqlite", dsn(filepath.Join(t.TempDir(), "v21.db")))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = conn.Close() })
-	if _, err := conn.Exec(`CREATE TABLE schema_migrations (version TEXT PRIMARY KEY)`); err != nil {
-		t.Fatal(err)
-	}
-	db := &DB{conn: conn}
-	entries, err := migrationsFS.ReadDir("migrations")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, entry := range entries {
-		if entry.Name() == "022_orders_total_ton_nano.sql" {
-			break
-		}
-		statements, err := migrationsFS.ReadFile("migrations/" + entry.Name())
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := db.applyMigration(entry.Name(), string(statements)); err != nil {
-			t.Fatalf("apply %s: %v", entry.Name(), err)
-		}
-	}
-	return db
-}
-
-func applyOrdersTotalTonNano(t *testing.T, db *DB) {
-	t.Helper()
-	statements, err := migrationsFS.ReadFile("migrations/022_orders_total_ton_nano.sql")
-	if err != nil {
-		t.Fatalf("read 022_orders_total_ton_nano.sql: %v", err)
-	}
-	if err := db.applyMigration("022_orders_total_ton_nano.sql", string(statements)); err != nil {
-		t.Fatalf("apply 022_orders_total_ton_nano.sql: %v", err)
-	}
-}
 
 // TestMigration022OrdersTotalTonNano proves the column lands with DEFAULT 0 on
 // rows that predate it and that an explicit nanoTON value round-trips.
 func TestMigration022OrdersTotalTonNano(t *testing.T) {
-	db := preOrdersTotalTonNanoDB(t)
+	db := migrationDBBefore(t, "022_orders_total_ton_nano.sql")
 
 	if _, err := db.Conn().Exec(`INSERT INTO orders (user_id, total_usd, total_stars, status)
 		VALUES (42, 5, 100, 'pending')`); err != nil {
 		t.Fatalf("insert pre-022 legacy order: %v", err)
 	}
 
-	applyOrdersTotalTonNano(t, db)
+	applyMigrationFile(t, db, "022_orders_total_ton_nano.sql")
 
 	var legacy int64
 	if err := db.Conn().QueryRow(`SELECT total_ton_nano FROM orders WHERE id = 1`).Scan(&legacy); err != nil {

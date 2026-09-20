@@ -303,6 +303,14 @@ func runBot() {
 			TON:         tonPayments,
 			Nowpayments: nowpaymentsPayments,
 			Files:       b.API(),
+			// Rendered-availability flags for the Mini App cart payload —
+			// the exact predicates of the bot's payment keyboard (bot.go:
+			// yooKassaPaymentsEnabled & co.): configured credentials, plus
+			// a positive rate for the converted (RUB/TON) rails.
+			YooKassaAvailable:    yookassaPayments.Configured() && cfg.USDToRUBRate > 0,
+			StripeAvailable:      stripePayments.Configured(),
+			TONAvailable:         tonPayments.Configured() && cfg.USDPerTON > 0,
+			NowpaymentsAvailable: nowpaymentsPayments.Configured(),
 		}, logger)
 	}
 

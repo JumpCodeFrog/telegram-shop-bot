@@ -1,7 +1,6 @@
 package bot
 
 import (
-	"context"
 	"fmt"
 	"strconv"
 	"strings"
@@ -26,7 +25,9 @@ func (b *Bot) handleAddCategory(msg *tgbotapi.Message) {
 		Name:     strings.Join(args[1:], " "),
 		IsActive: true,
 	}
-	id, err := b.catalog.CreateCategory(context.Background(), cat)
+	ctx, cancel := b.handlerCtx()
+	defer cancel()
+	id, err := b.catalog.CreateCategory(ctx, cat)
 	if err != nil {
 		b.logger.Error("create category", "error", err)
 		b.send(tgbotapi.NewMessage(msg.Chat.ID, b.t(lang, "admin_category_create_failed")))
@@ -52,7 +53,8 @@ func (b *Bot) handleEditCategory(msg *tgbotapi.Message) {
 		return
 	}
 
-	ctx := context.Background()
+	ctx, cancel := b.handlerCtx()
+	defer cancel()
 	category, err := b.catalog.GetCategory(ctx, categoryID)
 	if err != nil {
 		b.send(tgbotapi.NewMessage(msg.Chat.ID, b.t(lang, "admin_category_not_found")))
@@ -89,7 +91,9 @@ func (b *Bot) handleDeleteCategory(msg *tgbotapi.Message) {
 		b.send(tgbotapi.NewMessage(msg.Chat.ID, b.t(lang, "admin_usage_deletecategory")))
 		return
 	}
-	if err := b.catalog.DeleteCategory(context.Background(), id); err != nil {
+	ctx, cancel := b.handlerCtx()
+	defer cancel()
+	if err := b.catalog.DeleteCategory(ctx, id); err != nil {
 		b.logger.Error("delete category", "category_id", id, "error", err)
 		b.send(tgbotapi.NewMessage(msg.Chat.ID, b.t(lang, "admin_category_delete_failed")))
 		return
@@ -102,7 +106,9 @@ func (b *Bot) handleListCategories(msg *tgbotapi.Message) {
 		return
 	}
 	lang := msg.From.LanguageCode
-	categories, err := b.catalog.ListCategories(context.Background())
+	ctx, cancel := b.handlerCtx()
+	defer cancel()
+	categories, err := b.catalog.ListCategories(ctx)
 	if err != nil {
 		b.logger.Error("list categories", "error", err)
 		b.send(tgbotapi.NewMessage(msg.Chat.ID, b.t(lang, "admin_categories_load_failed")))

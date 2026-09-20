@@ -21,7 +21,8 @@ func (b *Bot) handleCatalog(msg *tgbotapi.Message) {
 
 // sendCatalog sends the category list. If msgID > 0, it edits the existing message.
 func (b *Bot) sendCatalog(chatID int64, msgID int, lang string) {
-	ctx := context.Background()
+	ctx, cancel := b.handlerCtx()
+	defer cancel()
 	categories, err := b.catalog.ListCategories(ctx)
 	if err != nil {
 		b.logger.Error("list categories", "error", err)
@@ -62,7 +63,8 @@ func (b *Bot) onCategorySelected(chatID, userID int64, msgID int, data, lang str
 		}
 	}
 
-	ctx := context.Background()
+	ctx, cancel := b.handlerCtx()
+	defer cancel()
 	category, err := b.catalog.GetCategory(ctx, catID)
 	if err != nil {
 		b.logger.Error("get category", "category_id", catID, "error", err)
@@ -134,7 +136,8 @@ func (b *Bot) onProductSelected(chatID, userID int64, msgID int, data, lang stri
 		return
 	}
 
-	ctx := context.Background()
+	ctx, cancel := b.handlerCtx()
+	defer cancel()
 	p, err := b.catalog.GetProduct(ctx, prodID)
 	if err != nil {
 		b.logger.Error("get product", "error", err)
@@ -283,7 +286,8 @@ func (b *Bot) cartQuantity(ctx context.Context, userID, prodID int64) (int, erro
 }
 
 func (b *Bot) refreshProductKeyboard(chatID, userID int64, msgID int, prodID int64, lang string) {
-	ctx := context.Background()
+	ctx, cancel := b.handlerCtx()
+	defer cancel()
 
 	p, err := b.catalog.GetProduct(ctx, prodID)
 	if err != nil {

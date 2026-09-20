@@ -26,7 +26,8 @@ func (b *Bot) onPayStars(cbID string, chatID, userID int64, msgID int, data, lan
 		return
 	}
 
-	ctx := context.Background()
+	ctx, cancel := b.handlerCtx()
+	defer cancel()
 	target, err := b.loadPayableOrder(ctx, userID, orderID)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
@@ -65,7 +66,8 @@ func (b *Bot) onOrderCancel(cbID string, chatID, userID int64, msgID int, data, 
 		return
 	}
 
-	ctx := context.Background()
+	ctx, cancel := b.handlerCtx()
+	defer cancel()
 	if _, err := b.loadPayableOrder(ctx, userID, orderID); err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
 			b.alert(cbID, b.t(lang, "order_not_found"))
@@ -122,7 +124,8 @@ func (b *Bot) onPayCrypto(cbID string, chatID, userID int64, msgID int, data, la
 		return
 	}
 
-	ctx := context.Background()
+	ctx, cancel := b.handlerCtx()
+	defer cancel()
 	target, err := b.loadPayableOrder(ctx, userID, orderID)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
@@ -192,7 +195,8 @@ func (b *Bot) onPayYooKassa(cbID string, chatID, userID int64, msgID int, data, 
 		return
 	}
 
-	ctx := context.Background()
+	ctx, cancel := b.handlerCtx()
+	defer cancel()
 	target, err := b.loadPayableOrder(ctx, userID, orderID)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
@@ -270,7 +274,8 @@ func (b *Bot) onPayStripe(cbID string, chatID, userID int64, msgID int, data, la
 		return
 	}
 
-	ctx := context.Background()
+	ctx, cancel := b.handlerCtx()
+	defer cancel()
 	target, err := b.loadPayableOrder(ctx, userID, orderID)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
@@ -347,7 +352,8 @@ func (b *Bot) onPayTON(cbID string, chatID, userID int64, msgID int, data, lang 
 		return
 	}
 
-	ctx := context.Background()
+	ctx, cancel := b.handlerCtx()
+	defer cancel()
 	target, err := b.loadPayableOrder(ctx, userID, orderID)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
@@ -414,7 +420,8 @@ func (b *Bot) onPayNowpayments(cbID string, chatID, userID int64, msgID int, dat
 		return
 	}
 
-	ctx := context.Background()
+	ctx, cancel := b.handlerCtx()
+	defer cancel()
 	target, err := b.loadPayableOrder(ctx, userID, orderID)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
@@ -487,7 +494,8 @@ func (b *Bot) onPayBalance(cbID string, chatID, userID int64, msgID int, data, l
 		return
 	}
 
-	ctx := context.Background()
+	ctx, cancel := b.handlerCtx()
+	defer cancel()
 	target, err := b.loadPayableOrder(ctx, userID, orderID)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
@@ -556,7 +564,7 @@ func formatTON(nano int64) string {
 
 // handlePreCheckout handles Telegram PreCheckoutQuery for Stars payments.
 func (b *Bot) handlePreCheckout(query *tgbotapi.PreCheckoutQuery) {
-	ctx, cancel := handlerCtx()
+	ctx, cancel := b.handlerCtx()
 	defer cancel()
 	if err := b.stars.HandlePreCheckout(ctx, query); err != nil {
 		b.logger.Error("handle pre-checkout", "error", err)
@@ -587,7 +595,7 @@ func (b *Bot) processSuccessfulPayment(msg *tgbotapi.Message) error {
 
 	orderID, err := strconv.ParseInt(sp.InvoicePayload, 10, 64)
 	if err != nil || orderID <= 0 {
-		ctx, cancel := handlerCtx()
+		ctx, cancel := b.handlerCtx()
 		defer cancel()
 		if quarantineErr := b.recordStarsPaymentAnomaly(ctx, msg, 0, "stars_invalid_order_payload"); quarantineErr != nil {
 			return fmt.Errorf("parse Stars order ID and quarantine provider fact: %w", quarantineErr)
@@ -596,7 +604,7 @@ func (b *Bot) processSuccessfulPayment(msg *tgbotapi.Message) error {
 		return nil
 	}
 
-	ctx, cancel := handlerCtx()
+	ctx, cancel := b.handlerCtx()
 	defer cancel()
 	payerID := int64(0)
 	if msg.From != nil {

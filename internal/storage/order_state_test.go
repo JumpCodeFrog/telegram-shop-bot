@@ -247,6 +247,14 @@ func TestUpdateOrderStatusWithPaymentFactYooKassa(t *testing.T) {
 	if err := store.UpdateOrderStatusWithPaymentFact(ctx, orderID, OrderStatusPending, OrderStatusPaid, fact); !errors.Is(err, ErrOrderStatusConflict) {
 		t.Fatalf("replayed settlement: err=%v, want ErrOrderStatusConflict", err)
 	}
+	// The replay leaves the settled payment_state untouched.
+	var replayState string
+	if err := db.Conn().QueryRowContext(ctx, `SELECT payment_state FROM orders WHERE id = ?`, orderID).Scan(&replayState); err != nil {
+		t.Fatal(err)
+	}
+	if replayState != PaymentStateSettled {
+		t.Fatalf("payment_state after replay = %s, want %s", replayState, PaymentStateSettled)
+	}
 	for _, count := range []struct {
 		query string
 		want  int
@@ -375,6 +383,14 @@ func TestUpdateOrderStatusWithPaymentFactStripe(t *testing.T) {
 	// the state CAS rejects it and no duplicate ledger rows or anomalies appear.
 	if err := store.UpdateOrderStatusWithPaymentFact(ctx, orderID, OrderStatusPending, OrderStatusPaid, fact); !errors.Is(err, ErrOrderStatusConflict) {
 		t.Fatalf("replayed settlement: err=%v, want ErrOrderStatusConflict", err)
+	}
+	// The replay leaves the settled payment_state untouched.
+	var replayState string
+	if err := db.Conn().QueryRowContext(ctx, `SELECT payment_state FROM orders WHERE id = ?`, orderID).Scan(&replayState); err != nil {
+		t.Fatal(err)
+	}
+	if replayState != PaymentStateSettled {
+		t.Fatalf("payment_state after replay = %s, want %s", replayState, PaymentStateSettled)
 	}
 	for _, count := range []struct {
 		query string
@@ -712,6 +728,14 @@ func TestUpdateOrderStatusWithPaymentFactTON(t *testing.T) {
 	if err := store.UpdateOrderStatusWithPaymentFact(ctx, orderID, OrderStatusPending, OrderStatusPaid, fact); !errors.Is(err, ErrOrderStatusConflict) {
 		t.Fatalf("replayed settlement: err=%v, want ErrOrderStatusConflict", err)
 	}
+	// The replay leaves the settled payment_state untouched.
+	var replayState string
+	if err := db.Conn().QueryRowContext(ctx, `SELECT payment_state FROM orders WHERE id = ?`, orderID).Scan(&replayState); err != nil {
+		t.Fatal(err)
+	}
+	if replayState != PaymentStateSettled {
+		t.Fatalf("payment_state after replay = %s, want %s", replayState, PaymentStateSettled)
+	}
 	for _, count := range []struct {
 		query string
 		want  int
@@ -838,6 +862,14 @@ func TestUpdateOrderStatusWithPaymentFactNowpayments(t *testing.T) {
 	// the state CAS rejects it and no duplicate ledger rows or anomalies appear.
 	if err := store.UpdateOrderStatusWithPaymentFact(ctx, orderID, OrderStatusPending, OrderStatusPaid, fact); !errors.Is(err, ErrOrderStatusConflict) {
 		t.Fatalf("replayed settlement: err=%v, want ErrOrderStatusConflict", err)
+	}
+	// The replay leaves the settled payment_state untouched.
+	var replayState string
+	if err := db.Conn().QueryRowContext(ctx, `SELECT payment_state FROM orders WHERE id = ?`, orderID).Scan(&replayState); err != nil {
+		t.Fatal(err)
+	}
+	if replayState != PaymentStateSettled {
+		t.Fatalf("payment_state after replay = %s, want %s", replayState, PaymentStateSettled)
 	}
 	for _, count := range []struct {
 		query string

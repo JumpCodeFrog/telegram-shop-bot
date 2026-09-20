@@ -314,25 +314,36 @@
       payCrypto.onclick = function () { checkout('crypto', promo.value, payCrypto); };
       screenEl.appendChild(payCrypto);
 
-      var payRub = el('button', 'btn secondary', t('webapp_pay_rub'));
-      payRub.type = 'button';
-      payRub.onclick = function () { checkout('yookassa', promo.value, payRub); };
-      screenEl.appendChild(payRub);
+      // The four newer rails render only when the cart payload marks them
+      // enabled (rail available, non-subscription cart, positive converted
+      // total) — same visibility rules as the bot's payment keyboard.
+      if (cart.yookassa_enabled) {
+        var payRub = el('button', 'btn secondary', t('webapp_pay_rub'));
+        payRub.type = 'button';
+        payRub.onclick = function () { checkout('yookassa', promo.value, payRub); };
+        screenEl.appendChild(payRub);
+      }
 
-      var payStripe = el('button', 'btn secondary', t('webapp_pay_stripe'));
-      payStripe.type = 'button';
-      payStripe.onclick = function () { checkout('stripe', promo.value, payStripe); };
-      screenEl.appendChild(payStripe);
+      if (cart.stripe_enabled) {
+        var payStripe = el('button', 'btn secondary', t('webapp_pay_stripe'));
+        payStripe.type = 'button';
+        payStripe.onclick = function () { checkout('stripe', promo.value, payStripe); };
+        screenEl.appendChild(payStripe);
+      }
 
-      var payTon = el('button', 'btn secondary', t('webapp_pay_ton'));
-      payTon.type = 'button';
-      payTon.onclick = function () { checkout('ton', promo.value, payTon); };
-      screenEl.appendChild(payTon);
+      if (cart.ton_enabled) {
+        var payTon = el('button', 'btn secondary', t('webapp_pay_ton'));
+        payTon.type = 'button';
+        payTon.onclick = function () { checkout('ton', promo.value, payTon); };
+        screenEl.appendChild(payTon);
+      }
 
-      var payNowp = el('button', 'btn secondary', t('webapp_pay_nowpayments'));
-      payNowp.type = 'button';
-      payNowp.onclick = function () { checkout('nowpayments', promo.value, payNowp); };
-      screenEl.appendChild(payNowp);
+      if (cart.nowpayments_enabled) {
+        var payNowp = el('button', 'btn secondary', t('webapp_pay_nowpayments'));
+        payNowp.type = 'button';
+        payNowp.onclick = function () { checkout('nowpayments', promo.value, payNowp); };
+        screenEl.appendChild(payNowp);
+      }
     }).catch(showError);
   }
 

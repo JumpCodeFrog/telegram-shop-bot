@@ -2,45 +2,13 @@ package storage
 
 import (
 	"context"
-	"database/sql"
 	"errors"
-	"path/filepath"
 	"testing"
 	"time"
 )
 
-func preCommerceLedgerDB(t *testing.T) *DB {
-	t.Helper()
-	conn, err := sql.Open("sqlite", dsn(filepath.Join(t.TempDir(), "v16.db")))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = conn.Close() })
-	if _, err := conn.Exec(`CREATE TABLE schema_migrations (version TEXT PRIMARY KEY)`); err != nil {
-		t.Fatal(err)
-	}
-	db := &DB{conn: conn}
-	entries, err := migrationsFS.ReadDir("migrations")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, entry := range entries {
-		if entry.Name() == "017_commerce_ledger.sql" {
-			break
-		}
-		statements, err := migrationsFS.ReadFile("migrations/" + entry.Name())
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := db.applyMigration(entry.Name(), string(statements)); err != nil {
-			t.Fatalf("apply %s: %v", entry.Name(), err)
-		}
-	}
-	return db
-}
-
 func TestMigration017QuarantinesPendingOrderAgainstUnexpiredEntitlement(t *testing.T) {
-	db := preCommerceLedgerDB(t)
+	db := migrationDBBefore(t, "017_commerce_ledger.sql")
 	if _, err := db.Conn().Exec(`INSERT INTO categories (name) VALUES ('plans')`); err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +40,7 @@ func TestMigration017QuarantinesPendingOrderAgainstUnexpiredEntitlement(t *testi
 	if _, err := db.Conn().Exec(`INSERT INTO order_items (order_id,product_id,product_name,quantity,price_usd) VALUES (?,1,'Plan',1,5)`, newOrder); err != nil {
 		t.Fatal(err)
 	}
-	applyCommerceLedgerMigration(t, db)
+	applyMigrationsFrom(t, db, "017_commerce_ledger.sql")
 	var state string
 	if err := db.Conn().QueryRow(`SELECT payment_state FROM orders WHERE id=?`, newOrder).Scan(&state); err != nil {
 		t.Fatal(err)
@@ -119,42 +87,15 @@ func TestMigration017QuarantinesPendingOrderAgainstUnexpiredEntitlement(t *testi
 	}
 }
 
-// applyCommerceLedgerMigration applies 017 and every later migration so the
-// pre-017 legacy data is backfilled and the schema matches what current store
-// code expects, exactly like the production migrator would.
-func applyCommerceLedgerMigration(t *testing.T, db *DB) {
-	t.Helper()
-	entries, err := migrationsFS.ReadDir("migrations")
-	if err != nil {
-		t.Fatal(err)
-	}
-	reachedCommerceLedger := false
-	for _, entry := range entries {
-		if !reachedCommerceLedger {
-			if entry.Name() != "017_commerce_ledger.sql" {
-				continue
-			}
-			reachedCommerceLedger = true
-		}
-		statements, err := migrationsFS.ReadFile("migrations/" + entry.Name())
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := db.applyMigration(entry.Name(), string(statements)); err != nil {
-			t.Fatal(err)
-		}
-	}
-}
-
 func TestMigration017BackfillsUniqueLegacyCaptureAsSettled(t *testing.T) {
-	db := preCommerceLedgerDB(t)
+	db := migrationDBBefore(t, "017_commerce_ledger.sql")
 	const telegramPayerID int64 = 987654321
 	if _, err := db.Conn().Exec(`INSERT INTO orders
 		(user_id,total_usd,total_stars,payment_method,payment_id,status)
 		VALUES (?,1.25,25,'stars','legacy-unique','paid')`, telegramPayerID); err != nil {
 		t.Fatal(err)
 	}
-	applyCommerceLedgerMigration(t, db)
+	applyMigrationsFrom(t, db, "017_commerce_ledger.sql")
 	var paymentState, attemptStatus, disposition string
 	var payerID int64
 	if err := db.Conn().QueryRow(`SELECT payment_state FROM orders WHERE id=1`).Scan(&paymentState); err != nil {
@@ -172,13 +113,13 @@ func TestMigration017BackfillsUniqueLegacyCaptureAsSettled(t *testing.T) {
 }
 
 func TestMigration017BackfillsLegacyCryptoAsProviderUSDT(t *testing.T) {
-	db := preCommerceLedgerDB(t)
+	db := migrationDBBefore(t, "017_commerce_ledger.sql")
 	if _, err := db.Conn().Exec(`INSERT INTO orders
 		(user_id,total_usd,total_stars,payment_method,payment_id,status)
 		VALUES (42,12.34,0,'crypto','legacy-crypto','paid')`); err != nil {
 		t.Fatal(err)
 	}
-	applyCommerceLedgerMigration(t, db)
+	applyMigrationsFrom(t, db, "017_commerce_ledger.sql")
 	var currency string
 	var amount int64
 	if err := db.Conn().QueryRow(`SELECT currency, amount_minor FROM payment_attempts WHERE external_id='legacy-crypto'`).Scan(&currency, &amount); err != nil {
@@ -204,7 +145,7 @@ func TestMigration017BackfillsLegacyCryptoAsProviderUSDT(t *testing.T) {
 }
 
 func TestMigration017QuarantinesDuplicateAndMalformedLegacyCaptures(t *testing.T) {
-	db := preCommerceLedgerDB(t)
+	db := migrationDBBefore(t, "017_commerce_ledger.sql")
 	for _, values := range []string{
 		`(41,1,10,'stars','duplicate','paid')`,
 		`(42,1,10,'stars','duplicate','paid')`,
@@ -215,7 +156,7 @@ func TestMigration017QuarantinesDuplicateAndMalformedLegacyCaptures(t *testing.T
 			t.Fatal(err)
 		}
 	}
-	applyCommerceLedgerMigration(t, db)
+	applyMigrationsFrom(t, db, "017_commerce_ledger.sql")
 	var attempts, reviews int
 	if err := db.Conn().QueryRow(`SELECT COUNT(*) FROM payment_attempts`).Scan(&attempts); err != nil {
 		t.Fatal(err)
@@ -229,7 +170,7 @@ func TestMigration017QuarantinesDuplicateAndMalformedLegacyCaptures(t *testing.T
 }
 
 func TestMigration017LegacyKnownProviderReviewRequiresExplicitCompensation(t *testing.T) {
-	db := preCommerceLedgerDB(t)
+	db := migrationDBBefore(t, "017_commerce_ledger.sql")
 	for _, values := range []string{
 		`(41,1,100,'stars','','paid')`,
 		`(42,1,-10,'stars','negative','paid')`,
@@ -239,7 +180,7 @@ func TestMigration017LegacyKnownProviderReviewRequiresExplicitCompensation(t *te
 			t.Fatal(err)
 		}
 	}
-	applyCommerceLedgerMigration(t, db)
+	applyMigrationsFrom(t, db, "017_commerce_ledger.sql")
 
 	ledger := NewSQLPaymentLedgerStore(db)
 	cases, err := ledger.ListPaymentReviews(context.Background(), PaymentMethodStars)
@@ -307,13 +248,13 @@ func TestMigration017LegacyKnownProviderReviewRequiresExplicitCompensation(t *te
 }
 
 func TestMigration017LegacyReviewClosesAfterAuthenticatedCaptureAndRefund(t *testing.T) {
-	db := preCommerceLedgerDB(t)
+	db := migrationDBBefore(t, "017_commerce_ledger.sql")
 	if _, err := db.Conn().Exec(`INSERT INTO orders
 		(user_id,total_usd,total_stars,payment_method,payment_id,status)
 		VALUES (42,1,100,'stars','','paid')`); err != nil {
 		t.Fatal(err)
 	}
-	applyCommerceLedgerMigration(t, db)
+	applyMigrationsFrom(t, db, "017_commerce_ledger.sql")
 
 	ctx := context.Background()
 	providerTime := time.Unix(1_700_000_000, 0).UTC()
@@ -394,7 +335,7 @@ func TestMigration017LegacyReviewClosesAfterAuthenticatedCaptureAndRefund(t *tes
 }
 
 func TestMigration017BackfillsAndSerializesPendingSubscriptionOrders(t *testing.T) {
-	db := preCommerceLedgerDB(t)
+	db := migrationDBBefore(t, "017_commerce_ledger.sql")
 	if _, err := db.Conn().Exec(`INSERT INTO categories (name) VALUES ('plans')`); err != nil {
 		t.Fatal(err)
 	}
@@ -415,7 +356,7 @@ func TestMigration017BackfillsAndSerializesPendingSubscriptionOrders(t *testing.
 			t.Fatal(err)
 		}
 	}
-	applyCommerceLedgerMigration(t, db)
+	applyMigrationsFrom(t, db, "017_commerce_ledger.sql")
 	rows, err := db.Conn().Query(`SELECT subscription_product_id, subscription_period_days, payment_state FROM orders ORDER BY id`)
 	if err != nil {
 		t.Fatal(err)
@@ -449,13 +390,13 @@ func TestMigration017BackfillsAndSerializesPendingSubscriptionOrders(t *testing.
 }
 
 func TestMigration017QuarantinesUnknownLegacyPaymentAsNeutralOrderTarget(t *testing.T) {
-	db := preCommerceLedgerDB(t)
+	db := migrationDBBefore(t, "017_commerce_ledger.sql")
 	if _, err := db.Conn().Exec(`INSERT INTO orders
 		(user_id,total_usd,total_stars,payment_method,payment_id,status)
 		VALUES (42,5,100,NULL,NULL,'paid')`); err != nil {
 		t.Fatal(err)
 	}
-	applyCommerceLedgerMigration(t, db)
+	applyMigrationsFrom(t, db, "017_commerce_ledger.sql")
 
 	var state string
 	if err := db.Conn().QueryRow(`SELECT payment_state FROM orders WHERE id=1`).Scan(&state); err != nil {
@@ -491,7 +432,7 @@ func TestMigration017QuarantinesUnknownLegacyPaymentAsNeutralOrderTarget(t *test
 }
 
 func TestMigration017CoalescesNullableLegacyTimestamps(t *testing.T) {
-	db := preCommerceLedgerDB(t)
+	db := migrationDBBefore(t, "017_commerce_ledger.sql")
 	for _, values := range []string{
 		`(41,1,10,'stars','legacy-without-time','paid',NULL,NULL)`,
 		`(42,1,-10,'stars','malformed-without-time','paid',NULL,NULL)`,
@@ -503,7 +444,7 @@ func TestMigration017CoalescesNullableLegacyTimestamps(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	applyCommerceLedgerMigration(t, db)
+	applyMigrationsFrom(t, db, "017_commerce_ledger.sql")
 
 	for _, query := range []string{
 		`SELECT COUNT(*) FROM order_events WHERE occurred_at IS NULL`,

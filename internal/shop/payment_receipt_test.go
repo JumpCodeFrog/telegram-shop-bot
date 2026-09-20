@@ -355,11 +355,13 @@ func TestInitialSubscriptionExactReplayKeepsPersistedExpiry(t *testing.T) {
 	}
 	var second time.Time
 	var attempts, anomalies int
+	var paymentState string
 	_ = db.Conn().QueryRow(`SELECT expires_at FROM subscriptions WHERE order_id=?`, orderID).Scan(&second)
 	_ = db.Conn().QueryRow(`SELECT COUNT(*) FROM payment_attempts WHERE order_id=?`, orderID).Scan(&attempts)
 	_ = db.Conn().QueryRow(`SELECT COUNT(*) FROM payment_anomalies`).Scan(&anomalies)
-	if !first.Equal(second) || attempts != 1 || anomalies != 0 {
-		t.Fatalf("first=%v second=%v attempts=%d anomalies=%d", first, second, attempts, anomalies)
+	_ = db.Conn().QueryRow(`SELECT payment_state FROM orders WHERE id=?`, orderID).Scan(&paymentState)
+	if !first.Equal(second) || attempts != 1 || anomalies != 0 || paymentState != storage.PaymentStateSettled {
+		t.Fatalf("first=%v second=%v attempts=%d anomalies=%d payment_state=%s", first, second, attempts, anomalies, paymentState)
 	}
 }
 
@@ -428,6 +430,7 @@ func TestInitialSubscriptionReplayWithChangedProviderExpiryQuarantines(t *testin
 	}
 	var anomalies, attempts int
 	var persistedExpiry time.Time
+	var paymentState string
 	rawConflict := "entitlement_expires_at:" + receipt.SubscriptionExpiresAt.UTC().Format(time.RFC3339Nano)
 	_ = db.Conn().QueryRow(`SELECT COUNT(*) FROM payment_anomalies
 		WHERE external_id='initial-provider-expiry' AND raw_payload=?`, rawConflict).Scan(&anomalies)
@@ -435,9 +438,13 @@ func TestInitialSubscriptionReplayWithChangedProviderExpiryQuarantines(t *testin
 		WHERE provider='stars' AND external_id='initial-provider-expiry'`).Scan(&attempts)
 	_ = db.Conn().QueryRow(`SELECT entitlement_expires_at FROM payment_attempts
 		WHERE provider='stars' AND external_id='initial-provider-expiry'`).Scan(&persistedExpiry)
-	if anomalies != 1 || attempts != 1 || !persistedExpiry.Equal(originalExpiry) {
-		t.Fatalf("anomalies=%d attempts=%d persisted=%v original=%v",
-			anomalies, attempts, persistedExpiry, originalExpiry)
+	// The changed-expiry replay quarantines: the order must sit in
+	// needs_review, not settled with the operator-unseen expiry.
+	_ = db.Conn().QueryRow(`SELECT payment_state FROM orders WHERE id=?`, orderID).Scan(&paymentState)
+	if anomalies != 1 || attempts != 1 || !persistedExpiry.Equal(originalExpiry) ||
+		paymentState != storage.PaymentStateNeedsReview {
+		t.Fatalf("anomalies=%d attempts=%d persisted=%v original=%v payment_state=%s",
+			anomalies, attempts, persistedExpiry, originalExpiry, paymentState)
 	}
 }
 
@@ -575,7 +582,7 @@ func TestConfirmPaymentReceiptYooKassa(t *testing.T) {
 			t.Fatalf("anomaly %s: amount=%d payer=%d currency=%s", leg.externalID, amount, payer, currency)
 		}
 	}
-	var anomalies, attempts int64
+	var anomalies int64
 	_ = db.Conn().QueryRow(`SELECT COUNT(*) FROM payment_anomalies WHERE proposed_order_id=?`, orderID).Scan(&anomalies)
 	if anomalies != 4 {
 		t.Fatalf("order anomalies=%d, want 4 (the empty-external-id leg leaves no row)", anomalies)
@@ -584,10 +591,11 @@ func TestConfirmPaymentReceiptYooKassa(t *testing.T) {
 	if anomalies != 1 {
 		t.Fatalf("rub-disabled order anomalies=%d, want 1", anomalies)
 	}
-	_ = db.Conn().QueryRow(`SELECT COUNT(*) FROM payment_attempts WHERE order_id=?`, orderID).Scan(&attempts)
-	_ = db.Conn().QueryRow(`SELECT COUNT(*) FROM payment_attempts WHERE order_id=?`, rubDisabledID).Scan(&attempts)
-	if attempts != 0 {
-		t.Fatalf("attempts=%d, want 0", attempts)
+	var orderAttempts, rubDisabledAttempts int64
+	_ = db.Conn().QueryRow(`SELECT COUNT(*) FROM payment_attempts WHERE order_id=?`, orderID).Scan(&orderAttempts)
+	_ = db.Conn().QueryRow(`SELECT COUNT(*) FROM payment_attempts WHERE order_id=?`, rubDisabledID).Scan(&rubDisabledAttempts)
+	if orderAttempts != 0 || rubDisabledAttempts != 0 {
+		t.Fatalf("attempts: order=%d rub-disabled=%d, want 0/0", orderAttempts, rubDisabledAttempts)
 	}
 	mismatched, _ := store.GetOrder(ctx, orderID)
 	disabled, _ := store.GetOrder(ctx, rubDisabledID)
@@ -730,7 +738,7 @@ func TestConfirmPaymentReceiptStripe(t *testing.T) {
 			t.Fatalf("anomaly %s: amount=%d payer=%d currency=%s", leg.externalID, amount, payer, currency)
 		}
 	}
-	var anomalies, attempts int64
+	var anomalies int64
 	_ = db.Conn().QueryRow(`SELECT COUNT(*) FROM payment_anomalies WHERE proposed_order_id=?`, orderID).Scan(&anomalies)
 	if anomalies != 4 {
 		t.Fatalf("order anomalies=%d, want 4 (the empty-external-id leg leaves no row)", anomalies)
@@ -739,10 +747,11 @@ func TestConfirmPaymentReceiptStripe(t *testing.T) {
 	if anomalies != 1 {
 		t.Fatalf("zero-usd order anomalies=%d, want 1", anomalies)
 	}
-	_ = db.Conn().QueryRow(`SELECT COUNT(*) FROM payment_attempts WHERE order_id=?`, orderID).Scan(&attempts)
-	_ = db.Conn().QueryRow(`SELECT COUNT(*) FROM payment_attempts WHERE order_id=?`, zeroUSDID).Scan(&attempts)
-	if attempts != 0 {
-		t.Fatalf("attempts=%d, want 0", attempts)
+	var orderAttempts, zeroUSDAttempts int64
+	_ = db.Conn().QueryRow(`SELECT COUNT(*) FROM payment_attempts WHERE order_id=?`, orderID).Scan(&orderAttempts)
+	_ = db.Conn().QueryRow(`SELECT COUNT(*) FROM payment_attempts WHERE order_id=?`, zeroUSDID).Scan(&zeroUSDAttempts)
+	if orderAttempts != 0 || zeroUSDAttempts != 0 {
+		t.Fatalf("attempts: order=%d zero-usd=%d, want 0/0", orderAttempts, zeroUSDAttempts)
 	}
 	mismatched, _ := store.GetOrder(ctx, orderID)
 	zeroUSD, _ := store.GetOrder(ctx, zeroUSDID)
@@ -889,7 +898,7 @@ func TestConfirmPaymentReceiptTON(t *testing.T) {
 			t.Fatalf("anomaly %s: amount=%d payer=%d currency=%s", leg.externalID, amount, payer, currency)
 		}
 	}
-	var anomalies, attempts int64
+	var anomalies int64
 	_ = db.Conn().QueryRow(`SELECT COUNT(*) FROM payment_anomalies WHERE proposed_order_id=?`, orderID).Scan(&anomalies)
 	if anomalies != 3 {
 		t.Fatalf("order anomalies=%d, want 3 (the empty-external-id leg leaves no row)", anomalies)
@@ -898,10 +907,11 @@ func TestConfirmPaymentReceiptTON(t *testing.T) {
 	if anomalies != 1 {
 		t.Fatalf("ton-disabled order anomalies=%d, want 1", anomalies)
 	}
-	_ = db.Conn().QueryRow(`SELECT COUNT(*) FROM payment_attempts WHERE order_id=?`, orderID).Scan(&attempts)
-	_ = db.Conn().QueryRow(`SELECT COUNT(*) FROM payment_attempts WHERE order_id=?`, tonDisabledID).Scan(&attempts)
-	if attempts != 0 {
-		t.Fatalf("attempts=%d, want 0", attempts)
+	var orderAttempts, tonDisabledAttempts int64
+	_ = db.Conn().QueryRow(`SELECT COUNT(*) FROM payment_attempts WHERE order_id=?`, orderID).Scan(&orderAttempts)
+	_ = db.Conn().QueryRow(`SELECT COUNT(*) FROM payment_attempts WHERE order_id=?`, tonDisabledID).Scan(&tonDisabledAttempts)
+	if orderAttempts != 0 || tonDisabledAttempts != 0 {
+		t.Fatalf("attempts: order=%d ton-disabled=%d, want 0/0", orderAttempts, tonDisabledAttempts)
 	}
 	mismatched, _ := store.GetOrder(ctx, orderID)
 	disabled, _ := store.GetOrder(ctx, tonDisabledID)
@@ -1074,7 +1084,7 @@ func TestConfirmPaymentReceiptNowpayments(t *testing.T) {
 			t.Fatalf("anomaly %s: amount=%d payer=%d currency=%s", leg.externalID, amount, payer, currency)
 		}
 	}
-	var anomalies, attempts int64
+	var anomalies int64
 	_ = db.Conn().QueryRow(`SELECT COUNT(*) FROM payment_anomalies WHERE proposed_order_id=?`, orderID).Scan(&anomalies)
 	if anomalies != 4 {
 		t.Fatalf("order anomalies=%d, want 4 (the empty-external-id leg leaves no row)", anomalies)
@@ -1083,10 +1093,11 @@ func TestConfirmPaymentReceiptNowpayments(t *testing.T) {
 	if anomalies != 1 {
 		t.Fatalf("zero-usd order anomalies=%d, want 1", anomalies)
 	}
-	_ = db.Conn().QueryRow(`SELECT COUNT(*) FROM payment_attempts WHERE order_id=?`, orderID).Scan(&attempts)
-	_ = db.Conn().QueryRow(`SELECT COUNT(*) FROM payment_attempts WHERE order_id=?`, zeroUSDID).Scan(&attempts)
-	if attempts != 0 {
-		t.Fatalf("attempts=%d, want 0", attempts)
+	var orderAttempts, zeroUSDAttempts int64
+	_ = db.Conn().QueryRow(`SELECT COUNT(*) FROM payment_attempts WHERE order_id=?`, orderID).Scan(&orderAttempts)
+	_ = db.Conn().QueryRow(`SELECT COUNT(*) FROM payment_attempts WHERE order_id=?`, zeroUSDID).Scan(&zeroUSDAttempts)
+	if orderAttempts != 0 || zeroUSDAttempts != 0 {
+		t.Fatalf("attempts: order=%d zero-usd=%d, want 0/0", orderAttempts, zeroUSDAttempts)
 	}
 	mismatched, _ := store.GetOrder(ctx, orderID)
 	zeroUSD, _ := store.GetOrder(ctx, zeroUSDID)

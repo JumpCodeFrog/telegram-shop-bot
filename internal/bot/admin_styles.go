@@ -1,7 +1,6 @@
 package bot
 
 import (
-	"context"
 	"fmt"
 	"strings"
 
@@ -19,7 +18,8 @@ func (b *Bot) handleBtnStyleAdmin(msg *tgbotapi.Message) {
 // sendBtnStyleList renders (or edits) the button style overview for the admin.
 // Each row shows the button label and its current style emoji, tapping opens the picker.
 func (b *Bot) sendBtnStyleList(chatID int64, msgID int, lang string) {
-	ctx := context.Background()
+	ctx, cancel := b.handlerCtx()
+	defer cancel()
 	stored, _ := b.uiSettings.ListButtonStyles(ctx)
 
 	var sb strings.Builder
@@ -48,7 +48,8 @@ func (b *Bot) sendBtnStyleList(chatID int64, msgID int, lang string) {
 
 // sendBtnStylePicker renders (or edits) the style picker for a single button key.
 func (b *Bot) sendBtnStylePicker(chatID int64, msgID int, key string, lang string) {
-	ctx := context.Background()
+	ctx, cancel := b.handlerCtx()
+	defer cancel()
 	current, _ := b.uiSettings.GetButtonStyle(ctx, key)
 
 	text := fmt.Sprintf(
@@ -91,7 +92,8 @@ func (b *Bot) onAdminSetStyle(chatID int64, msgID int, data, lang string) {
 	key := rest[:sep]
 	style := rest[sep+1:]
 
-	ctx := context.Background()
+	ctx, cancel := b.handlerCtx()
+	defer cancel()
 	if err := b.uiSettings.SetButtonStyle(ctx, key, style); err != nil {
 		b.logger.Error("set button style", "key", key, "style", style, "error", err)
 		b.send(tgbotapi.NewMessage(chatID, b.t(lang, "admin_btnstyle_save_failed")))

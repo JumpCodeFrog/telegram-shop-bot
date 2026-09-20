@@ -12,7 +12,8 @@ import (
 
 // handleCancel cancels any active dialog for the user.
 func (b *Bot) handleCancel(msg *tgbotapi.Message) {
-	ctx := context.Background()
+	ctx, cancel := b.handlerCtx()
+	defer cancel()
 	lang := msg.From.LanguageCode
 
 	inAdd := false
@@ -45,7 +46,8 @@ func (b *Bot) handleStart(msg *tgbotapi.Message) {
 	// Deep links are issued as start=ref_<code>; stored codes have no prefix.
 	refCode = strings.TrimPrefix(refCode, "ref_")
 	if refCode != "" {
-		ctx := context.Background()
+		ctx, cancel := b.handlerCtx()
+		defer cancel()
 		referrer, err := b.referrals.GetUserByReferralCode(ctx, refCode)
 		if err == nil && referrer != nil && referrer.TelegramID != msg.From.ID {
 			// Check registration limit (Anti-Fraud)
@@ -60,7 +62,8 @@ func (b *Bot) handleStart(msg *tgbotapi.Message) {
 		}
 	}
 
-	ctx := context.Background()
+	ctx, cancel := b.handlerCtx()
+	defer cancel()
 	b.sendMainMenu(msg.Chat.ID, msg.From.ID, 0, lang, ctx)
 }
 
