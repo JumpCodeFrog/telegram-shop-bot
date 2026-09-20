@@ -6,7 +6,9 @@ package bot
 // cmd/telegram-smoke and cmd/usability-smoke, embedded in the package.
 //
 // Assertions target database state (SQL) and recorded Bot API calls
-// (methods, callback data, invoice params), never localized message texts.
+// (methods, callback data, invoice params); message texts are compared
+// against the bot's own localized renderings via e.bot.t(...), so locale
+// edits never break the suite while localization regressions stay caught.
 // All updates are dispatched synchronously through the production router.
 
 import (
@@ -1846,7 +1848,7 @@ func TestE2EPayreviewFlow(t *testing.T) {
 	}
 
 	// The operator refunds the duplicate at the provider and records the
-	// refund in the ledger ($1849.08 = 184908 kopecks, scale 2).
+	// refund in the ledger (RUB 1849.08 = 184908 kopecks, scale 2).
 	ledger := storage.NewSQLPaymentLedgerStore(e.db)
 	if err := ledger.RecordRefund(context.Background(), storage.Refund{
 		OrderID: orderID, Provider: storage.PaymentMethodYooKassa,

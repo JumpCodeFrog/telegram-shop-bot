@@ -257,7 +257,8 @@ The semantics are identical to the Stars, crypto and YooKassa flows above: the
 list exits `1` while targets exist and prints local ids and reason codes only;
 resolve previews read-only first and then applies with
 `--apply --confirm-order N`. A quarantined capture still requires a durable
-succeeded refund before it can be resolved to `settled`.
+succeeded refund before it can be resolved to `settled` — see the Refunds
+paragraph below for how that refund is recorded.
 
 ### Refunds
 
@@ -413,7 +414,7 @@ nothing — no anomaly, no event, no order change.
 Canonicalization interop note: byte-level agreement between this Go
 canonicalization and NOWPayments' PHP-side signer is verified fail-closed — a
 mismatch rejects genuine IPNs, it can never accept a forged one — but it
-should be confirmed with ONE live test payment before enabling the rail in
+MUST be confirmed with ONE live test payment before enabling the rail in
 production.
 
 ### Finished-only settlement

@@ -163,10 +163,12 @@ const tonFriendlyAddressLength = 48
 // address, and the optional toncenter API key is valid only alongside both.
 func ValidateTONConfig(address string, usdPerTON float64, apiKey string) error {
 	if address == "" {
-		if usdPerTON > 0 {
+		switch {
+		case usdPerTON > 0 && apiKey != "":
+			return errors.New("USD_PER_TON and TON_API_KEY require TON_WALLET_ADDRESS to be set")
+		case usdPerTON > 0:
 			return errors.New("USD_PER_TON requires TON_WALLET_ADDRESS to be set")
-		}
-		if apiKey != "" {
+		case apiKey != "":
 			return errors.New("TON_API_KEY requires TON_WALLET_ADDRESS and USD_PER_TON to be set")
 		}
 		return nil
