@@ -219,7 +219,7 @@ func (b *Bot) prepareHandler(ctx context.Context) {
 	b.handler = Chain(b.route,
 		LoggingMiddleware(b.logger, b.metrics),
 		RecoverMiddleware(b.logger),
-		middleware.Auth(b.users),
+		middleware.Auth(b.users, b.handlerCtx),
 		RateLimitMiddleware(ctx, rate.Every(10*time.Second/30), 10),
 	)
 }
