@@ -256,6 +256,8 @@
   "admin_payreview_card_state": "Состояние платежа: %s\n",
   "admin_payreview_card_targets": "Цели:\n",
   "admin_payreview_card_target_line": "• %s #%d — %s\n",
+  "admin_payreview_card_trap": "⚠️ Карточка сбоя записи возврата: действуйте только ПОСЛЕ того, как повторный /refund завершит запись в реестре. До восстановления ↩️ Refund подтверждает деньги, которых нет в книгах, и навсегда закрывает карточку; после восстановления используйте 🚫 Dismiss. Подробности: docs/payment-operations.md §11.",
+  "admin_payreview_card_cli_only": "🔧 Ни одно действие в боте не пройдёт для этой карточки — разрешите её через CLI payment-review (docs §4).\n",
   "admin_payreview_action_settle": "✅ Урегулировать",
   "admin_payreview_action_refund": "↩️ Возврат",
   "admin_payreview_action_dismiss": "🚫 Отклонить",

@@ -7,8 +7,10 @@ package bot
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"testing"
 
@@ -256,6 +258,86 @@ func TestBuildReviewResolution_InvalidCombos(t *testing.T) {
 		storage.PaymentReviewTarget{Kind: storage.PaymentReviewTargetEvent, ID: 1, ReasonCode: "event_captured"})
 	if _, err := buildReviewResolution(orphanedUnknown, "dismiss", 42); err == nil {
 		t.Fatal("unknown-provider case without order target must error")
+	}
+}
+
+// --- orphan action sets (ruling P4) + callback byte budget (P6) ------------
+
+// TestPayReviewOrphanCardActionSets pins ruling P4: orphan cards offer only
+// the actions that can actually pass — digest-only cards none (CLI-only),
+// path-5 refund-ledger-failure cards Refund+Dismiss (with the trap warning),
+// other capture orphans Settle. Attached and unknown-provider cases keep
+// their existing sets.
+func TestPayReviewOrphanCardActionSets(t *testing.T) {
+	orphan := func(provider, reason string) storage.PaymentReviewCase {
+		return storage.PaymentReviewCase{
+			OrderID: 0, Provider: provider, PaymentState: "",
+			Targets: []storage.PaymentReviewTarget{{
+				Kind: storage.PaymentReviewTargetAnomaly, ID: 7, ReasonCode: reason,
+			}},
+		}
+	}
+	for _, tc := range []struct {
+		name string
+		item storage.PaymentReviewCase
+		want []string
+	}{
+		{"path-5 refund orphan", orphan(storage.PaymentMethodBalance, "refund_ledger_failure:order=7"),
+			[]string{payReviewActionRefund, payReviewActionDismiss}},
+		{"digest parse failure", orphan(storage.PaymentMethodYooKassa, "webhook_parse_failure"), nil},
+		{"digest missing payment id", orphan(storage.PaymentMethodYooKassa, "webhook_missing_payment_id"), nil},
+		{"capture orphan", orphan(storage.PaymentMethodStars, "provider_verified_unknown_order"),
+			[]string{payReviewActionSettle}},
+		{"attached case keeps the triple", storage.PaymentReviewCase{
+			OrderID: 3, Provider: storage.PaymentMethodStars, PaymentState: storage.PaymentStateNeedsReview,
+			Targets: []storage.PaymentReviewTarget{{
+				Kind: storage.PaymentReviewTargetAnomaly, ID: 1, ReasonCode: "late_capture",
+			}},
+		}, []string{payReviewActionSettle, payReviewActionRefund, payReviewActionDismiss}},
+		{"unknown provider keeps dismiss", storage.PaymentReviewCase{
+			OrderID: 3, Provider: storage.PaymentReviewProviderUnknown, PaymentState: storage.PaymentStateNeedsReview,
+			Targets: []storage.PaymentReviewTarget{{
+				Kind: storage.PaymentReviewTargetOrder, ID: 3, ReasonCode: "order_needs_review",
+			}},
+		}, []string{payReviewActionDismiss}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := payReviewActions(tc.item)
+			if len(got) != len(tc.want) {
+				t.Fatalf("actions = %v, want %v", got, tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Fatalf("actions = %v, want %v", got, tc.want)
+				}
+			}
+		})
+	}
+}
+
+// TestPayReviewCallbackByteBudget documents the 64-byte budget (ruling P6):
+// the realistic attached worst case fits; the theoretical detached worst case
+// (19-digit provider order id + large anomaly id) exceeds it and is degraded
+// to the CLI-only card by sendPayReviewCard's guard.
+func TestPayReviewCallbackByteBudget(t *testing.T) {
+	attached := storage.PaymentReviewCase{
+		OrderID: math.MaxInt64, Provider: storage.PaymentMethodNowpayments,
+		PaymentState: storage.PaymentStateNeedsReview,
+		Targets: []storage.PaymentReviewTarget{{
+			Kind: storage.PaymentReviewTargetAnomaly, ID: 1, ReasonCode: "receipt_mismatch",
+		}},
+	}
+	if got := payReviewCaseCallback("admin:payrev:", payReviewActionDismiss, attached); len(got) > 64 {
+		t.Fatalf("attached worst case %d bytes > 64: %s", len(got), got)
+	}
+	detached := storage.PaymentReviewCase{
+		OrderID: math.MaxInt64, Provider: storage.PaymentMethodNowpayments, PaymentState: "",
+		Targets: []storage.PaymentReviewTarget{{
+			Kind: storage.PaymentReviewTargetAnomaly, ID: math.MaxInt64, ReasonCode: "receipt_mismatch",
+		}},
+	}
+	if got := payReviewCaseCallback("admin:payrev:", payReviewActionDismiss, detached); len(got) <= 64 {
+		t.Fatalf("detached worst case %d bytes unexpectedly fits — re-check the guard rationale: %s", len(got), got)
 	}
 }
 
@@ -540,5 +622,90 @@ func TestPayReviewOrphanAnomalyResolvesByExactTarget(t *testing.T) {
 	if !strings.Contains(calls[0].markup(), fmt.Sprintf("admin:payrev:stars:0:%d", anomalyIDs[1])) ||
 		strings.Contains(calls[0].markup(), fmt.Sprintf("admin:payrev:stars:0:%d", anomalyIDs[0])) {
 		t.Fatalf("sibling orphan markup=%s", calls[0].markup())
+	}
+}
+
+// TestPayReviewPathFiveCardWarnsAndFiltersActions pins ruling P4 on the real
+// path-5 card shape: the trap warning renders, Refund+Dismiss are offered,
+// Settle is not.
+func TestPayReviewPathFiveCardWarnsAndFiltersActions(t *testing.T) {
+	e := newE2EEnv(t)
+	store := storage.NewSQLOrderStore(e.db)
+	err := store.RecordPaymentAnomaly(context.Background(), storage.PaymentAnomaly{
+		Provider:          storage.PaymentMethodBalance,
+		EventKind:         storage.PaymentEventRefunded,
+		ExternalID:        "balance-refund:7",
+		RelatedExternalID: "balance:7",
+		PayerID:           42,
+		AmountMinor:       525,
+		Currency:          "USD",
+		Scale:             2,
+		Reason:            "refund_ledger_failure:order=7",
+		RawPayload:        `{"order_id":7,"rail":"balance","refund_id":"balance-refund:7"}`,
+	})
+	if !errors.Is(err, storage.ErrPaymentNeedsReview) {
+		t.Fatalf("seed path-5 orphan: %v", err)
+	}
+	var anomalyID int64
+	if err := e.db.Conn().QueryRow(`SELECT id FROM payment_anomalies`).Scan(&anomalyID); err != nil {
+		t.Fatal(err)
+	}
+
+	calls := e.cb(e2eAdminID, fmt.Sprintf("admin:payrev:balance:0:%d", anomalyID), "en")
+	if got := tgText(calls); !strings.Contains(got, e.bot.t("en", "admin_payreview_card_trap")) {
+		t.Fatalf("card lacks the trap warning:\n%s", got)
+	}
+	var markup string
+	for _, c := range calls {
+		if m := c.markup(); m != "" {
+			markup = m
+		}
+	}
+	if !strings.Contains(markup, fmt.Sprintf("admin:payrev:refund:balance:0:%d", anomalyID)) ||
+		!strings.Contains(markup, fmt.Sprintf("admin:payrev:dismiss:balance:0:%d", anomalyID)) {
+		t.Fatalf("card lacks Refund/Dismiss: %s", markup)
+	}
+	if strings.Contains(markup, "admin:payrev:settle:") {
+		t.Fatalf("path-5 card must not offer Settle: %s", markup)
+	}
+}
+
+// TestPayReviewDigestOrphanCardIsCLIOnly pins ruling P4's digest-only leg:
+// the card carries the CLI-only hint and no action buttons at all.
+func TestPayReviewDigestOrphanCardIsCLIOnly(t *testing.T) {
+	e := newE2EEnv(t)
+	store := storage.NewSQLOrderStore(e.db)
+	// The exact digest shape webhook.go:186-189 writes for an unparseable
+	// body: provider + sha256 payload + reason, zero money tuple, no ids.
+	digest := sha256.Sum256([]byte("not json"))
+	err := store.RecordPaymentAnomaly(context.Background(), storage.PaymentAnomaly{
+		Provider:   storage.PaymentMethodYooKassa,
+		RawPayload: fmt.Sprintf("sha256:%x", digest),
+		Reason:     "webhook_parse_failure",
+	})
+	if !errors.Is(err, storage.ErrPaymentNeedsReview) {
+		t.Fatalf("seed digest orphan: %v", err)
+	}
+	var anomalyID int64
+	if err := e.db.Conn().QueryRow(`SELECT id FROM payment_anomalies`).Scan(&anomalyID); err != nil {
+		t.Fatal(err)
+	}
+
+	calls := e.cb(e2eAdminID, fmt.Sprintf("admin:payrev:yookassa:0:%d", anomalyID), "en")
+	if got := tgText(calls); !strings.Contains(got, e.bot.t("en", "admin_payreview_card_cli_only")) {
+		t.Fatalf("card lacks the CLI-only hint:\n%s", got)
+	}
+	var markup string
+	for _, c := range calls {
+		if m := c.markup(); m != "" {
+			markup = m
+		}
+	}
+	if strings.Contains(markup, "admin:payrev:settle:") || strings.Contains(markup, "admin:payrev:refund:") ||
+		strings.Contains(markup, "admin:payrev:dismiss:") {
+		t.Fatalf("digest-only card must offer no actions: %s", markup)
+	}
+	if !strings.Contains(markup, "admin:payrev:list") {
+		t.Fatalf("digest-only card lost its Back button: %s", markup)
 	}
 }

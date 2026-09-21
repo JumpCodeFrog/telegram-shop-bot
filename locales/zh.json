@@ -256,6 +256,8 @@
   "admin_payreview_card_state": "支付状态：%s\n",
   "admin_payreview_card_targets": "目标：\n",
   "admin_payreview_card_target_line": "• %s #%d — %s\n",
+  "admin_payreview_card_trap": "⚠️ 退款记账失败卡片：仅在恢复重跑完成台账记录之后再操作。恢复前,↩️ Refund 会确认账上尚未记录的资金并永久关闭此卡片;恢复后请使用 🚫 Dismiss。详见 docs/payment-operations.md §11。",
+  "admin_payreview_card_cli_only": "🔧 此案件在机器人侧无可用操作——请通过 payment-review CLI 解决(docs §4)。\n",
   "admin_payreview_action_settle": "✅ 结清",
   "admin_payreview_action_refund": "↩️ 退款",
   "admin_payreview_action_dismiss": "🚫 驳回",
