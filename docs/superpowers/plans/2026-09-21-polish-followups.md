@@ -30,7 +30,7 @@
 - **P4 (§6.9 orphan action sets):** `payReviewActions` filters single-anomaly ORPHAN cards (`PaymentState == ""`) by reason family: `refund_ledger_failure:*` → `[Refund, Dismiss]` + trap-warning line (new key `admin_payreview_card_trap` ×5; pre-recovery only Refund passes, post-recovery only Dismiss — both stay offered with the warning, because recovery state is invisible bot-side); digest-only (`webhook_parse_failure`, `webhook_missing_payment_id` — shape pinned by webhook.go:186-189: amount 0, no external id ⇒ all three actions provably conflict) → NO actions + CLI-only line (new key `admin_payreview_card_cli_only` ×5); any other orphan anomaly → `[Settle]` (compensated is the only possibly-passable decision, payment_resolutions.go:898-905). Attached cases and `unknown` provider: UNCHANGED.
 - **P5 (§6.9 ru collision):** `locales/ru.json:259` `admin_payreview_action_settle`: «✅ Подтвердить» → «✅ Урегулировать» (value-only; en/de/es/zh verified non-colliding: Settle/Confirm, Begleichen/Bestätigen, Liquidar/Confirmar, 结清/确认). No verbs ⇒ parity gates untouched.
 - **P6 (§6.9 callback budget, controller addition from recon):** house-style 64-byte comment on `payReviewCaseCallback` + fail-closed guard in `sendPayReviewCard`: any action callback >64 bytes ⇒ drop the action row, append the CLI-only hint. Realistic attached payloads ≤52 bytes (`admin:payrev:dismiss:nowpayments:<int64>` = 13+8+12+19); only a detached positive provider order id (up to 19 digits) PLUS a large anomaly id can exceed (theoretical 72) — the guard makes that card CLI-only instead of rendering dead buttons.
-- **P7 (§6.8):** the renewal leg (handlers_payment.go:624-643) logs NOTHING on success today (metrics only). Add `b.logger.Info("stars subscription renewal settled", "order_id", orderID, "payment_id", sp.TelegramPaymentChargeID, "actor", "webhook:stars")` mirroring the one-time settle (:682-683); docs §12 table gains the renewal row. E2E: new `successfulPaymentRenewal` helper (raw-update boundary with `is_recurring:true, is_first_recurring:false`), renewal leg inserted into `TestE2E_SubscriptionLifecycle` AFTER first-payment asserts and BEFORE cancel (cancel flips the subscription status; renewal must run against the active subscription).
+- **P7 (§6.8):** the renewal leg (handlers_payment.go:624-643) logs NOTHING on success today (metrics only). Add `b.logger.Info("stars subscription renewal settled", "order_id", orderID, "payment_id", sp.TelegramPaymentChargeID, "actor", "webhook:stars")` mirroring the one-time settle (:682-683); docs §12 table gains the renewal row. E2E: new `successfulPaymentRenewal` helper (raw-update boundary with `is_recurring:true, is_first_recurring:false`), renewal leg inserted into `TestE2E_SubscriptionLifecycle` AFTER first-payment asserts and BEFORE cancel (cancel flips the subscription status; renewal must run against the active subscription). **CORRECTION (controller, after implementer BLOCKED — verified against subscription_orders.go:92-134 + payment_recording.go:370-388):** a successful renewal keeps `subscriptions.telegram_charge_id` = the INITIAL `ch-sub-1` (renewSubscriptionTx extends ONLY `expires_at`, never the charge id — the later cancel leg relies on ch-sub-1), and records the new `ch-sub-2` charge as a `payment_attempts` row `status='succeeded'` + settled `payment_events` row. The renewal helper must therefore bump the expiry (+5s) so it STRICTLY extends the stored expiry — else renewSubscriptionTx (:111) rejects the same-second expiry as ErrSubscriptionOrderConflict and quarantines. The E2E leg asserts: charge id STAYS ch-sub-1, exactly one succeeded ch-sub-2 attempt, expiry strictly extended, zero new order/stock/loyalty/message side effects, and exactly one actor log line.
 - **P8 (§6.5):** §5 (yookassa, docs:202-212) and §7 (ton, docs:405-416) intros claim ALL quarantined facts are `payment_anomalies` rows — false for the poller path's `out_of_stock_after_charge`, which `RecordUnexpectedPayment` writes as a needs_review attempt + captured/needs_review event (worker/yookassa_polling.go:135-141, worker/ton_polling.go:104-110; mechanism pinned by out_of_stock_quarantine_test.go:20-30). It surfaces in the review queue via the needs_review EVENT leg of `ListPaymentReviews` (payment_resolutions.go:21-46). §6 (stripe :273) and §8 (nowpayments :480) are webhook-only rails — verified truthful, NO change.
 - **P9 (§6.2 scope):** cover the invalid-ID input leg (yookassa.go:256-258), non-2xx (`yookassaAPIError` :478-484), decode failure (:277-280), and the `toPayment` branches (:352-376) through `GetPayment`: invalid body id, missing metadata `order_id`, unparsable metadata `order_id`, malformed `captured_at` fallback, both timestamps absent, lowercase currency. DELIBERATELY EXCLUDED: `http.NewRequestWithContext` failure (unreachable with a valid base URL) and doJSON transport/read failures (sibling-method coverage exists; closing the httptest server mid-call races) — noted as considered.
 - **P10 (§6.15):** NEW `paymentMethodTextPlain` with a RAW fallback, used by the plain-text admin `/order` card (admin_orders.go:115; card documented verbatim at :86-88). `paymentMethodText` (HTML-escaping fallback) stays for the HTML `/orders` list (ui_text.go:198, handlers_orders.go:34) and its pin (ui_text_test.go:64-67). `orderStatusText`'s identical fallback (:47-49) verified HTML-context-only — unchanged. Both localized value sets are shared; only the fallback differs.
@@ -612,8 +612,17 @@ func (e *e2eEnv) rawStarsPayment(userID int64, payload string, totalStars int, c
 		},
 	}
 	// Drive the same raw-update boundary as production so subscription-only
-	// fields omitted by tgbotapi v5 are present during settlement.
-	expiresAt := time.Now().Add(30 * 24 * time.Hour).Unix()
+	// fields omitted by tgbotapi v5 are present during settlement. A renewal
+	// must STRICTLY extend the stored expiry (renewSubscriptionTx rejects a
+	// non-extending expiry as ErrSubscriptionOrderConflict,
+	// subscription_orders.go:111); +5s survives Unix-second truncation
+	// deterministically because both legs run within the same second (adding
+	// an integer 5s shifts .Unix() by exactly 5).
+	expiry := time.Now().Add(30 * 24 * time.Hour)
+	if renewal {
+		expiry = expiry.Add(5 * time.Second)
+	}
+	expiresAt := expiry.Unix()
 	sp := map[string]any{
 		"currency": "XTR", "total_amount": totalStars, "invoice_payload": payload,
 		"telegram_payment_charge_id": chargeID, "subscription_expiration_date": expiresAt,
@@ -652,8 +661,10 @@ In `TestE2E_SubscriptionLifecycle`, insert AFTER the first-payment expiry assert
 
 ```go
 	// Renewal: a second recurring charge (not the first) for the same order
-	// payload extends the subscription under a NEW charge id with zero order,
-	// stock, loyalty or message side effects — and logs the settle actor (§12).
+	// payload extends the subscription's expiry under a NEW attempt charge id
+	// (ch-sub-2) while the subscription row keeps its INITIAL charge id
+	// (ch-sub-1) — with zero new order, stock, loyalty or message side effects
+	// — and logs the settle actor (§12).
 	stockBefore := e.qInt(`SELECT stock FROM products WHERE id = ?`, e.prodSub)
 	var renewLogs bytes.Buffer
 	e.bot.logger = slog.New(slog.NewTextHandler(&renewLogs, nil))
@@ -662,8 +673,16 @@ In `TestE2E_SubscriptionLifecycle`, insert AFTER the first-payment expiry assert
 	if got := e.tg.count() - beforeRenew; got != 0 {
 		t.Fatalf("renewal sent %d messages, want 0:\n%s", got, dumpCalls(e.tg.since(beforeRenew)))
 	}
-	if got := e.qStr(`SELECT telegram_charge_id FROM subscriptions WHERE user_id = ?`, buyer); got != "ch-sub-2" {
-		t.Fatalf("renewal charge = %q, want ch-sub-2", got)
+	// The renewal keeps the subscription's INITIAL charge id (ch-sub-1) by
+	// design — renewSubscriptionTx extends only expires_at, never
+	// telegram_charge_id (subscription_orders.go:92-93,:126-130); the later
+	// cancel leg of this same test relies on ch-sub-1 being unchanged.
+	if got := e.qStr(`SELECT telegram_charge_id FROM subscriptions WHERE user_id = ?`, buyer); got != "ch-sub-1" {
+		t.Fatalf("renewal changed the subscription charge id = %q, want ch-sub-1 (initial)", got)
+	}
+	// The renewal charge lands as a succeeded attempt row (payment_recording.go:370-374).
+	if got := e.qInt(`SELECT COUNT(*) FROM payment_attempts WHERE external_id='ch-sub-2' AND status='succeeded'`); got != 1 {
+		t.Fatalf("renewal attempt rows = %d, want 1 succeeded ch-sub-2", got)
 	}
 	subsAfter, err := e.bot.subs.ListActiveByUser(t.Context(), buyer)
 	if err != nil || len(subsAfter) != 1 || !subsAfter[0].ExpiresAt.After(subs[0].ExpiresAt) {
@@ -1352,7 +1371,7 @@ git commit -m "docs: CHANGELOG + HANDOFF annotations for the polish-followups ba
 
 **Known ambiguities (implementer decisions allowed, record in report):**
 - Task 3: if `newE2EEnvWithConfig` rejects whitespace-only credentials at construction (it should not — validation lives in doctor/config-load, not the bot constructor), adapt the seeding and record how.
-- Task 6: `bytes` import addition; if the renewal E2E leg's DB asserts fail before the log assert, STOP and report (renewal-semantics assumption wrong).
+- Task 6: `bytes` import addition. Renewal semantics RESOLVED by ruling P7 CORRECTION (charge id stays ch-sub-1; ch-sub-2 is a succeeded attempt row; helper bumps expiry +5s for strict extension) — the corrected asserts are in Step 2. If a DB assert still fails before the log assert, STOP and report (do not paper over).
 - Task 8: if the digest-orphan `RecordPaymentAnomaly` seed is rejected by a storage validator (it mirrors webhook.go's exact shape, so it must not), fall back to driving the real yookassa webhook with an unparseable body (yookassa_webhook_test.go:460-475 pattern) and record the deviation.
 - Task 9: exact `worker` test-run filter (package is small — full `go test ./worker/` is acceptable).
 
