@@ -12,6 +12,7 @@ package bot
 // All updates are dispatched synchronously through the production router.
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -339,6 +340,17 @@ func (e *e2eEnv) preCheckout(userID int64, queryID, payload string, totalStars i
 }
 
 func (e *e2eEnv) successfulPayment(userID int64, payload string, totalStars int, chargeID string) []tgCall {
+	return e.rawStarsPayment(userID, payload, totalStars, chargeID, false)
+}
+
+// successfulPaymentRenewal drives a recurring Stars charge that is NOT the
+// first one (is_recurring && !is_first_recurring) — the renewal leg of
+// handleSuccessfulPayment (RecordSubscriptionRenewal).
+func (e *e2eEnv) successfulPaymentRenewal(userID int64, payload string, totalStars int, chargeID string) []tgCall {
+	return e.rawStarsPayment(userID, payload, totalStars, chargeID, true)
+}
+
+func (e *e2eEnv) rawStarsPayment(userID int64, payload string, totalStars int, chargeID string, renewal bool) []tgCall {
 	e.updSeq++
 	update := tgbotapi.Update{
 		UpdateID: e.updSeq,
@@ -356,19 +368,33 @@ func (e *e2eEnv) successfulPayment(userID int64, payload string, totalStars int,
 		},
 	}
 	// Drive the same raw-update boundary as production so subscription-only
-	// fields omitted by tgbotapi v5 are present during settlement.
-	expiresAt := time.Now().Add(30 * 24 * time.Hour).Unix()
+	// fields omitted by tgbotapi v5 are present during settlement. A renewal
+	// must STRICTLY extend the stored expiry (renewSubscriptionTx rejects a
+	// non-extending expiry as ErrSubscriptionOrderConflict,
+	// subscription_orders.go:111); +5s survives Unix-second truncation
+	// deterministically because both legs run within the same second (adding
+	// an integer 5s shifts .Unix() by exactly 5).
+	expiry := time.Now().Add(30 * 24 * time.Hour)
+	if renewal {
+		expiry = expiry.Add(5 * time.Second)
+	}
+	expiresAt := expiry.Unix()
+	sp := map[string]any{
+		"currency": "XTR", "total_amount": totalStars, "invoice_payload": payload,
+		"telegram_payment_charge_id": chargeID, "subscription_expiration_date": expiresAt,
+	}
+	if renewal {
+		sp["is_recurring"] = true
+		sp["is_first_recurring"] = false
+	}
 	raw, err := json.Marshal(map[string]any{
 		"update_id": update.UpdateID,
 		"message": map[string]any{
-			"message_id": update.Message.MessageID,
-			"date":       update.Message.Date,
-			"chat":       update.Message.Chat,
-			"from":       update.Message.From,
-			"successful_payment": map[string]any{
-				"currency": "XTR", "total_amount": totalStars, "invoice_payload": payload,
-				"telegram_payment_charge_id": chargeID, "subscription_expiration_date": expiresAt,
-			},
+			"message_id":         update.Message.MessageID,
+			"date":               update.Message.Date,
+			"chat":               update.Message.Chat,
+			"from":               update.Message.From,
+			"successful_payment": sp,
 		},
 	})
 	if err != nil {
@@ -805,6 +831,53 @@ func TestE2E_SubscriptionLifecycle(t *testing.T) {
 	lo, hi := beforePay.Add(29*24*time.Hour), beforePay.Add(31*24*time.Hour)
 	if subs[0].ExpiresAt.Before(lo) || subs[0].ExpiresAt.After(hi) {
 		t.Fatalf("expires_at = %v, want within [%v, %v]", subs[0].ExpiresAt, lo, hi)
+	}
+
+	// Renewal: a second recurring charge (not the first) for the same order
+	// payload extends the subscription's expiry under a NEW attempt charge id
+	// (ch-sub-2) while the subscription row keeps its INITIAL charge id
+	// (ch-sub-1) — with zero new order, stock, loyalty or message side effects
+	// — and logs the settle actor (§12).
+	stockBefore := e.qInt(`SELECT stock FROM products WHERE id = ?`, e.prodSub)
+	var renewLogs bytes.Buffer
+	e.bot.logger = slog.New(slog.NewTextHandler(&renewLogs, nil))
+	beforeRenew := e.tg.count()
+	e.successfulPaymentRenewal(buyer, payload, 100, "ch-sub-2")
+	if got := e.tg.count() - beforeRenew; got != 0 {
+		t.Fatalf("renewal sent %d messages, want 0:\n%s", got, dumpCalls(e.tg.since(beforeRenew)))
+	}
+	// The renewal keeps the subscription's INITIAL charge id (ch-sub-1) by
+	// design — renewSubscriptionTx extends only expires_at, never
+	// telegram_charge_id (subscription_orders.go:92-93,:126-130); the later
+	// cancel leg of this same test relies on ch-sub-1 being unchanged.
+	if got := e.qStr(`SELECT telegram_charge_id FROM subscriptions WHERE user_id = ?`, buyer); got != "ch-sub-1" {
+		t.Fatalf("renewal changed the subscription charge id = %q, want ch-sub-1 (initial)", got)
+	}
+	// The renewal charge lands as a succeeded attempt row (payment_recording.go:370-374).
+	if got := e.qInt(`SELECT COUNT(*) FROM payment_attempts WHERE external_id='ch-sub-2' AND status='succeeded'`); got != 1 {
+		t.Fatalf("renewal attempt rows = %d, want 1 succeeded ch-sub-2", got)
+	}
+	subsAfter, err := e.bot.subs.ListActiveByUser(t.Context(), buyer)
+	if err != nil || len(subsAfter) != 1 || !subsAfter[0].ExpiresAt.After(subs[0].ExpiresAt) {
+		t.Fatalf("renewal did not extend the expiry: %v (err %v)", subsAfter, err)
+	}
+	if got := e.qInt(`SELECT COUNT(*) FROM orders WHERE user_id = ?`, buyer); got != 1 {
+		t.Fatalf("renewal created extra orders: %d, want 1", got)
+	}
+	if got := e.qInt(`SELECT stock FROM products WHERE id = ?`, e.prodSub); got != stockBefore {
+		t.Fatalf("renewal touched stock: %d, want %d", got, stockBefore)
+	}
+	if got := e.qInt(`SELECT COUNT(*) FROM loyalty_txs WHERE user_id = ?`, e.userDBID(buyer)); got != 1 {
+		t.Fatalf("renewal replayed loyalty: %d rows, want still 1", got)
+	}
+	if got := strings.Count(renewLogs.String(), "stars subscription renewal settled"); got != 1 {
+		t.Fatalf("renewal settle log count = %d, want exactly 1; logs:\n%s", got, renewLogs.String())
+	}
+	if got := strings.Count(renewLogs.String(), "actor=webhook:stars"); got != 1 {
+		t.Fatalf("renewal actor count = %d, want exactly 1; logs:\n%s", got, renewLogs.String())
+	}
+	if strings.Contains(renewLogs.String(), "stars payment settled") {
+		t.Fatalf("renewal logged the one-time settle line:\n%s", renewLogs.String())
 	}
 
 	// /mysubs shows the subscription with a cancel button.

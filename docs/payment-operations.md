@@ -810,6 +810,7 @@ depends on the path:
 |---|---|---|
 | Provider webhooks (crypto, yookassa, stripe, nowpayments) | `webhook:<provider>` | settlement-success log line only (structured `actor` field next to `order_id` and the provider payment id) |
 | Stars `successful_payment` settlement (Telegram is the provider; the update arrives via webhook or long polling) | `webhook:stars` | settlement-success log line only |
+| Stars subscription renewal (recurring `successful_payment`, `is_recurring && !is_first_recurring`) | `webhook:stars` | settlement-success log line only |
 | Polling workers (crypto, ton, yookassa) | `worker:<provider>` | settle-success log line only |
 | CLI ingress (`payment-review ingest-stars` / `ingest-provider` / `resolve`) | the `--actor` flag value | durable `payment_ingress_audits` row |
 | Bot `/refund` executions and `/payreview` resolutions | `admin:<telegram_id>` | durable `payment_ingress_audits` row (refunds additionally log the same actor) |
