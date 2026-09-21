@@ -247,6 +247,137 @@ func TestYooKassaGetPaymentFallsBackToCreatedAt(t *testing.T) {
 	}
 }
 
+func TestYooKassaGetPaymentRejectsInvalidID(t *testing.T) {
+	called := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		called = true
+	}))
+	defer srv.Close()
+
+	client := newYookassaTestClient(srv)
+
+	for _, tc := range []struct {
+		name      string
+		paymentID string
+	}{
+		{name: "empty", paymentID: ""},
+		{name: "path separator", paymentID: "pay/1"},
+		{name: "space", paymentID: "pay 1"},
+		{name: "over 64 chars", paymentID: strings.Repeat("a", 65)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := client.GetPayment(context.Background(), tc.paymentID); !errors.Is(err, ErrInvalidYooKassaReceipt) {
+				t.Fatalf("expected ErrInvalidYooKassaReceipt, got %v", err)
+			}
+		})
+	}
+	if called {
+		t.Fatal("GetPayment made an HTTP call for an invalid id")
+	}
+}
+
+func TestYooKassaGetPaymentAPIError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"code":"resource_not_found","description":"Payment not found"}`))
+	}))
+	defer srv.Close()
+
+	client := newYookassaTestClient(srv)
+
+	_, err := client.GetPayment(context.Background(), "pay_404")
+	if err == nil || !strings.Contains(err.Error(), "resource_not_found") {
+		t.Fatalf("expected API error mentioning resource_not_found, got %v", err)
+	}
+}
+
+func TestYooKassaGetPaymentDecodeFailure(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":`))
+	}))
+	defer srv.Close()
+
+	client := newYookassaTestClient(srv)
+
+	_, err := client.GetPayment(context.Background(), "pay_1")
+	if err == nil || !strings.Contains(err.Error(), "parse payment response") {
+		t.Fatalf("expected parse error, got %v", err)
+	}
+}
+
+// TestYooKassaGetPaymentToPaymentBranches covers the toPayment normalization
+// legs through GetPayment: an invalid id in a 200 body fails closed, while
+// metadata/timestamp/currency quirks normalize exactly (never an error, never
+// a wrong receipt).
+func TestYooKassaGetPaymentToPaymentBranches(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		body    string
+		want    *Payment // nil ⇒ wantErr must be set
+		wantErr error
+	}{
+		{
+			name:    "invalid id in body fails closed",
+			body:    `{"id":"pay/1","status":"succeeded","paid":true,"amount":{"value":"1999.00","currency":"RUB"},"metadata":{"order_id":"42"},"created_at":"2026-09-19T10:00:00Z"}`,
+			wantErr: ErrInvalidYooKassaReceipt,
+		},
+		{
+			name: "missing metadata order_id stays zero",
+			body: `{"id":"pay_1","status":"succeeded","paid":true,"amount":{"value":"1999.00","currency":"RUB"},"created_at":"2026-09-19T10:00:00Z"}`,
+			want: &Payment{ID: "pay_1", Status: "succeeded", Paid: true, Amount: "1999.00", Currency: "RUB",
+				OrderID: 0, OccurredAt: time.Date(2026, 9, 19, 10, 0, 0, 0, time.UTC)},
+		},
+		{
+			name: "unparsable metadata order_id stays zero",
+			body: `{"id":"pay_1","status":"succeeded","paid":true,"amount":{"value":"1999.00","currency":"RUB"},"metadata":{"order_id":"abc"},"created_at":"2026-09-19T10:00:00Z"}`,
+			want: &Payment{ID: "pay_1", Status: "succeeded", Paid: true, Amount: "1999.00", Currency: "RUB",
+				OrderID: 0, OccurredAt: time.Date(2026, 9, 19, 10, 0, 0, 0, time.UTC)},
+		},
+		{
+			name: "malformed captured_at falls back to created_at",
+			body: `{"id":"pay_1","status":"succeeded","paid":true,"amount":{"value":"1999.00","currency":"RUB"},"metadata":{"order_id":"42"},"created_at":"2026-09-19T10:00:00Z","captured_at":"not-a-time"}`,
+			want: &Payment{ID: "pay_1", Status: "succeeded", Paid: true, Amount: "1999.00", Currency: "RUB",
+				OrderID: 42, OccurredAt: time.Date(2026, 9, 19, 10, 0, 0, 0, time.UTC)},
+		},
+		{
+			name: "both timestamps absent leave the zero time",
+			body: `{"id":"pay_1","status":"pending","paid":false,"amount":{"value":"1999.00","currency":"RUB"},"metadata":{"order_id":"42"}}`,
+			want: &Payment{ID: "pay_1", Status: "pending", Paid: false, Amount: "1999.00", Currency: "RUB",
+				OrderID: 42, OccurredAt: time.Time{}},
+		},
+		{
+			name: "lowercase currency normalizes to upper",
+			body: `{"id":"pay_1","status":"succeeded","paid":true,"amount":{"value":"1999.00","currency":"rub"},"metadata":{"order_id":"42"},"captured_at":"2026-09-19T10:01:00Z"}`,
+			want: &Payment{ID: "pay_1", Status: "succeeded", Paid: true, Amount: "1999.00", Currency: "RUB",
+				OrderID: 42, OccurredAt: time.Date(2026, 9, 19, 10, 1, 0, 0, time.UTC)},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer srv.Close()
+			client := newYookassaTestClient(srv)
+
+			got, err := client.GetPayment(context.Background(), "pay_1")
+			if tc.wantErr != nil {
+				if !errors.Is(err, tc.wantErr) {
+					t.Fatalf("expected %v, got %v", tc.wantErr, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("GetPayment: %v", err)
+			}
+			if *got != *tc.want {
+				t.Fatalf("payment = %+v, want %+v", *got, *tc.want)
+			}
+		})
+	}
+}
+
 func TestYooKassaCreateRefundSendsJSONRequest(t *testing.T) {
 	var idempotenceKeys []string
 
