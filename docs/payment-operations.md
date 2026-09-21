@@ -34,6 +34,7 @@ telegram-shop-bot payment-review list --provider yookassa
 telegram-shop-bot payment-review list --provider stripe
 telegram-shop-bot payment-review list --provider ton
 telegram-shop-bot payment-review list --provider nowpayments
+telegram-shop-bot payment-review list --provider balance
 telegram-shop-bot payment-review list --provider unknown
 ```
 
@@ -538,8 +539,8 @@ without leaving Telegram. `/payreview` lists every case across all provider
 buckets — one line (`#<order> | <provider> | <state> | targets=<n> |
 <reasons>`) and one card button per case. The bot aggregates the queue itself:
 the ledger's `ListPaymentReviews` has no cross-provider wildcard, so the bot
-loops the seven provider buckets (`stars`, `crypto`, `yookassa`, `stripe`,
-`ton`, `nowpayments`, `unknown`).
+loops the eight provider buckets (`stars`, `crypto`, `yookassa`, `stripe`,
+`ton`, `nowpayments`, `balance`, `unknown`).
 
 A case card shows the order summary, the payment state, and every target with
 its kind and reason code. Each action (Settle / Refund / Dismiss) is a
@@ -616,10 +617,12 @@ by inspecting `balance_txs` for `order_payment:<id>` rows without a matching
 settled payment attempt; if the purchase should not complete, return the money
 with `/setbalance <user_id> +<amount> reconcile order <id>`.
 
-The balance rail never enters the review queue: a balance fact is validated
-against the order's exact USD snapshot and required payer before settlement,
-so there is no provider ambiguity to quarantine — ingress accepts or rejects
-it outright.
+The balance rail never enters the review queue through settlement ingress: a
+balance fact is validated against the order's exact USD snapshot and required
+payer before settlement, so there is no provider ambiguity to quarantine —
+settlement ingress accepts or rejects it outright. The balance review bucket
+(§2, §9) exists for one exception only: the path-5 refund orphans of §11, a
+refund credit that succeeded while its ledger record failed.
 
 **Refunds**: `/refund <order_id>` (§11) for a balance-paid order credits the
 buyer's balance back — the credit IS this rail's provider step (there is no
@@ -708,13 +711,40 @@ remedy per rail:
   completes the ledger record. Re-run with the SAME amount — an amount-less
   re-run defaults to the full total, which is a different refund (the card
   rails' providers reject it once a partial moved money, but the re-run then
-  completes nothing);
+  completes nothing; the balance rail's divergence guard fails it closed
+  before any write — see the coupling note below);
 - `stars` — do NOT re-run `/refund`: Telegram rejects the repeat
   `refundStarPayment`, so a re-run can never record it. Record the refund with
   the Stars CLI instead (§3): `payment-review ingest-stars --kind refund
   --transaction <telegram-refund-id> --order N --actor … --reason … --apply
   --confirm-order N` reads Telegram's authoritative refund transaction and
   records it with the provider's own timestamp.
+
+The failure window also leaves a durable trace: the moment a provider refund
+succeeds but the ledger record fails, a best-effort ORPHAN
+`payment_anomalies` row is written with the reason
+`refund_ledger_failure:order=<id>` in the rail's provider bucket (balance
+included, so the card is visible in `/payreview` (§9) and `payment-review`).
+It is deliberately an orphan (no proposed order): the order stays `settled`
+so the re-run remedy quoted above still works — a `needs_review` quarantine
+would fail the refundable gate and close that path. The write is best-effort:
+when it also fails (the database is likely what just broke), the log + chat
+message above remain the full trace and nothing else changes. The row's
+`raw_payload` is deterministic (order id, rail, refund id — no error text),
+so repeated failures reuse one row.
+
+**Pre-recovery trap**: acting on the card's Refund action before the recovery
+above has completed the ledger record resolves the card without recording a
+`refunds` row — Refund is the only decision that passes on a refund orphan
+pre-recovery, and it acknowledges a refund the books never recorded. A
+resolved card never re-surfaces: a repeated path-5 failure reuses the
+resolved row, so the durable trace is silently consumed. Resolve the card
+only after the recovery completes the record — post-recovery the refund row
+exists, Refund fails closed, and Dismiss is the passing action.
+
+After the re-run or the Stars CLI recovery completes the record, resolve the
+card via `payment-review resolve` (§4; bot-side orphan-card ergonomics are a
+known follow-up — HANDOFF §6.9).
 
 ### One bot-side refund per order
 
@@ -745,13 +775,18 @@ refund records, and the order goes to `needs_review` for §9/CLI triage.
 
 The balance rail's idempotency identity `order_refund:<orderID>` is
 ORDER-scoped, which is sound only while the settled-only gate admits exactly
-one bot refund per order. If that gate is ever relaxed to accept
-`partially_refunded` orders (a remainder refund), the identity MUST become
-amount-scoped FIRST (e.g. `order_refund:<orderID>:<amountMinor>`) — otherwise
-the second partial refund finds the first credit's row, skips the credit, and
-records money that never moved. The coupling is commented at both ends: the
-balance branch of `executeRefund` (`internal/bot/admin_refunds.go`) and
-`BalanceTxExists` (`internal/storage/balance.go`).
+one bot refund per order. The probe therefore returns the prior credit's
+net amount as well as its existence (`BalanceTxTotal`), and a re-run whose
+amount diverges from that credit FAILS CLOSED before any write: nothing is
+credited, nothing is recorded, and the error names both amounts. Recovery is
+the exact-amount re-run (the failure message quotes the prior credit) or
+`/payreview` (§9) resolution. If the settled-only gate is ever relaxed to
+accept `partially_refunded` orders (a remainder refund), the identity MUST
+become amount-scoped FIRST (e.g. `order_refund:<orderID>:<amountMinor>`) —
+otherwise a legit second partial dies on the divergence guard with no bot
+path. The coupling is commented at both ends: the balance branch of
+`executeRefund` (`internal/bot/admin_refunds.go`) and `BalanceTxTotal`
+(`internal/storage/balance.go`).
 
 ## 12. Operation attribution
 

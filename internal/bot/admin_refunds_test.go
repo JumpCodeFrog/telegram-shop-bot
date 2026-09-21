@@ -1046,6 +1046,188 @@ func TestAdminRefundLedgerFailurePartialCarriesPartialAmount(t *testing.T) {
 	}
 }
 
+// TestAdminRefundLedgerFailureRecordsDurableAnomaly pins the path-5 durable
+// trace (HANDOFF §6.6): provider success + ledger failure writes a
+// best-effort ORPHAN anomaly (proposed_order_id=0 — a needs_review flip
+// would block the documented /refund re-run remedy behind the settled-only
+// gate; the order link rides in the reason and raw_payload). The case joins
+// /payreview, and the healed re-run completes WITHOUT duplicating the row.
+func TestAdminRefundLedgerFailureRecordsDurableAnomaly(t *testing.T) {
+	e := newE2EEnv(t)
+	e.cmd(refundBuyer, "/start", "en") // the credit needs the users row
+	orderID := seedRefundOrder(t, e, storage.PaymentMethodBalance, "")
+	balances := storage.NewSQLBalanceStore(e.db.Conn())
+	if _, err := balances.AdjustBalance(context.Background(), refundBuyer, 12.50, "grant", e2eAdminID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := balances.AdjustBalance(context.Background(), refundBuyer, -12.50,
+		fmt.Sprintf("order_payment:%d", orderID), 0); err != nil {
+		t.Fatal(err)
+	}
+	ledger := &failingRefundLedger{payLedgerStore: e.bot.payLedger, failIngest: true}
+	e.bot.payLedger = ledger
+
+	calls := e.cb(e2eAdminID, refundCBData(orderID, 525), "en")
+	// The operator guidance message is UNCHANGED (ruling R5).
+	want := e.bot.i18n.Tf("en", "admin_refund_ledger_failed_rerun",
+		fmt.Sprintf("balance-refund:%d", orderID), orderID, "mock ledger ingest failure", orderID, "5.25")
+	if got := tgText(calls); got != want {
+		t.Fatalf("loud text = %q, want %q", got, want)
+	}
+	// Durable orphan anomaly with the full money tuple and the order link.
+	var provider, kind, extID, relID, currency, reason, payload string
+	var proposed, payer, amount int64
+	var scale int
+	if err := e.db.Conn().QueryRow(`
+		SELECT provider, event_kind, external_id, related_external_id, proposed_order_id,
+		       payer_id, amount_minor, currency, scale, reason, raw_payload
+		FROM payment_anomalies`).Scan(&provider, &kind, &extID, &relID, &proposed,
+		&payer, &amount, &currency, &scale, &reason, &payload); err != nil {
+		t.Fatalf("path-5 anomaly row: %v", err)
+	}
+	if provider != "balance" || kind != storage.PaymentEventRefunded {
+		t.Fatalf("anomaly provider/kind = %s/%s, want balance/refunded", provider, kind)
+	}
+	if extID != fmt.Sprintf("balance-refund:%d", orderID) || relID != fmt.Sprintf("balance:%d", orderID) {
+		t.Fatalf("anomaly ids = %q/%q", extID, relID)
+	}
+	if proposed != 0 {
+		t.Fatalf("proposed_order_id = %d, want 0 (orphan — no needs_review flip)", proposed)
+	}
+	if payer != refundBuyer || amount != 525 || currency != "USD" || scale != 2 {
+		t.Fatalf("anomaly money tuple = %d/%d/%s/%d", payer, amount, currency, scale)
+	}
+	if wantReason := fmt.Sprintf("refund_ledger_failure:order=%d", orderID); reason != wantReason {
+		t.Fatalf("reason = %q, want %q", reason, wantReason)
+	}
+	if !strings.Contains(payload, fmt.Sprintf(`"order_id":%d`, orderID)) {
+		t.Fatalf("raw_payload lacks the order link: %q", payload)
+	}
+	// The order state is UNTOUCHED — the flip would kill the re-run remedy.
+	if got := e.qStr(`SELECT payment_state FROM orders WHERE id=?`, orderID); got != storage.PaymentStateSettled {
+		t.Fatalf("path-5 flipped the order to %s, want settled", got)
+	}
+	// The case surfaces in /payreview (balance joined the buckets, ruling R2).
+	calls = e.cmd(e2eAdminID, "/payreview", "en")
+	listLine := e.bot.i18n.Tf("en", "admin_payreview_case_line",
+		int64(0), "balance", "-", 1, reason)
+	if !strings.Contains(tgText(calls), listLine) {
+		t.Fatalf("/payreview list lacks the path-5 case:\n%s", tgText(calls))
+	}
+
+	// Healed re-run: completes the record, does NOT duplicate the anomaly.
+	ledger.setFailIngest(false)
+	e.cb(e2eAdminID, refundCBData(orderID, 525), "en")
+	if got := e.qInt(`SELECT COUNT(*) FROM payment_anomalies`); got != 1 {
+		t.Fatalf("recovery left %d anomaly rows, want the original 1", got)
+	}
+	assertRefundRow(t, e, orderID, "balance", fmt.Sprintf("balance-refund:%d", orderID),
+		fmt.Sprintf("balance:%d", orderID), refundBuyer, 525, "USD", 2)
+	if got := e.qStr(`SELECT payment_state FROM orders WHERE id=?`, orderID); got != storage.PaymentStatePartiallyRefunded {
+		t.Fatalf("state after recovery = %s, want partially_refunded", got)
+	}
+}
+
+// TestAdminRefundLedgerFailureAnomalyWriteIsBestEffort pins ruling R5/R6's
+// best-effort contract: when the anomaly write ALSO fails (the DB is likely
+// what just broke), the operator still gets the exact same guidance message
+// — the durable trace degrades to the pre-existing log+chat surface, never
+// swallowing the primary failure.
+func TestAdminRefundLedgerFailureAnomalyWriteIsBestEffort(t *testing.T) {
+	e := newE2EEnv(t)
+	e.cmd(refundBuyer, "/start", "en")
+	orderID := seedRefundOrder(t, e, storage.PaymentMethodBalance, "")
+	balances := storage.NewSQLBalanceStore(e.db.Conn())
+	if _, err := balances.AdjustBalance(context.Background(), refundBuyer, 12.50, "grant", e2eAdminID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := balances.AdjustBalance(context.Background(), refundBuyer, -12.50,
+		fmt.Sprintf("order_payment:%d", orderID), 0); err != nil {
+		t.Fatal(err)
+	}
+	ledger := &failingRefundLedger{payLedgerStore: e.bot.payLedger, failIngest: true}
+	e.bot.payLedger = ledger
+	e.failAnomalyRecording(errors.New("injected anomaly write failure"))
+
+	calls := e.cb(e2eAdminID, refundCBData(orderID, 525), "en")
+	want := e.bot.i18n.Tf("en", "admin_refund_ledger_failed_rerun",
+		fmt.Sprintf("balance-refund:%d", orderID), orderID, "mock ledger ingest failure", orderID, "5.25")
+	if got := tgText(calls); got != want {
+		t.Fatalf("loud text = %q, want %q", got, want)
+	}
+	if got := e.qInt(`SELECT COUNT(*) FROM payment_anomalies`); got != 0 {
+		t.Fatalf("failed anomaly write left %d rows, want 0", got)
+	}
+	// The credit still executed exactly once (the provider step is untouched
+	// by the trace failure).
+	if got := e.qInt(`SELECT COUNT(*) FROM balance_txs WHERE type=?`, fmt.Sprintf("order_refund:%d", orderID)); got != 1 {
+		t.Fatalf("credits = %d, want 1", got)
+	}
+}
+
+// TestAdminRefundBalanceDivergentRerunFailsClosed pins the HANDOFF §6.7
+// guard: after a PARTIAL balance refund ($5.25 of $12.50) whose ledger
+// record failed, a re-run with a DIFFERENT amount must fail closed — the
+// per-order order_refund identity already spent its credit, so recording a
+// divergent amount would make books claim money that never moved. Before
+// the guard this re-run skipped the credit AND recorded a full refund.
+func TestAdminRefundBalanceDivergentRerunFailsClosed(t *testing.T) {
+	e := newE2EEnv(t)
+	e.cmd(refundBuyer, "/start", "en") // the credit needs the users row
+	orderID := seedRefundOrder(t, e, storage.PaymentMethodBalance, "")
+	balances := storage.NewSQLBalanceStore(e.db.Conn())
+	if _, err := balances.AdjustBalance(context.Background(), refundBuyer, 12.50, "grant", e2eAdminID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := balances.AdjustBalance(context.Background(), refundBuyer, -12.50,
+		fmt.Sprintf("order_payment:%d", orderID), 0); err != nil {
+		t.Fatal(err)
+	}
+	ledger := &failingRefundLedger{payLedgerStore: e.bot.payLedger, failIngest: true}
+	e.bot.payLedger = ledger
+
+	// Partial refund: the credit executes ($5.25), the ledger record fails.
+	e.cb(e2eAdminID, refundCBData(orderID, 525), "en")
+	if got := e.qStr(`SELECT printf('%.2f', balance_usd) FROM users WHERE telegram_id=?`, refundBuyer); got != "5.25" {
+		t.Fatalf("balance after partial credit = %s, want 5.25", got)
+	}
+
+	// Divergent re-run (FULL amount) with the ledger healed: fail closed.
+	ledger.setFailIngest(false)
+	calls := e.cb(e2eAdminID, refundCBData(orderID, refundFullUSD), "en")
+	if got := e.qInt(`SELECT COUNT(*) FROM refunds`); got != 0 {
+		t.Fatalf("divergent re-run wrote %d refund rows, want 0", got)
+	}
+	if got := e.qInt(`SELECT COUNT(*) FROM balance_txs WHERE type=?`, fmt.Sprintf("order_refund:%d", orderID)); got != 1 {
+		t.Fatalf("divergent re-run left %d order_refund rows, want the prior 1", got)
+	}
+	if got := e.qStr(`SELECT printf('%.2f', balance_usd) FROM users WHERE telegram_id=?`, refundBuyer); got != "5.25" {
+		t.Fatalf("divergent re-run moved the balance to %s, want 5.25 untouched", got)
+	}
+	if got := e.qStr(`SELECT payment_state FROM orders WHERE id=?`, orderID); got != storage.PaymentStateSettled {
+		t.Fatalf("divergent re-run left state %s, want settled", got)
+	}
+	if text := tgText(calls); !strings.Contains(text, "prior credit") {
+		t.Fatalf("divergent re-run text does not name the prior credit: %q", text)
+	}
+
+	// The EXACT-amount re-run still completes the record (credit skipped).
+	calls = e.cb(e2eAdminID, refundCBData(orderID, 525), "en")
+	if got := e.qInt(`SELECT COUNT(*) FROM balance_txs WHERE type=?`, fmt.Sprintf("order_refund:%d", orderID)); got != 1 {
+		t.Fatalf("recovery minted %d credits, want exactly 1", got)
+	}
+	assertRefundRow(t, e, orderID, "balance", fmt.Sprintf("balance-refund:%d", orderID),
+		fmt.Sprintf("balance:%d", orderID), refundBuyer, 525, "USD", 2)
+	if got := e.qStr(`SELECT payment_state FROM orders WHERE id=?`, orderID); got != storage.PaymentStatePartiallyRefunded {
+		t.Fatalf("state after recovery = %s, want partially_refunded", got)
+	}
+	want := e.bot.i18n.Tf("en", "admin_refund_done",
+		fmt.Sprintf("balance-refund:%d", orderID), orderID, storage.PaymentStatePartiallyRefunded)
+	if got := tgText(calls); got != want {
+		t.Fatalf("recovery text = %q, want %q", got, want)
+	}
+}
+
 // TestAdminRefundConfirmBalanceConcurrentDoubleTap exercises the refundMu
 // serialization under real contention on the rail with the WEAKEST dedup:
 // balance has no provider API — the deterministic order_refund balance_txs

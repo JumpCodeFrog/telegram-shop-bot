@@ -24,6 +24,7 @@ package bot
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -68,7 +69,7 @@ var (
 // bot-side refund (the confirm gate re-checks this on every tap).
 //
 // WARNING — this settled-only gate is LOAD-BEARING for the balance rail:
-// BalanceTxExists' per-order "order_refund:<orderID>" identity assumes at
+// BalanceTxTotal's per-order "order_refund:<orderID>" identity assumes at
 // most one balance refund per order. Before relaxing this gate (e.g. to
 // accept partially_refunded for further partials), that identity MUST become
 // amount-scoped — see the coupling comments in executeRefund's balance branch
@@ -421,6 +422,34 @@ func (b *Bot) onAdminRefundConfirm(chatID int64, msgID int, adminID, orderID, am
 		// OccurredAt.
 		b.logger.Error("refund: LEDGER RECORDING FAILED AFTER PROVIDER SUCCESS",
 			"order_id", orderID, "rail", rail, "refund_id", refundID, "error", err)
+		// Durable path-5 trace (best-effort, ruling R1): the money moved but
+		// the books did not record it. An ORPHAN anomaly row keeps the order
+		// at settled — a needs_review flip would block the documented /refund
+		// re-run remedy behind the settled-only gate; the order link rides in
+		// the reason and raw_payload instead. The card surfaces in /payreview
+		// and payment-review; after the recovery completes the record the
+		// operator resolves it there (docs §11). RawPayload is deterministic
+		// (no error text) so repeated failures reuse ONE row (ruling R6).
+		// RecordPaymentAnomaly signals a successful write with
+		// ErrPaymentNeedsReview — the webhook convention.
+		anomalyPayload, _ := json.Marshal(map[string]any{
+			"order_id": orderID, "rail": rail, "refund_id": refundID,
+		})
+		if recordErr := b.order.RecordPaymentAnomaly(ctx, storage.PaymentAnomaly{
+			Provider:          rail,
+			EventKind:         storage.PaymentEventRefunded,
+			ExternalID:        refundID,
+			RelatedExternalID: plan.fact.PaymentExternalID,
+			PayerID:           plan.fact.PayerID,
+			AmountMinor:       plan.fact.AmountMinor,
+			Currency:          plan.fact.Currency,
+			Scale:             plan.fact.Scale,
+			Reason:            fmt.Sprintf("refund_ledger_failure:order=%d", orderID),
+			RawPayload:        string(anomalyPayload),
+		}); recordErr != nil && !errors.Is(recordErr, storage.ErrPaymentNeedsReview) {
+			b.logger.Error("refund: path-5 anomaly was not recorded",
+				"order_id", orderID, "rail", rail, "refund_id", refundID, "error", recordErr)
+		}
 		if rail == storage.PaymentMethodStars {
 			render(b.i18n.Tf(lang, "admin_refund_ledger_failed_stars", refundID, orderID, err.Error(), refundCLIRecordLine))
 		} else {
@@ -596,22 +625,33 @@ func (b *Bot) executeRefund(ctx context.Context, plan *refundPlan, order *storag
 		//
 		// LOAD-BEARING COUPLING: this identity is per-ORDER, not per-amount.
 		// It is only safe while refundableOrder's settled-only gate limits
-		// the flow to ONE balance refund per order. If that gate is ever
-		// relaxed (e.g. to allow partial-then-remainder), the txType MUST
-		// become amount-scoped (order_refund:<orderID>:<amountMinor>) FIRST —
-		// otherwise a second partial would skip the credit (identity already
-		// exists) yet record a ledger refund: books claiming money that never
-		// moved. See docs/payment-operations.md §11.
+		// the flow to ONE balance refund per order AND the divergence guard
+		// below fails closed on a re-run whose amount differs from the prior
+		// credit. If the gate is ever relaxed (e.g. partial-then-remainder),
+		// the txType MUST become amount-scoped
+		// (order_refund:<orderID>:<amountMinor>) FIRST — otherwise a legit
+		// second partial dies on the divergence guard with no bot path.
+		// See docs/payment-operations.md §11.
 		txType := fmt.Sprintf("order_refund:%d", order.ID)
-		exists, err := b.balances.BalanceTxExists(ctx, order.UserID, txType)
+		priorUSD, found, err := b.balances.BalanceTxTotal(ctx, order.UserID, txType)
 		if err != nil {
 			return "", fmt.Errorf("balance refund probe: %w", err)
 		}
-		if !exists {
-			if _, err := b.balances.AdjustBalance(ctx, order.UserID,
-				float64(plan.fact.AmountMinor)/100, txType, adminID); err != nil {
-				return "", fmt.Errorf("balance credit: %w", err)
+		if found {
+			// Amount-divergent re-run: the credit identity is spent, so
+			// recording a DIFFERENT amount would make books claim money that
+			// never moved. Fail closed — nothing credited, nothing recorded;
+			// the operator re-runs with the exact prior amount (the recovery
+			// message quotes it) or resolves via payment-review. The balance
+			// rail is USD scale 2, so the stored audit amount converts *100.
+			if int64(math.Round(priorUSD*100)) != plan.fact.AmountMinor {
+				return "", fmt.Errorf(
+					"balance refund: prior credit for order %d is %.2f USD but this refund is %d minor units — re-run with the exact prior amount or resolve via payment-review",
+					order.ID, priorUSD, plan.fact.AmountMinor)
 			}
+		} else if _, err := b.balances.AdjustBalance(ctx, order.UserID,
+			float64(plan.fact.AmountMinor)/100, txType, adminID); err != nil {
+			return "", fmt.Errorf("balance credit: %w", err)
 		}
 		return fmt.Sprintf("balance-refund:%d", order.ID), nil
 	}

@@ -70,6 +70,12 @@ func TestConvertUSDToNanoTON(t *testing.T) {
 		// int64(+Inf) is platform garbage, not 0. No real rate configuration
 		// does this; the guard is defense against absurd operator configs.
 		{name: "overflowing quotient", usd: 1e200, usdPerTon: 1e-200, want: 0},
+		// Finite operands, finite product (1e12*1e9 = 1e21) and a FINITE
+		// quotient (1e21/1e-12 = 1e33) — but the quotient is >= 2^63, so
+		// int64(math.Round(q)) is platform garbage (MinInt64 on amd64),
+		// not a shippable amount. Same absurd-operator-config class as the
+		// two rows above.
+		{name: "finite quotient above MaxInt64", usd: 1e12, usdPerTon: 1e-12, want: 0},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

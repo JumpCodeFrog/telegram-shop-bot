@@ -61,8 +61,8 @@ func RunPaymentReview(ctx context.Context, args []string, opts PaymentReviewOpti
 
 func printPaymentReviewUsage(out io.Writer) {
 	fmt.Fprintln(out, "Usage:")
-	fmt.Fprintln(out, "  telegram-shop-bot payment-review list --provider stars|crypto|yookassa|stripe|ton|nowpayments|unknown")
-	fmt.Fprintln(out, "  telegram-shop-bot payment-review resolve --provider stars|crypto|yookassa|stripe|ton|nowpayments|unknown --order N [--event N|--anomaly N|--order-target N] --state STATE [--decision compensated|accepted_refund|dismissed] --actor NAME --reason TEXT [--apply --confirm-order N]")
+	fmt.Fprintln(out, "  telegram-shop-bot payment-review list --provider stars|crypto|yookassa|stripe|ton|nowpayments|balance|unknown")
+	fmt.Fprintln(out, "  telegram-shop-bot payment-review resolve --provider stars|crypto|yookassa|stripe|ton|nowpayments|balance|unknown --order N [--event N|--anomaly N|--order-target N] --state STATE [--decision compensated|accepted_refund|dismissed] --actor NAME --reason TEXT [--apply --confirm-order N]")
 	fmt.Fprintln(out, "  telegram-shop-bot payment-review ingest-stars --kind capture|refund --transaction ID --order N --actor NAME --reason TEXT [--apply --confirm-order N]")
 	fmt.Fprintln(out, "  telegram-shop-bot payment-review ingest-provider --provider yookassa|stripe|ton|nowpayments --order N --amount-minor N --currency RUB|USD|TON --external-id ID --occurred-at TS --actor NAME --reason TEXT [--apply --confirm-order N]")
 }
@@ -72,7 +72,7 @@ func printPaymentReviewUsage(out io.Writer) {
 func validPaymentReviewProvider(provider string) bool {
 	switch provider {
 	case "stars", "crypto", storage.PaymentMethodYooKassa, storage.PaymentMethodStripe,
-		storage.PaymentMethodTON, storage.PaymentMethodNowpayments, storage.PaymentReviewProviderUnknown:
+		storage.PaymentMethodTON, storage.PaymentMethodNowpayments, storage.PaymentMethodBalance, storage.PaymentReviewProviderUnknown:
 		return true
 	default:
 		return false
@@ -82,7 +82,7 @@ func validPaymentReviewProvider(provider string) bool {
 func runPaymentReviewList(ctx context.Context, args []string, opts PaymentReviewOptions) int {
 	fs := flag.NewFlagSet("payment-review list", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	provider := fs.String("provider", "", "provider: stars, crypto, yookassa, stripe, ton, nowpayments, or unknown")
+	provider := fs.String("provider", "", "provider: stars, crypto, yookassa, stripe, ton, nowpayments, balance, or unknown")
 	if err := fs.Parse(args); err != nil || fs.NArg() != 0 || !validPaymentReviewProvider(*provider) {
 		fmt.Fprintln(paymentReviewOut(opts), "Payment review: invalid list arguments")
 		return 2
@@ -122,7 +122,7 @@ func runPaymentReviewList(ctx context.Context, args []string, opts PaymentReview
 func runPaymentReviewResolve(ctx context.Context, args []string, opts PaymentReviewOptions) int {
 	fs := flag.NewFlagSet("payment-review resolve", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	provider := fs.String("provider", "", "provider: stars, crypto, yookassa, stripe, ton, nowpayments, or unknown")
+	provider := fs.String("provider", "", "provider: stars, crypto, yookassa, stripe, ton, nowpayments, balance, or unknown")
 	orderID := fs.Int64("order", -1, "order id; 0 for an orphan anomaly")
 	state := fs.String("state", "", "resulting payment state")
 	decision := fs.String("decision", "", "explicit anomaly or neutral-import decision")

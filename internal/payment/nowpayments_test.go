@@ -194,6 +194,21 @@ func TestNowpaymentsVerifyIPNSignature(t *testing.T) {
 		}
 	})
 
+	t.Run("valid signature over hand-pinned canonical bytes with raw HTML characters", func(t *testing.T) {
+		// Hand-pinned canonical form (NOT via canonicalizeNowpaymentsIPN),
+		// same discipline as the leg above, extended with the HTML-escape
+		// property: raw <, > and & stay raw. An escaping regression makes
+		// the canonicalizer's HMAC differ from this pin.
+		pinnedBody := []byte(`{"product_name":"<b>&","payment_status":"finished"}`)
+		const wantCanonical = `{"payment_status":"finished","product_name":"<b>&"}`
+		mac := hmac.New(sha512.New, []byte(nowpaymentsTestIPNSecret))
+		mac.Write([]byte(wantCanonical))
+		header := hex.EncodeToString(mac.Sum(nil))
+		if err := client.VerifyIPNSignature(header, pinnedBody); err != nil {
+			t.Fatalf("expected valid signature over the raw-HTML canonical bytes, got %v", err)
+		}
+	})
+
 	t.Run("key order insensitive", func(t *testing.T) {
 		reordered := []byte(`{"price_currency":"usd","price_amount":19.99,"order_id":"42","payment_status":"finished","payment_id":5077125051}`)
 		if err := client.VerifyIPNSignature(nowpaymentsSignatureHeader(t, nowpaymentsTestIPNSecret, body), reordered); err != nil {
@@ -242,6 +257,24 @@ func TestNowpaymentsVerifyIPNSignature(t *testing.T) {
 			t.Fatalf("expected ErrNowpaymentsNotConfigured, got %v", err)
 		}
 	})
+}
+
+func TestCanonicalizeNowpaymentsIPNKeepsHTMLCharactersRaw(t *testing.T) {
+	// Pins the SetEscapeHTML(false) property DIRECTLY: <, > and & must stay
+	// raw in the canonical form (keys sorted recursively, compact, no
+	// trailing newline). Go's json.Encoder escapes them as \u003c \u003e
+	// \u0026 by default; a regression to the default would compute a
+	// different HMAC than NOWPayments' signer over any IPN body containing
+	// these characters — fail-closed in production (genuine IPNs never
+	// verify), and invisible to the signature tests above without this pin.
+	got, err := canonicalizeNowpaymentsIPN([]byte(`{"b":"<b>&","a":[1,{"z":"<p>&x"}]}`))
+	if err != nil {
+		t.Fatalf("canonicalizeNowpaymentsIPN: %v", err)
+	}
+	const want = `{"a":[1,{"z":"<p>&x"}],"b":"<b>&"}`
+	if string(got) != want {
+		t.Fatalf("canonical = %s, want %s", got, want)
+	}
 }
 
 func TestNowpaymentsParseIPN(t *testing.T) {

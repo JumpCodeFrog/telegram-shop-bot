@@ -53,7 +53,7 @@ Stripe, YooKassa, баланса; crypto/ton/nowpayments — вручную в �
 6. Отключённый провайдер ⇒ все checkout-поверхности байт-идентичны.
 7. Refunds: provider-first → ledger-second; детерминированные idempotency-ключи
    `refund:<orderID>:<amountMinor>:<paymentID>`; one-refund-per-order gate (settled-only)
-   — **load-bearing для баланса** (см. комментарии в `executeRefund`/`BalanceTxExists`:
+   — **load-bearing для баланса** (см. комментарии в `executeRefund`/`BalanceTxTotal`:
    снятие gate требует сначала amount-scoped identity).
 
 ## 5. Эксплуатационный чеклист перед запуском
@@ -79,6 +79,7 @@ Stripe, YooKassa, баланса; crypto/ton/nowpayments — вручную в �
 **Мелкие FOLLOW-UP (без дома, все — polish/покрытие):**
 1. NOWPayments-каноникаizer: пин свойства no-HTML-escape (тест с `<>&` в теле) —
    регрессия `SetEscapeHTML(false)` сейчас осталась бы зелёной (fail-closed в проде).
+   ✅ закрыто 21.09.2026, план docs/superpowers/plans/2026-09-21-money-followups.md
 2. YooKassa `GetPayment`: покрытие invalid-ID / `toPayment` веток.
 3. doctor: 3 из 6 crypto env-ключей без behavioral overlay legs (только list-membership).
 4. bot-уровень: `payment_state` pin в yookassa webhook replay-тесте (storage-уровень есть).
@@ -86,11 +87,16 @@ Stripe, YooKassa, баланса; crypto/ton/nowpayments — вручную в �
    poller-факты это captures, не anomaly rows (уточнить формулировку).
 6. Refunds path-5: provider-success + ledger-failure оставляет только log+chat след —
    best-effort anomaly row / durable outbox как follow-up.
+   ✅ закрыто 21.09.2026, план docs/superpowers/plans/2026-09-21-money-followups.md
 7. Баланс-рефанд: fail-closed гард при amount-divergent re-run (существующий
    `order_refund` tx с другой суммой ⇒ сейчас кредит скипается, ledger пишет полную).
+   ✅ закрыто 21.09.2026, план docs/superpowers/plans/2026-09-21-money-followups.md
 8. Stars subscription-renewal leg без actor-лога (вне ruled enumeration).
-9. `/payreview`: orphan-карточки показывают заведомо непроходимые Refund/Dismiss
-   (fail-closed, UX); `admin_payrev_conflict` вторично как case-gone; ru-коллижинг
+9. `/payreview`: orphan-карточки capture-рода показывают заведомо непроходимые
+   Refund/Dismiss (fail-closed, UX); refund-рода path-5-карточки
+   (`refund_ledger_failure`, вкл. balance-бакет) до recovery проходят только
+   Refund (молча съедает карточку — warning в docs §11), после — только
+   Dismiss; `admin_payrev_conflict` вторично как case-gone; ru-коллижинг
    «Подтвердить»/«Подтвердить».
 10. doctor: TrimSpace-несогласованность (crypto vs остальные); один тест хардкодит
     английский ON-префикс.
@@ -99,6 +105,7 @@ Stripe, YooKassa, баланса; crypto/ton/nowpayments — вручную в �
     settled-skip при росте объёмов).
 13. `ConvertUSDToNanoTON`: конечные, но >MaxInt64 квотенты (теоретически; rate —
     operator-configured).
+    ✅ закрыто 21.09.2026, план docs/superpowers/plans/2026-09-21-money-followups.md
 14. YooKassa poller: warn-префикс `yookassa poller:` vs файловый `YooKassa polling:`.
 15. `paymentMethodText` fallback для неизвестного провайдера HTML-эскейпится в
     plain-text карточке `/order` (косметика).

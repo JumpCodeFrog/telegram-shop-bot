@@ -110,11 +110,13 @@ type BalanceStore interface {
 	// returned (an orphan debit from a crash between debit and settle);
 	// net >= 0 means no live debit covers the order.
 	OrderBalanceNet(ctx context.Context, userID, orderID int64) (float64, error)
-	// BalanceTxExists reports whether the user already has a balance_txs
-	// audit row of exactly this type string (e.g. the admin refund flow's
-	// deterministic "order_refund:<orderID>" credit). It answers false
-	// without error for an unknown user.
-	BalanceTxExists(ctx context.Context, userID int64, txType string) (bool, error)
+	// BalanceTxTotal reports whether the user already has balance_txs audit
+	// rows of exactly this type string (e.g. the admin refund flow's
+	// deterministic "order_refund:<orderID>" credit) and their net USD
+	// amount. It answers (0, false, nil) for an unknown user. LOAD-BEARING:
+	// see the SQLBalanceStore.BalanceTxTotal doc (per-order identity assumes
+	// the bot's settled-only refund gate + amount-divergence guard).
+	BalanceTxTotal(ctx context.Context, userID int64, txType string) (totalUSD float64, found bool, err error)
 }
 
 // UISettingsStore is declared in ui_settings.go to keep all its code in one file.

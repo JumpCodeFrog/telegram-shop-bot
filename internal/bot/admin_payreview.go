@@ -19,7 +19,10 @@ import (
 )
 
 // payReviewProviders enumerates every provider bucket the review inbox can
-// hold, including the provider-neutral "unknown" pseudo-provider.
+// hold, including the provider-neutral "unknown" pseudo-provider. The
+// balance bucket carries the refund path-5 orphan anomaly cards written by
+// admin_refunds.go (ruling R2): without it, those durable traces would never
+// surface in /payreview.
 // ListPaymentReviews has no "all" wildcard: an empty provider is rejected, so
 // the bot aggregates explicitly.
 var payReviewProviders = []string{
@@ -29,6 +32,7 @@ var payReviewProviders = []string{
 	storage.PaymentMethodStripe,
 	storage.PaymentMethodTON,
 	storage.PaymentMethodNowpayments,
+	storage.PaymentMethodBalance, // path-5 refund-ledger-failure cards (admin_refunds.go)
 	storage.PaymentReviewProviderUnknown,
 }
 
