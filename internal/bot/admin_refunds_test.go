@@ -1046,6 +1046,69 @@ func TestAdminRefundLedgerFailurePartialCarriesPartialAmount(t *testing.T) {
 	}
 }
 
+// TestAdminRefundBalanceDivergentRerunFailsClosed pins the HANDOFF §6.7
+// guard: after a PARTIAL balance refund ($5.25 of $12.50) whose ledger
+// record failed, a re-run with a DIFFERENT amount must fail closed — the
+// per-order order_refund identity already spent its credit, so recording a
+// divergent amount would make books claim money that never moved. Before
+// the guard this re-run skipped the credit AND recorded a full refund.
+func TestAdminRefundBalanceDivergentRerunFailsClosed(t *testing.T) {
+	e := newE2EEnv(t)
+	e.cmd(refundBuyer, "/start", "en") // the credit needs the users row
+	orderID := seedRefundOrder(t, e, storage.PaymentMethodBalance, "")
+	balances := storage.NewSQLBalanceStore(e.db.Conn())
+	if _, err := balances.AdjustBalance(context.Background(), refundBuyer, 12.50, "grant", e2eAdminID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := balances.AdjustBalance(context.Background(), refundBuyer, -12.50,
+		fmt.Sprintf("order_payment:%d", orderID), 0); err != nil {
+		t.Fatal(err)
+	}
+	ledger := &failingRefundLedger{payLedgerStore: e.bot.payLedger, failIngest: true}
+	e.bot.payLedger = ledger
+
+	// Partial refund: the credit executes ($5.25), the ledger record fails.
+	e.cb(e2eAdminID, refundCBData(orderID, 525), "en")
+	if got := e.qStr(`SELECT printf('%.2f', balance_usd) FROM users WHERE telegram_id=?`, refundBuyer); got != "5.25" {
+		t.Fatalf("balance after partial credit = %s, want 5.25", got)
+	}
+
+	// Divergent re-run (FULL amount) with the ledger healed: fail closed.
+	ledger.setFailIngest(false)
+	calls := e.cb(e2eAdminID, refundCBData(orderID, refundFullUSD), "en")
+	if got := e.qInt(`SELECT COUNT(*) FROM refunds`); got != 0 {
+		t.Fatalf("divergent re-run wrote %d refund rows, want 0", got)
+	}
+	if got := e.qInt(`SELECT COUNT(*) FROM balance_txs WHERE type=?`, fmt.Sprintf("order_refund:%d", orderID)); got != 1 {
+		t.Fatalf("divergent re-run left %d order_refund rows, want the prior 1", got)
+	}
+	if got := e.qStr(`SELECT printf('%.2f', balance_usd) FROM users WHERE telegram_id=?`, refundBuyer); got != "5.25" {
+		t.Fatalf("divergent re-run moved the balance to %s, want 5.25 untouched", got)
+	}
+	if got := e.qStr(`SELECT payment_state FROM orders WHERE id=?`, orderID); got != storage.PaymentStateSettled {
+		t.Fatalf("divergent re-run left state %s, want settled", got)
+	}
+	if text := tgText(calls); !strings.Contains(text, "prior credit") {
+		t.Fatalf("divergent re-run text does not name the prior credit: %q", text)
+	}
+
+	// The EXACT-amount re-run still completes the record (credit skipped).
+	calls = e.cb(e2eAdminID, refundCBData(orderID, 525), "en")
+	if got := e.qInt(`SELECT COUNT(*) FROM balance_txs WHERE type=?`, fmt.Sprintf("order_refund:%d", orderID)); got != 1 {
+		t.Fatalf("recovery minted %d credits, want exactly 1", got)
+	}
+	assertRefundRow(t, e, orderID, "balance", fmt.Sprintf("balance-refund:%d", orderID),
+		fmt.Sprintf("balance:%d", orderID), refundBuyer, 525, "USD", 2)
+	if got := e.qStr(`SELECT payment_state FROM orders WHERE id=?`, orderID); got != storage.PaymentStatePartiallyRefunded {
+		t.Fatalf("state after recovery = %s, want partially_refunded", got)
+	}
+	want := e.bot.i18n.Tf("en", "admin_refund_done",
+		fmt.Sprintf("balance-refund:%d", orderID), orderID, storage.PaymentStatePartiallyRefunded)
+	if got := tgText(calls); got != want {
+		t.Fatalf("recovery text = %q, want %q", got, want)
+	}
+}
+
 // TestAdminRefundConfirmBalanceConcurrentDoubleTap exercises the refundMu
 // serialization under real contention on the rail with the WEAKEST dedup:
 // balance has no provider API — the deterministic order_refund balance_txs

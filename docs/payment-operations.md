@@ -708,7 +708,8 @@ remedy per rail:
   completes the ledger record. Re-run with the SAME amount — an amount-less
   re-run defaults to the full total, which is a different refund (the card
   rails' providers reject it once a partial moved money, but the re-run then
-  completes nothing);
+  completes nothing; the balance rail's divergence guard fails it closed
+  before any write — see the coupling note below);
 - `stars` — do NOT re-run `/refund`: Telegram rejects the repeat
   `refundStarPayment`, so a re-run can never record it. Record the refund with
   the Stars CLI instead (§3): `payment-review ingest-stars --kind refund
@@ -745,13 +746,18 @@ refund records, and the order goes to `needs_review` for §9/CLI triage.
 
 The balance rail's idempotency identity `order_refund:<orderID>` is
 ORDER-scoped, which is sound only while the settled-only gate admits exactly
-one bot refund per order. If that gate is ever relaxed to accept
-`partially_refunded` orders (a remainder refund), the identity MUST become
-amount-scoped FIRST (e.g. `order_refund:<orderID>:<amountMinor>`) — otherwise
-the second partial refund finds the first credit's row, skips the credit, and
-records money that never moved. The coupling is commented at both ends: the
-balance branch of `executeRefund` (`internal/bot/admin_refunds.go`) and
-`BalanceTxExists` (`internal/storage/balance.go`).
+one bot refund per order. The probe therefore returns the prior credit's
+net amount as well as its existence (`BalanceTxTotal`), and a re-run whose
+amount diverges from that credit FAILS CLOSED before any write: nothing is
+credited, nothing is recorded, and the error names both amounts. Recovery is
+the exact-amount re-run (the failure message quotes the prior credit) or
+`/payreview` (§9) resolution. If the settled-only gate is ever relaxed to
+accept `partially_refunded` orders (a remainder refund), the identity MUST
+become amount-scoped FIRST (e.g. `order_refund:<orderID>:<amountMinor>`) —
+otherwise a legit second partial dies on the divergence guard with no bot
+path. The coupling is commented at both ends: the balance branch of
+`executeRefund` (`internal/bot/admin_refunds.go`) and `BalanceTxTotal`
+(`internal/storage/balance.go`).
 
 ## 12. Operation attribution
 
