@@ -149,8 +149,10 @@ func (w *YooKassaPollingWorker) processPayment(ctx context.Context, item *paymen
 		}
 		return
 	}
+	// Settlement attribution (docs/payment-operations.md §12): the poller is
+	// the acting settler — log-level actor, no durable actor row.
 	slog.Info("YooKassa polling: order marked paid",
-		"order_id", receipt.OrderID, "external_id", receipt.ExternalID)
+		"order_id", receipt.OrderID, "external_id", receipt.ExternalID, "actor", "worker:yookassa")
 	if w.notify != nil {
 		w.notify(ctx, outcome)
 	}

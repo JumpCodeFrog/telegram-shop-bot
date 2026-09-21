@@ -236,7 +236,10 @@ func (w *CryptoBotPollingWorker) processPaidInvoices(ctx context.Context, invoic
 			slog.Debug("CryptoBot polling: ConfirmPayment skipped", "order_id", inv.OrderID, "reason", err)
 			continue
 		}
-		slog.Info("CryptoBot polling: order marked paid", "order_id", inv.OrderID, "invoice_id", inv.InvoiceID)
+		// Settlement attribution (docs/payment-operations.md §12): the poller
+		// is the acting settler — log-level actor, no durable actor row.
+		slog.Info("CryptoBot polling: order marked paid",
+			"order_id", inv.OrderID, "invoice_id", inv.InvoiceID, "actor", "worker:crypto")
 		if w.notify != nil {
 			w.notify(ctx, outcome)
 		}

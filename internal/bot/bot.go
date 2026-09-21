@@ -110,18 +110,41 @@ type Bot struct {
 	// and the balance rail's credit has no provider-side dedup.
 	refundMu sync.Mutex
 
+	// rootCtx is the process-lifetime cancellation root (SetRootContext) that
+	// handlerCtx derives its per-handler timeouts from. Nil until set:
+	// handlerCtx falls back to context.Background(), so direct/test
+	// constructors keep working unchanged.
+	rootCtx context.Context
+
 	// handler is the fully-chained update handler (used for both polling and webhook).
 	handler func(tgbotapi.Update)
 
 	handlerOnce sync.Once
 }
 
+// SetRootContext installs the process-lifetime cancellation root that
+// handlerCtx derives its per-handler timeouts from. Call ONCE before starting
+// the bot — main passes its signal.NotifyContext ctx — so shutdown
+// cancellation reaches in-flight handler DB work instead of letting it
+// outlive the process signal by up to the 30s per-handler bound. Nil-safe:
+// an unset (or nil) root leaves handlerCtx on its context.Background()
+// fallback.
+func (b *Bot) SetRootContext(ctx context.Context) {
+	b.rootCtx = ctx
+}
+
 // handlerCtx returns a context with a 30-second deadline for use in handler
 // DB/service calls: a per-handler timeout until full update-context
-// propagation exists. This prevents a single slow query from holding a
-// goroutine indefinitely.
-func (*Bot) handlerCtx() (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.Background(), 30*time.Second)
+// propagation exists, derived from the SetRootContext process-lifetime root
+// so shutdown cancellation reaches in-flight handler work (the nil fallback
+// keeps direct/test constructors working without a root). This prevents a
+// single slow query from holding a goroutine indefinitely.
+func (b *Bot) handlerCtx() (context.Context, context.CancelFunc) {
+	root := b.rootCtx
+	if root == nil {
+		root = context.Background()
+	}
+	return context.WithTimeout(root, 30*time.Second)
 }
 
 // New creates a new Bot with all dependencies injected.

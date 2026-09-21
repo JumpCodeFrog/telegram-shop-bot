@@ -753,6 +753,30 @@ records money that never moved. The coupling is commented at both ends: the
 balance branch of `executeRefund` (`internal/bot/admin_refunds.go`) and
 `BalanceTxExists` (`internal/storage/balance.go`).
 
+## 12. Operation attribution
+
+Every money-moving operation has a named actor. How the actor is recorded
+depends on the path:
+
+| Path | Actor | Durable record |
+|---|---|---|
+| Provider webhooks (crypto, yookassa, stripe, nowpayments) | `webhook:<provider>` | settlement-success log line only (structured `actor` field next to `order_id` and the provider payment id) |
+| Stars `successful_payment` settlement (Telegram is the provider; the update arrives via webhook or long polling) | `webhook:stars` | settlement-success log line only |
+| Polling workers (crypto, ton, yookassa) | `worker:<provider>` | settle-success log line only |
+| CLI ingress (`payment-review ingest-stars` / `ingest-provider` / `resolve`) | the `--actor` flag value | durable `payment_ingress_audits` row |
+| Bot `/refund` executions and `/payreview` resolutions | `admin:<telegram_id>` | durable `payment_ingress_audits` row (refunds additionally log the same actor) |
+| Balance adjustments (`/setbalance`) | the acting admin's Telegram id | durable `balance_txs` row (`admin_adjust[: reason]` type, admin id in `ref_id`) |
+
+For webhook and worker settlements the provider fact itself is the authority —
+a verified/refetched provider statement (or an on-chain transfer) caused the
+settle, not a person — so attribution is log-level: the settlement-success
+line carries a structured `actor` field. These paths have **no durable actor
+row**: the immutable ledger tables carry no actor column, and adding one was
+assessed as disproportionate for the low operator impact — it remains a
+documented backlog item (roadmap 4.15). Operator-driven paths (CLI ingress,
+bot refunds, review resolutions, balance adjustments) all write durable audit
+rows naming the actor.
+
 ## Exit codes
 
 | Code | Meaning |
