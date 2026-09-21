@@ -220,3 +220,34 @@ func TestSQLBalanceStoreCentRounding(t *testing.T) {
 		t.Fatalf("final balance = %.17f, want 0", got)
 	}
 }
+
+// TestSQLBalanceStoreBalanceTxExists pins the idempotency probe the admin
+// refund flow uses on the balance rail: a deterministic order_refund:<orderID>
+// credit must be findable by its exact type string, so a re-run after a
+// ledger-recording failure skips the credit instead of minting money twice.
+func TestSQLBalanceStoreBalanceTxExists(t *testing.T) {
+	db := newBalanceTestDB(t)
+	store := NewSQLBalanceStore(db.Conn())
+	ctx := context.Background()
+
+	// An unknown user never has audit rows (the telegram_id subquery is empty).
+	if exists, err := store.BalanceTxExists(ctx, 424242, "order_refund:7"); err != nil || exists {
+		t.Fatalf("unknown user: exists=%v err=%v, want false/nil", exists, err)
+	}
+
+	seedBalanceUser(t, db, 42)
+	if exists, err := store.BalanceTxExists(ctx, 42, "order_refund:7"); err != nil || exists {
+		t.Fatalf("before credit: exists=%v err=%v, want false/nil", exists, err)
+	}
+
+	if _, err := store.AdjustBalance(ctx, 42, 12.50, "order_refund:7", 9001); err != nil {
+		t.Fatal(err)
+	}
+	if exists, err := store.BalanceTxExists(ctx, 42, "order_refund:7"); err != nil || !exists {
+		t.Fatalf("after credit: exists=%v err=%v, want true/nil", exists, err)
+	}
+	// Exact type match: a sibling order's refund credit must not shadow.
+	if exists, err := store.BalanceTxExists(ctx, 42, "order_refund:8"); err != nil || exists {
+		t.Fatalf("sibling order: exists=%v err=%v, want false/nil", exists, err)
+	}
+}

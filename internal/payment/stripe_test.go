@@ -259,6 +259,276 @@ func TestStripeGetCheckoutSessionAPIError(t *testing.T) {
 	}
 }
 
+func TestStripeGetCheckoutSessionParsesPaymentIntent(t *testing.T) {
+	newSrv := func(body string) *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(body))
+		}))
+	}
+
+	t.Run("present", func(t *testing.T) {
+		srv := newSrv(`{"id":"cs_test_3","status":"complete","payment_status":"paid",` +
+			`"amount_total":199900,"currency":"usd","payment_intent":"pi_test_9",` +
+			`"metadata":{"order_id":"42"}}`)
+		defer srv.Close()
+
+		session, err := newStripeTestClient(srv).GetCheckoutSession(context.Background(), "cs_test_3")
+		if err != nil {
+			t.Fatalf("GetCheckoutSession returned error: %v", err)
+		}
+		if session.PaymentIntent != "pi_test_9" {
+			t.Fatalf("PaymentIntent = %q, want %q", session.PaymentIntent, "pi_test_9")
+		}
+	})
+
+	// Unpaid or intent-less sessions omit the field or send null; both must
+	// parse tolerantly to the empty string rather than fail the session read.
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{name: "absent", body: `{"id":"cs_test_4","status":"open","payment_status":"unpaid","amount_total":500,"currency":"usd"}`},
+		{name: "null", body: `{"id":"cs_test_5","status":"open","payment_status":"unpaid","amount_total":500,"currency":"usd","payment_intent":null}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := newSrv(tc.body)
+			defer srv.Close()
+
+			session, err := newStripeTestClient(srv).GetCheckoutSession(context.Background(), "cs_test_4")
+			if err != nil {
+				t.Fatalf("GetCheckoutSession returned error: %v", err)
+			}
+			if session.PaymentIntent != "" {
+				t.Fatalf("PaymentIntent = %q, want empty", session.PaymentIntent)
+			}
+		})
+	}
+}
+
+func TestStripeCreateRefundSendsFormEncodedRequest(t *testing.T) {
+	var idempotencyKeys []string
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("expected POST, got %s", r.Method)
+		}
+		if r.URL.Path != "/v1/refunds" {
+			t.Errorf("expected path /v1/refunds, got %s", r.URL.Path)
+		}
+		if ct := r.Header.Get("Content-Type"); ct != "application/x-www-form-urlencoded" {
+			t.Errorf("Content-Type = %q, want application/x-www-form-urlencoded", ct)
+		}
+		requireStripeBearerAuth(t, r)
+
+		key := r.Header.Get("Idempotency-Key")
+		if key == "" {
+			t.Error("expected non-empty Idempotency-Key header")
+		} else if _, err := uuid.Parse(key); err != nil {
+			t.Errorf("Idempotency-Key %q is not a valid uuid: %v", key, err)
+		}
+		idempotencyKeys = append(idempotencyKeys, key)
+
+		if err := r.ParseForm(); err != nil {
+			t.Errorf("failed to parse form body: %v", err)
+			return
+		}
+		want := url.Values{
+			"payment_intent": {"pi_test_1"},
+			"amount":         {"50000"},
+			"reason":         {"requested_by_customer"},
+		}
+		if !reflect.DeepEqual(r.PostForm, want) {
+			t.Errorf("form = %v, want exactly %v", r.PostForm, want)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"re_test_1","status":"succeeded"}`))
+	}))
+	defer srv.Close()
+
+	client := newStripeTestClient(srv)
+
+	refund, err := client.CreateRefund(context.Background(), "pi_test_1", 50000, "")
+	if err != nil {
+		t.Fatalf("CreateRefund returned error: %v", err)
+	}
+	if refund.ID != "re_test_1" || refund.Status != "succeeded" {
+		t.Fatalf("refund = %+v, want {ID:re_test_1 Status:succeeded}", refund)
+	}
+
+	// A second refund call must carry a fresh idempotency key: two adapter
+	// calls are two distinct money-out operations and the provider must never
+	// collapse the second into a replay of the first.
+	if _, err := client.CreateRefund(context.Background(), "pi_test_1", 50000, ""); err != nil {
+		t.Fatalf("second CreateRefund returned error: %v", err)
+	}
+	if len(idempotencyKeys) != 2 {
+		t.Fatalf("expected 2 requests, got %d", len(idempotencyKeys))
+	}
+	if idempotencyKeys[0] == "" || idempotencyKeys[1] == "" {
+		t.Fatalf("expected both requests to carry an Idempotency-Key, got %v", idempotencyKeys)
+	}
+	if idempotencyKeys[0] == idempotencyKeys[1] {
+		t.Fatalf("second request reused Idempotency-Key %q", idempotencyKeys[0])
+	}
+}
+
+// TestStripeCreateRefundIdempotencyKeyPassthrough pins the caller-supplied
+// key contract: a non-empty idempotencyKey is sent verbatim as the
+// Idempotency-Key header (the bot's deterministic refund key), and two calls
+// with the SAME key repeat it — that is exactly the provider-side dedup the
+// refund flow relies on after a ledger-recording failure.
+func TestStripeCreateRefundIdempotencyKeyPassthrough(t *testing.T) {
+	var idempotencyKeys []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		idempotencyKeys = append(idempotencyKeys, r.Header.Get("Idempotency-Key"))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"re_test_9","status":"succeeded"}`))
+	}))
+	defer srv.Close()
+
+	client := newStripeTestClient(srv)
+	const key = "refund:42:1250:cs_test_1"
+	for i := 0; i < 2; i++ {
+		if _, err := client.CreateRefund(context.Background(), "pi_test_1", 1250, key); err != nil {
+			t.Fatalf("CreateRefund returned error: %v", err)
+		}
+	}
+	if len(idempotencyKeys) != 2 {
+		t.Fatalf("expected 2 requests, got %d", len(idempotencyKeys))
+	}
+	for _, got := range idempotencyKeys {
+		if got != key {
+			t.Fatalf("Idempotency-Key = %q, want the caller-supplied %q", got, key)
+		}
+	}
+}
+
+func TestStripeCreateRefundFullRefundOmitsAmount(t *testing.T) {
+	var forms []url.Values
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			t.Errorf("failed to parse form body: %v", err)
+			return
+		}
+		forms = append(forms, r.PostForm)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"re_test_2","status":"succeeded"}`))
+	}))
+	defer srv.Close()
+
+	client := newStripeTestClient(srv)
+
+	// amountCents <= 0 means "refund the full remaining balance": the amount
+	// param must be omitted entirely, never sent as 0 or a negative value.
+	for _, amountCents := range []int64{0, -1} {
+		if _, err := client.CreateRefund(context.Background(), "pi_test_1", amountCents, ""); err != nil {
+			t.Fatalf("CreateRefund(%d) returned error: %v", amountCents, err)
+		}
+	}
+	if len(forms) != 2 {
+		t.Fatalf("expected 2 requests, got %d", len(forms))
+	}
+	for i, form := range forms {
+		if _, ok := form["amount"]; ok {
+			t.Errorf("leg %d: amount sent for amountCents <= 0: %v", i, form["amount"])
+		}
+		want := url.Values{
+			"payment_intent": {"pi_test_1"},
+			"reason":         {"requested_by_customer"},
+		}
+		if !reflect.DeepEqual(form, want) {
+			t.Errorf("leg %d: form = %v, want exactly %v", i, form, want)
+		}
+	}
+}
+
+func TestStripeCreateRefundStatusPassthrough(t *testing.T) {
+	// A "failed" refund is NOT an HTTP error: Stripe created the object but
+	// it did not move money. Every status must come back verbatim so the
+	// CALLER decides what a failed or pending refund means for the order.
+	for _, status := range []string{"succeeded", "pending", "failed", "requires_action"} {
+		t.Run(status, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"id":"re_test_3","status":"` + status + `"}`))
+			}))
+			defer srv.Close()
+
+			refund, err := newStripeTestClient(srv).CreateRefund(context.Background(), "pi_test_1", 0, "")
+			if err != nil {
+				t.Fatalf("CreateRefund returned error for status %q: %v", status, err)
+			}
+			if refund.ID != "re_test_3" || refund.Status != status {
+				t.Fatalf("refund = %+v, want {ID:re_test_3 Status:%s}", refund, status)
+			}
+		})
+	}
+}
+
+func TestStripeCreateRefundAPIError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":{"type":"invalid_request_error","code":"charge_already_refunded","message":"Charge pi_test_1 has already been refunded"}}`))
+	}))
+	defer srv.Close()
+
+	client := newStripeTestClient(srv)
+
+	_, err := client.CreateRefund(context.Background(), "pi_test_1", 0, "")
+	if err == nil {
+		t.Fatal("expected error from CreateRefund on API error, got nil")
+	}
+	if !strings.Contains(err.Error(), "400") {
+		t.Errorf("expected error to contain HTTP status 400, got %q", err.Error())
+	}
+	if !strings.Contains(err.Error(), "Charge pi_test_1 has already been refunded") {
+		t.Errorf("expected error to contain the Stripe message, got %q", err.Error())
+	}
+	if strings.Contains(err.Error(), stripeTestSecretKey) {
+		t.Errorf("error leaks the secret key: %q", err.Error())
+	}
+}
+
+func TestStripeCreateRefundRejectsEmptyPaymentIntent(t *testing.T) {
+	called := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		called = true
+	}))
+	defer srv.Close()
+
+	client := newStripeTestClient(srv)
+
+	for _, intent := range []string{"", "   "} {
+		_, err := client.CreateRefund(context.Background(), intent, 50000, "")
+		if err == nil {
+			t.Fatalf("intent %q: expected error, got nil", intent)
+		}
+		if !strings.Contains(err.Error(), "payment intent") {
+			t.Fatalf("intent %q: expected a clear payment-intent error, got %q", intent, err.Error())
+		}
+	}
+	if called {
+		t.Fatal("CreateRefund made an HTTP call for an empty payment intent")
+	}
+}
+
+func TestStripeCreateRefundRejectsMissingRefundID(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"succeeded"}`))
+	}))
+	defer srv.Close()
+
+	// Fail closed: a refund response without an id broke the API contract,
+	// and recording an anonymous money-out movement is worse than an error.
+	if _, err := newStripeTestClient(srv).CreateRefund(context.Background(), "pi_test_1", 0, ""); err == nil {
+		t.Fatal("expected error for a refund response without an id, got nil")
+	}
+}
+
 func TestStripeVerifyWebhookSignature(t *testing.T) {
 	fixedNow := time.Date(2026, 9, 19, 12, 0, 0, 0, time.UTC)
 	now := fixedNow.Unix()
@@ -518,6 +788,9 @@ func TestStripeNotConfiguredFailsClosed(t *testing.T) {
 	}
 	if _, err := client.GetCheckoutSession(context.Background(), "cs_test_1"); !errors.Is(err, ErrStripeNotConfigured) {
 		t.Fatalf("GetCheckoutSession: expected ErrStripeNotConfigured, got %v", err)
+	}
+	if _, err := client.CreateRefund(context.Background(), "pi_test_1", 100, ""); !errors.Is(err, ErrStripeNotConfigured) {
+		t.Fatalf("CreateRefund: expected ErrStripeNotConfigured, got %v", err)
 	}
 	// An empty webhook secret would make every forged signature valid, so
 	// verification must fail closed before any signature is compared.
