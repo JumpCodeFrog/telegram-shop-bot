@@ -212,13 +212,14 @@ and the order in `needs_review`:
 | `receipt_mismatch` | Valid receipt that disagrees with the order's money tuple |
 | `out_of_stock_after_charge` | Paid payment whose product went out of stock before fulfillment |
 
-The backup poller quarantines one class differently: an out-of-stock settlement
-it finds is recorded via `RecordUnexpectedPayment` as a needs_review payment
-attempt plus a captured/needs_review payment event — no `payment_anomalies`
-row — and surfaces in the review queue through that event target. Every other
-poller quarantine (receipt mismatch, identity conflicts) runs through the same
-storage gate as the webhook and writes `payment_anomalies` rows exactly as
-tabulated above.
+The backup poller shares the webhook's storage gate, so its receipt-mismatch
+and identity-conflict quarantines write `payment_anomalies` rows exactly as
+tabulated above. Its capture-class quarantines do not: an out-of-stock
+settlement the poller finds, and a `second_charge` / `capture_after_terminal_state`
+re-charge of an already-settled order, are recorded via `RecordUnexpectedPayment`
+as a needs_review payment attempt plus a captured/needs_review payment event —
+no `payment_anomalies` row — and surface in the review queue through that event
+target instead (the order still flips to `needs_review` either way).
 
 YooKassa facts carry no payer id (the provider has no Telegram payer
 identity), so payer checks compare money and order linkage only.
@@ -412,17 +413,18 @@ facts preserved.
 
 ### What quarantined TON facts look like
 
-Quarantined TON facts are `payment_anomalies` rows with provider `ton` and the
-order in `needs_review` — except `out_of_stock_after_charge`, which the poller
-(TON's only settlement path) records via `RecordUnexpectedPayment` as a
-needs_review attempt/event capture instead; it surfaces in the review queue
-through that event target:
+Quarantined TON facts reach the review queue through two mechanisms — the
+poller is TON's only settlement path, and the order flips to `needs_review`
+either way. `receipt_mismatch` and `unknown_order` are written as
+`payment_anomalies` rows; `second_charge` and `out_of_stock_after_charge` are
+recorded via `RecordUnexpectedPayment` as a needs_review attempt/event capture
+(no anomaly row). Both surface as review-queue targets:
 
 | Reason | Meaning |
 |---|---|
 | `receipt_mismatch` | Underpay below the frozen snapshot (or a zero snapshot) |
 | `unknown_order` | Memo names an order that does not exist |
-| `second_charge` | A distinct second transfer for an already settled order |
+| `second_charge` | A distinct second transfer for an already settled order; recorded as a needs_review capture, not an anomaly row (poller path) |
 | `out_of_stock_after_charge` | Paid transfer whose product went out of stock before fulfillment; durable — never retried; recorded as a needs_review capture, not an anomaly row (poller path) |
 
 TON facts carry no payer id (on-chain transfers have no Telegram payer
