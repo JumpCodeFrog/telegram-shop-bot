@@ -45,7 +45,7 @@ origin на ~92 коммита, **push НЕ выполнен — не пушь �
 - Settlement только через проверенный факт (подпись / re-fetch / on-chain);
   неподписанное тело вебхука — только идентификаторы.
 - Ledger immutable; refund-порядок provider-first→ledger-second; one-refund-per-order
-  gate — **load-bearing для баланса** (комментарии в `executeRefund`/`BalanceTxExists`).
+  gate — **load-bearing для баланса** (комментарии в `executeRefund`/`BalanceTxTotal`).
 - Подписки только Stars; отключённый провайдер ⇒ поверхности байт-идентичны.
 - Новые зависимости не добавляем (raw HTTP у всех провайдеров).
 

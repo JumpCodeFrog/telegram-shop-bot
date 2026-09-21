@@ -717,6 +717,21 @@ remedy per rail:
   --confirm-order N` reads Telegram's authoritative refund transaction and
   records it with the provider's own timestamp.
 
+The failure window also leaves a durable trace: the moment a provider refund
+succeeds but the ledger record fails, a best-effort ORPHAN
+`payment_anomalies` row is written with the reason
+`refund_ledger_failure:order=<id>` in the rail's provider bucket (balance
+included, so the card is visible in `/payreview` (§9) and `payment-review`).
+It is deliberately an orphan (no proposed order): the order stays `settled`
+so the re-run remedy quoted above still works — a `needs_review` quarantine
+would fail the refundable gate and close that path. The write is best-effort:
+when it also fails (the database is likely what just broke), the log + chat
+message above remain the full trace and nothing else changes. The row's
+`raw_payload` is deterministic (order id, rail, refund id — no error text),
+so repeated failures reuse one row. After the re-run or the Stars CLI
+recovery completes the record, resolve the card via `payment-review resolve`
+(§4; bot-side orphan-card ergonomics are a known follow-up — HANDOFF §6.9).
+
 ### One bot-side refund per order
 
 The gate requires a `paid` or `delivered` order whose payment state is
