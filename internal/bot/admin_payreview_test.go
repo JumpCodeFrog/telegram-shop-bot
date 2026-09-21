@@ -286,6 +286,7 @@ func TestPayReviewOrphanCardActionSets(t *testing.T) {
 			[]string{payReviewActionRefund, payReviewActionDismiss}},
 		{"digest parse failure", orphan(storage.PaymentMethodYooKassa, "webhook_parse_failure"), nil},
 		{"digest missing payment id", orphan(storage.PaymentMethodYooKassa, "webhook_missing_payment_id"), nil},
+		{"stars decode-failure digest orphan", orphan(storage.PaymentMethodStars, "stars_update_decode_failure"), nil},
 		{"capture orphan", orphan(storage.PaymentMethodStars, "provider_verified_unknown_order"),
 			[]string{payReviewActionSettle}},
 		{"attached case keeps the triple", storage.PaymentReviewCase{

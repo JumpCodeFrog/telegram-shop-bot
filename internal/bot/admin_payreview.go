@@ -261,8 +261,14 @@ func payReviewActions(item storage.PaymentReviewCase) []string {
 		switch {
 		case payReviewIsRefundLedgerFailureOrphan(item):
 			return []string{payReviewActionRefund, payReviewActionDismiss}
-		case reason == "webhook_parse_failure" || reason == "webhook_missing_payment_id":
-			return nil // digest-only: every decision provably conflicts — CLI-only card
+		case reason == "webhook_parse_failure" || reason == "webhook_missing_payment_id" ||
+			reason == "stars_update_decode_failure":
+			// Digest-shaped orphans carry no external id and no amount, so
+			// storage rejects every decision (explicitNoAttemptAnomalyDecision)
+			// — no bot action can pass; CLI-only card. This is the complete
+			// digest-shaped orphan reason set: the webhook parse/missing-id
+			// digests plus the Stars undecodable-update digest.
+			return nil
 		default:
 			return []string{payReviewActionSettle}
 		}
