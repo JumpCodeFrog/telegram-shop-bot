@@ -34,6 +34,7 @@ telegram-shop-bot payment-review list --provider yookassa
 telegram-shop-bot payment-review list --provider stripe
 telegram-shop-bot payment-review list --provider ton
 telegram-shop-bot payment-review list --provider nowpayments
+telegram-shop-bot payment-review list --provider balance
 telegram-shop-bot payment-review list --provider unknown
 ```
 
@@ -538,8 +539,8 @@ without leaving Telegram. `/payreview` lists every case across all provider
 buckets — one line (`#<order> | <provider> | <state> | targets=<n> |
 <reasons>`) and one card button per case. The bot aggregates the queue itself:
 the ledger's `ListPaymentReviews` has no cross-provider wildcard, so the bot
-loops the seven provider buckets (`stars`, `crypto`, `yookassa`, `stripe`,
-`ton`, `nowpayments`, `unknown`).
+loops the eight provider buckets (`stars`, `crypto`, `yookassa`, `stripe`,
+`ton`, `nowpayments`, `balance`, `unknown`).
 
 A case card shows the order summary, the payment state, and every target with
 its kind and reason code. Each action (Settle / Refund / Dismiss) is a
@@ -616,10 +617,12 @@ by inspecting `balance_txs` for `order_payment:<id>` rows without a matching
 settled payment attempt; if the purchase should not complete, return the money
 with `/setbalance <user_id> +<amount> reconcile order <id>`.
 
-The balance rail never enters the review queue: a balance fact is validated
-against the order's exact USD snapshot and required payer before settlement,
-so there is no provider ambiguity to quarantine — ingress accepts or rejects
-it outright.
+The balance rail never enters the review queue through settlement ingress: a
+balance fact is validated against the order's exact USD snapshot and required
+payer before settlement, so there is no provider ambiguity to quarantine —
+settlement ingress accepts or rejects it outright. The balance review bucket
+(§2, §9) exists for one exception only: the path-5 refund orphans of §11, a
+refund credit that succeeded while its ledger record failed.
 
 **Refunds**: `/refund <order_id>` (§11) for a balance-paid order credits the
 buyer's balance back — the credit IS this rail's provider step (there is no
@@ -728,9 +731,20 @@ would fail the refundable gate and close that path. The write is best-effort:
 when it also fails (the database is likely what just broke), the log + chat
 message above remain the full trace and nothing else changes. The row's
 `raw_payload` is deterministic (order id, rail, refund id — no error text),
-so repeated failures reuse one row. After the re-run or the Stars CLI
-recovery completes the record, resolve the card via `payment-review resolve`
-(§4; bot-side orphan-card ergonomics are a known follow-up — HANDOFF §6.9).
+so repeated failures reuse one row.
+
+**Pre-recovery trap**: acting on the card's Refund action before the recovery
+above has completed the ledger record resolves the card without recording a
+`refunds` row — Refund is the only decision that passes on a refund orphan
+pre-recovery, and it acknowledges a refund the books never recorded. A
+resolved card never re-surfaces: a repeated path-5 failure reuses the
+resolved row, so the durable trace is silently consumed. Resolve the card
+only after the recovery completes the record — post-recovery the refund row
+exists, Refund fails closed, and Dismiss is the passing action.
+
+After the re-run or the Stars CLI recovery completes the record, resolve the
+card via `payment-review resolve` (§4; bot-side orphan-card ergonomics are a
+known follow-up — HANDOFF §6.9).
 
 ### One bot-side refund per order
 

@@ -92,8 +92,11 @@ Stripe, YooKassa, баланса; crypto/ton/nowpayments — вручную в �
    `order_refund` tx с другой суммой ⇒ сейчас кредит скипается, ledger пишет полную).
    ✅ закрыто 21.09.2026, план docs/superpowers/plans/2026-09-21-money-followups.md
 8. Stars subscription-renewal leg без actor-лога (вне ruled enumeration).
-9. `/payreview`: orphan-карточки показывают заведомо непроходимые Refund/Dismiss
-   (fail-closed, UX); `admin_payrev_conflict` вторично как case-gone; ru-коллижинг
+9. `/payreview`: orphan-карточки capture-рода показывают заведомо непроходимые
+   Refund/Dismiss (fail-closed, UX); refund-рода path-5-карточки
+   (`refund_ledger_failure`, вкл. balance-бакет) до recovery проходят только
+   Refund (молча съедает карточку — warning в docs §11), после — только
+   Dismiss; `admin_payrev_conflict` вторично как case-gone; ru-коллижинг
    «Подтвердить»/«Подтвердить».
 10. doctor: TrimSpace-несогласованность (crypto vs остальные); один тест хардкодит
     английский ON-префикс.
