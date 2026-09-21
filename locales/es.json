@@ -272,7 +272,7 @@
   "admin_refund_not_paid": "❌ El pedido #%d no es reembolsable (estado: %s). Se requiere un pedido pagado o entregado con pago liquidado.",
   "admin_refund_partial_stars": "❌ Los reembolsos de Telegram Stars son solo por el total: el pedido #%d suma %d XTR. Vuelve a ejecutarlo sin importe para reembolsarlo completo.",
   "admin_refund_provider_failed": "❌ El reembolso del pedido #%d falló en el proveedor: %s\nNo se registró ningún reembolso y el pedido no cambió.",
-  "admin_refund_ledger_failed_rerun": "🚨 El reembolso %s del pedido #%d se EJECUTÓ en el proveedor, pero su registro en el libro FALLÓ: %s\nVuelve a ejecutar /refund %d — la clave de idempotencia determinista evita mover dinero dos veces; la reejecución solo completa el registro.",
+  "admin_refund_ledger_failed_rerun": "🚨 El reembolso %s del pedido #%d se EJECUTÓ en el proveedor, pero su registro en el libro FALLÓ: %s\nVuelve a ejecutar /refund %d %s — la clave de idempotencia determinista evita mover dinero dos veces; la reejecución solo completa el registro.",
   "admin_refund_ledger_failed_stars": "🚨 El reembolso de Stars %s del pedido #%d se EJECUTÓ en Telegram, pero su registro en el libro FALLÓ: %s\nNO vuelvas a ejecutar /refund — Telegram rechaza un segundo reembolso del mismo cargo, así que la reejecución nunca podrá registrarlo. Registra el reembolso con la CLI ingest-stars (lee la transacción de reembolso autoritativa de Telegram):\n%s",
   "admin_refund_conflict": "⚠️ Este reembolso ya no puede aplicarse como se previsualizó: cambió el pedido, el importe o la evidencia del libro. Recarga con /refund y verifica el importe.",
   "admin_paystatus_title": "💳 Estado de los proveedores de pago:\n",

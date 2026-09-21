@@ -129,18 +129,28 @@ func refundRailMoney(order *storage.Order, rail string) (amountMinor int64, curr
 	return 0, "", 0, false
 }
 
-// refundAmountLabel renders minor units as a major-unit decimal with the
-// currency code, using integer string math (no float rounding).
-func refundAmountLabel(amountMinor int64, currency string, scale int) string {
+// refundAmountDecimal renders minor units as a major-unit decimal string with
+// the rail's scale, using integer string math (no float rounding). It is the
+// exact inverse of the /refund command's amount parsing (ParseFloat →
+// Round(x × Pow10(scale))): re-running the command with the rendered value
+// reproduces the SAME amountMinor — which is why the ledger-failure recovery
+// message quotes it inside the re-run command.
+func refundAmountDecimal(amountMinor int64, scale int) string {
 	if scale <= 0 {
-		return fmt.Sprintf("%d %s", amountMinor, currency)
+		return strconv.FormatInt(amountMinor, 10)
 	}
 	digits := strconv.FormatInt(amountMinor, 10)
 	for len(digits) <= scale {
 		digits = "0" + digits
 	}
 	cut := len(digits) - scale
-	return digits[:cut] + "." + digits[cut:] + " " + currency
+	return digits[:cut] + "." + digits[cut:]
+}
+
+// refundAmountLabel renders minor units as a major-unit decimal with the
+// currency code, using integer string math (no float rounding).
+func refundAmountLabel(amountMinor int64, currency string, scale int) string {
+	return refundAmountDecimal(amountMinor, scale) + " " + currency
 }
 
 // refundIdempotencyKey builds the deterministic provider dedup key. See the
@@ -391,17 +401,24 @@ func (b *Bot) onAdminRefundConfirm(chatID int64, msgID int, adminID, orderID, am
 		// stripe/yookassa collapse a re-run into the original refund via the
 		// deterministic idempotency key and balance skips the credit when the
 		// order_refund audit row exists, so for them the /refund re-run only
-		// completes the ledger record. Stars have NO safe re-run: Telegram
-		// rejects the repeat refundStarPayment, and the flow would falsely
-		// report "nothing recorded, order unchanged" while the money is out.
-		// The stars recovery is the ingest-stars CLI, which records the
-		// refund with Telegram's authoritative OccurredAt.
+		// completes the ledger record. The re-run message carries the EXACT
+		// command WITH the amount: after a PARTIAL refund an amount-less
+		// re-run defaults to FULL, and the balance rail's per-order
+		// order_refund identity would skip the credit while the ledger
+		// recorded a full refund — books claim more out than moved. (Stars
+		// are full-only, so the amount is implicit.) Stars have NO safe
+		// re-run: Telegram rejects the repeat refundStarPayment, and the
+		// flow would falsely report "nothing recorded, order unchanged"
+		// while the money is out. The stars recovery is the ingest-stars
+		// CLI, which records the refund with Telegram's authoritative
+		// OccurredAt.
 		b.logger.Error("refund: LEDGER RECORDING FAILED AFTER PROVIDER SUCCESS",
 			"order_id", orderID, "rail", rail, "refund_id", refundID, "error", err)
 		if rail == storage.PaymentMethodStars {
 			render(b.i18n.Tf(lang, "admin_refund_ledger_failed_stars", refundID, orderID, err.Error(), refundCLIRecordLine))
 		} else {
-			render(b.i18n.Tf(lang, "admin_refund_ledger_failed_rerun", refundID, orderID, err.Error(), orderID))
+			render(b.i18n.Tf(lang, "admin_refund_ledger_failed_rerun", refundID, orderID, err.Error(),
+				orderID, refundAmountDecimal(amountMinor, scale)))
 		}
 		return
 	}

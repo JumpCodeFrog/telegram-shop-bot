@@ -836,9 +836,15 @@ func TestAdminRefundLedgerFailureAfterProviderSuccessStripe(t *testing.T) {
 	// The refund EXECUTED but the ledger recording failed: loud re-run message,
 	// no refund row, order unchanged.
 	want := e.bot.i18n.Tf("en", "admin_refund_ledger_failed_rerun",
-		refundStripeRefundID, orderID, "mock ledger ingest failure", orderID)
+		refundStripeRefundID, orderID, "mock ledger ingest failure", orderID, "12.50")
 	if got := tgText(calls); got != want {
 		t.Fatalf("loud text = %q, want %q", got, want)
+	}
+	// The message carries the EXACT copy-pasteable re-run command, amount
+	// included — an amount-less re-run of a partial refund would default to
+	// full and desync the books.
+	if text := tgText(calls); !strings.Contains(text, fmt.Sprintf("/refund %d 12.50", orderID)) {
+		t.Fatalf("loud text misses the exact re-run command: %q", text)
 	}
 	if _, r := mock.stats(); r != 1 {
 		t.Fatalf("provider calls = %d, want exactly 1", r)
@@ -926,9 +932,12 @@ func TestAdminRefundLedgerFailureAfterProviderSuccessBalance(t *testing.T) {
 
 	calls := e.cb(e2eAdminID, refundCBData(orderID, refundFullUSD), "en")
 	want := e.bot.i18n.Tf("en", "admin_refund_ledger_failed_rerun",
-		fmt.Sprintf("balance-refund:%d", orderID), orderID, "mock ledger ingest failure", orderID)
+		fmt.Sprintf("balance-refund:%d", orderID), orderID, "mock ledger ingest failure", orderID, "12.50")
 	if got := tgText(calls); got != want {
 		t.Fatalf("loud text = %q, want %q", got, want)
+	}
+	if text := tgText(calls); !strings.Contains(text, fmt.Sprintf("/refund %d 12.50", orderID)) {
+		t.Fatalf("loud text misses the exact re-run command: %q", text)
 	}
 	if got := e.qStr(`SELECT printf('%.2f', balance_usd) FROM users WHERE telegram_id=?`, refundBuyer); got != "12.50" {
 		t.Fatalf("balance after credit = %s, want 12.50", got)
@@ -954,6 +963,84 @@ func TestAdminRefundLedgerFailureAfterProviderSuccessBalance(t *testing.T) {
 	}
 	want = e.bot.i18n.Tf("en", "admin_refund_done",
 		fmt.Sprintf("balance-refund:%d", orderID), orderID, storage.PaymentStateRefunded)
+	if got := tgText(calls); got != want {
+		t.Fatalf("recovery text = %q, want %q", got, want)
+	}
+}
+
+// TestAdminRefundLedgerFailurePartialCarriesPartialAmount pins the money-books
+// fix on the rail with NO provider-side dedup: after a PARTIAL balance refund
+// ($5.25 of $12.50) whose ledger record failed, the recovery message must
+// carry the re-run command WITH the partial amount. An amount-less re-run
+// defaults to FULL, and the balance rail's per-order order_refund identity
+// would skip the credit while the ledger recorded a full refund — books claim
+// $12.50 out while $5.25 moved. Recovery then follows the message LITERALLY:
+// the shown command re-parses to the SAME amountMinor (the decimal rendering
+// is the parser's exact inverse), the credit stays skipped and the ledger
+// completes with the partial amount — books and money agree at 5.25.
+func TestAdminRefundLedgerFailurePartialCarriesPartialAmount(t *testing.T) {
+	e := newE2EEnv(t)
+	e.cmd(refundBuyer, "/start", "en") // the credit needs the users row
+	orderID := seedRefundOrder(t, e, storage.PaymentMethodBalance, "")
+	balances := storage.NewSQLBalanceStore(e.db.Conn())
+	if _, err := balances.AdjustBalance(context.Background(), refundBuyer, 12.50, "grant", e2eAdminID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := balances.AdjustBalance(context.Background(), refundBuyer, -12.50,
+		fmt.Sprintf("order_payment:%d", orderID), 0); err != nil {
+		t.Fatal(err)
+	}
+	ledger := &failingRefundLedger{payLedgerStore: e.bot.payLedger, failIngest: true}
+	e.bot.payLedger = ledger
+
+	// Partial refund: the credit executes (balance rail = money moved), the
+	// ledger record fails.
+	calls := e.cb(e2eAdminID, refundCBData(orderID, 525), "en")
+	if got := e.qStr(`SELECT printf('%.2f', balance_usd) FROM users WHERE telegram_id=?`, refundBuyer); got != "5.25" {
+		t.Fatalf("balance after partial credit = %s, want 5.25", got)
+	}
+	if got := e.qInt(`SELECT COUNT(*) FROM refunds`); got != 0 {
+		t.Fatalf("failed ingest wrote %d refunds", got)
+	}
+	want := e.bot.i18n.Tf("en", "admin_refund_ledger_failed_rerun",
+		fmt.Sprintf("balance-refund:%d", orderID), orderID, "mock ledger ingest failure", orderID, "5.25")
+	if got := tgText(calls); got != want {
+		t.Fatalf("loud text = %q, want %q", got, want)
+	}
+	// The re-run command shows the PARTIAL amount — never the full total and
+	// never amount-less.
+	text := tgText(calls)
+	if !strings.Contains(text, fmt.Sprintf("/refund %d 5.25", orderID)) {
+		t.Fatalf("loud text misses the partial re-run command: %q", text)
+	}
+	if strings.Contains(text, fmt.Sprintf("/refund %d 12.50", orderID)) {
+		t.Fatalf("loud text offers a FULL-amount re-run after a partial refund: %q", text)
+	}
+
+	// Recovery BY THE MESSAGE: the admin copy-pastes the shown command. Its
+	// card must carry the SAME amountMinor (525)...
+	ledger.setFailIngest(false)
+	calls = e.cmd(e2eAdminID, fmt.Sprintf("/refund %d 5.25", orderID), "en")
+	if !strings.Contains(calls[0].markup(), refundCBData(orderID, 525)) {
+		t.Fatalf("re-run card markup = %s, want the same amountMinor 525", calls[0].markup())
+	}
+	// ...and the confirm skips the credit (the order_refund row exists) while
+	// completing the ledger with the PARTIAL amount.
+	calls = e.cb(e2eAdminID, refundCBData(orderID, 525), "en")
+	if got := e.qInt(`SELECT COUNT(*) FROM balance_txs WHERE type=?`, fmt.Sprintf("order_refund:%d", orderID)); got != 1 {
+		t.Fatalf("recovery minted %d order_refund credits, want exactly 1", got)
+	}
+	if got := e.qStr(`SELECT printf('%.2f', balance_usd) FROM users WHERE telegram_id=?`, refundBuyer); got != "5.25" {
+		t.Fatalf("balance after recovery = %s, want 5.25 (no second credit)", got)
+	}
+	assertRefundRow(t, e, orderID, "balance", fmt.Sprintf("balance-refund:%d", orderID),
+		fmt.Sprintf("balance:%d", orderID), refundBuyer, 525, "USD", 2)
+	assertRefundAudit(t, e, orderID, 1)
+	if got := e.qStr(`SELECT payment_state FROM orders WHERE id=?`, orderID); got != storage.PaymentStatePartiallyRefunded {
+		t.Fatalf("state after recovery = %s, want partially_refunded (partial recorded)", got)
+	}
+	want = e.bot.i18n.Tf("en", "admin_refund_done",
+		fmt.Sprintf("balance-refund:%d", orderID), orderID, storage.PaymentStatePartiallyRefunded)
 	if got := tgText(calls); got != want {
 		t.Fatalf("recovery text = %q, want %q", got, want)
 	}
