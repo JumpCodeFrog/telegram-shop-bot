@@ -201,8 +201,12 @@ introduces no new environment variables.
 
 ### What quarantined YooKassa facts look like
 
-Webhook-quarantined facts are `payment_anomalies` rows with provider `yookassa`
-and the order in `needs_review`:
+Quarantined YooKassa facts are recorded through two mechanisms, keyed by reason
+rather than by ingress path. The reasons tabulated below are `payment_anomalies`
+rows with provider `yookassa`; a fact tied to a known order flips it to
+`needs_review` (the two digest-only reasons carry no order identity — see their
+sha256 notes). The capture-class exceptions, including `out_of_stock_after_charge`
+on the poller path, are described after the table:
 
 | Reason | Meaning |
 |---|---|
@@ -212,14 +216,16 @@ and the order in `needs_review`:
 | `receipt_mismatch` | Valid receipt that disagrees with the order's money tuple |
 | `out_of_stock_after_charge` | Paid payment whose product went out of stock before fulfillment |
 
-The backup poller shares the webhook's storage gate, so its receipt-mismatch
-and identity-conflict quarantines write `payment_anomalies` rows exactly as
-tabulated above. Its capture-class quarantines do not: an out-of-stock
-settlement the poller finds, and a `second_charge` / `capture_after_terminal_state`
-re-charge of an already-settled order, are recorded via `RecordUnexpectedPayment`
-as a needs_review payment attempt plus a captured/needs_review payment event —
-no `payment_anomalies` row — and surface in the review queue through that event
-target instead (the order still flips to `needs_review` either way).
+Not every quarantined fact is an anomaly row. `out_of_stock_after_charge` is
+path-dependent: the WEBHOOK writes the anomaly row tabulated above, but the
+backup POLLER records it via `RecordUnexpectedPayment` as a needs_review attempt
++ captured/needs_review event (no anomaly row). Separately, the shared
+`ConfirmPaymentReceipt` gate — reached by BOTH the webhook and the poller —
+yields capture-class quarantines via `RecordUnexpectedPayment` (never anomaly
+rows): `second_charge` and `capture_after_terminal_state` (a distinct re-charge
+of an order already settled or in a terminal state) and `capture_on_unresolved_order`.
+Every mechanism surfaces as a review-queue target — an anomaly target, or a
+needs_review event target for the capture class.
 
 YooKassa facts carry no payer id (the provider has no Telegram payer
 identity), so payer checks compare money and order linkage only.
