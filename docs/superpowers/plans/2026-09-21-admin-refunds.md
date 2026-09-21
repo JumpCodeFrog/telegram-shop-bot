@@ -1,6 +1,6 @@
 # Admin-Initiated Refunds Plan (roadmap 4.4)
 
-> **Status:** In progress
+> **Status:** Completed (merged 21.09.2026)
 > **Created:** 2026-09-21
 > **Ruling:** NO auto-triggers — refunds are operator-initiated from the bot admin
 > panel with two-tap confirm. Provider execution where APIs exist (Stars, Stripe,

@@ -66,6 +66,13 @@ var (
 // projection: only a paid or delivered order whose payment is settled can be
 // refunded through this flow. A partially_refunded order has already used its
 // bot-side refund (the confirm gate re-checks this on every tap).
+//
+// WARNING — this settled-only gate is LOAD-BEARING for the balance rail:
+// BalanceTxExists' per-order "order_refund:<orderID>" identity assumes at
+// most one balance refund per order. Before relaxing this gate (e.g. to
+// accept partially_refunded for further partials), that identity MUST become
+// amount-scoped — see the coupling comments in executeRefund's balance branch
+// and storage/balance.go, and docs/payment-operations.md §11.
 func refundableOrder(order *storage.Order) bool {
 	return (order.Status == storage.OrderStatusPaid || order.Status == storage.OrderStatusDelivered) &&
 		order.PaymentState == storage.PaymentStateSettled
@@ -582,6 +589,15 @@ func (b *Bot) executeRefund(ctx context.Context, plan *refundPlan, order *storag
 		// credit and skips it, so the recovery path mints money exactly once
 		// (mirrors the crash-window net check ConfirmBalancePayment uses on
 		// the debit side).
+		//
+		// LOAD-BEARING COUPLING: this identity is per-ORDER, not per-amount.
+		// It is only safe while refundableOrder's settled-only gate limits
+		// the flow to ONE balance refund per order. If that gate is ever
+		// relaxed (e.g. to allow partial-then-remainder), the txType MUST
+		// become amount-scoped (order_refund:<orderID>:<amountMinor>) FIRST —
+		// otherwise a second partial would skip the credit (identity already
+		// exists) yet record a ledger refund: books claiming money that never
+		// moved. See docs/payment-operations.md §11.
 		txType := fmt.Sprintf("order_refund:%d", order.ID)
 		exists, err := b.balances.BalanceTxExists(ctx, order.UserID, txType)
 		if err != nil {

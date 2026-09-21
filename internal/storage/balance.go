@@ -56,6 +56,13 @@ func (s *SQLBalanceStore) OrderBalanceNet(ctx context.Context, userID, orderID i
 // finds the prior credit and skips it, mirroring the crash-window
 // idempotency OrderBalanceNet gives the checkout debit. An unknown user has
 // no rows and reports false without error.
+//
+// LOAD-BEARING COUPLING: the refund flow's identity is per-ORDER, not
+// per-amount, and is only sound while the bot's settled-only refund gate
+// (admin_refunds.go refundableOrder) allows ONE balance refund per order.
+// Relaxing that gate REQUIRES making the txType amount-scoped first —
+// otherwise a second partial refund skips the credit yet records a ledger
+// row (books claim money that never moved). See docs/payment-operations.md §11.
 func (s *SQLBalanceStore) BalanceTxExists(ctx context.Context, userID int64, txType string) (bool, error) {
 	var exists int
 	if err := s.db.QueryRowContext(ctx,
