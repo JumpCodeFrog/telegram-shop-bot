@@ -264,6 +264,7 @@
   "admin_payreview_confirm_btn": "✔️ Bestätigen",
   "admin_payrev_resolved": "✅ Prüfung abgeschlossen: Bestellung #%d → %s",
   "admin_payrev_conflict": "⚠️ Prüfziele haben sich geändert oder sind ungültig — Fall erneut öffnen.",
+  "admin_payrev_case_gone": "ℹ️ Der Fall ist nicht mehr in der Prüfungswarteschlange — er wurde anderswo gelöst oder seine Ziele haben sich geändert. /payreview erneut öffnen.",
   "admin_refund_usage": "Nutzung: /refund <bestell_id> [betrag]\nBetrag ist optional, in der Währung des Kanals (USD, RUB, XTR); ohne Betrag wird vollständig erstattet.",
   "admin_refund_card": "↩️ Bestellung #%d erstatten\nKanal: %s\nBetrag: %s\n\nNach der Bestätigung wird die Erstattung sofort beim Anbieter ausgeführt und unveränderlich im Zahlungsbuch erfasst.",
   "admin_refund_confirm_btn": "✔️ Erstattung bestätigen",

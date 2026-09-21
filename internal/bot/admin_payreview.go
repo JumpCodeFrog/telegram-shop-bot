@@ -270,10 +270,13 @@ func (b *Bot) sendPayReviewCard(chatID int64, msgID int, ref payReviewRef, lang 
 	defer cancel()
 	item, err := b.findReviewCase(ctx, ref)
 	if err != nil {
-		if !errors.Is(err, storage.ErrNotFound) {
-			b.logger.Error("load payment review case", "error", err)
+		if errors.Is(err, storage.ErrNotFound) {
+			// The case left the queue between the list render and this tap.
+			b.sendOrEditStyled(chatID, msgID, b.t(lang, "admin_payrev_case_gone"), "", StyledKeyboard{})
+			return
 		}
-		b.sendOrEditStyled(chatID, msgID, b.t(lang, "admin_payrev_conflict"), "", StyledKeyboard{})
+		b.logger.Error("load payment review case", "error", err)
+		b.sendOrEditStyled(chatID, msgID, b.t(lang, "admin_payreview_failed"), "", StyledKeyboard{})
 		return
 	}
 
@@ -317,11 +320,15 @@ func (b *Bot) onAdminPayReviewPreview(chatID int64, msgID int, userID int64, ref
 		}
 	}
 	if err != nil {
-		if !errors.Is(err, storage.ErrNotFound) && !errors.Is(err, storage.ErrPaymentReviewConflict) &&
-			!errors.Is(err, storage.ErrOrderStatusConflict) {
+		switch {
+		case errors.Is(err, storage.ErrNotFound):
+			b.sendOrEditStyled(chatID, msgID, b.t(lang, "admin_payrev_case_gone"), "", StyledKeyboard{})
+		case errors.Is(err, storage.ErrPaymentReviewConflict), errors.Is(err, storage.ErrOrderStatusConflict):
+			b.sendOrEditStyled(chatID, msgID, b.t(lang, "admin_payrev_conflict"), "", StyledKeyboard{})
+		default:
 			b.logger.Error("preview payment review", "error", err)
+			b.sendOrEditStyled(chatID, msgID, b.t(lang, "admin_payreview_failed"), "", StyledKeyboard{})
 		}
-		b.sendOrEditStyled(chatID, msgID, b.t(lang, "admin_payrev_conflict"), "", StyledKeyboard{})
 		return
 	}
 
@@ -370,8 +377,9 @@ func (b *Bot) onAdminPayReviewConfirm(chatID int64, msgID int, userID int64, ref
 		// order quarantined. Treat it as recorded but not terminal.
 		b.sendOrEditStyled(chatID, msgID,
 			b.i18n.Tf(lang, "admin_payrev_resolved", item.OrderID, storage.PaymentStateNeedsReview), "", StyledKeyboard{})
-	case errors.Is(err, storage.ErrNotFound) || errors.Is(err, storage.ErrPaymentReviewConflict) ||
-		errors.Is(err, storage.ErrOrderStatusConflict):
+	case errors.Is(err, storage.ErrNotFound):
+		b.sendOrEditStyled(chatID, msgID, b.t(lang, "admin_payrev_case_gone"), "", StyledKeyboard{})
+	case errors.Is(err, storage.ErrPaymentReviewConflict) || errors.Is(err, storage.ErrOrderStatusConflict):
 		b.sendOrEditStyled(chatID, msgID, b.t(lang, "admin_payrev_conflict"), "", StyledKeyboard{})
 	default:
 		b.logger.Error("resolve payment review", "error", err)

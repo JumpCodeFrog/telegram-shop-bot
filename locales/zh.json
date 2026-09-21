@@ -264,6 +264,7 @@
   "admin_payreview_confirm_btn": "✔️ 确认",
   "admin_payrev_resolved": "✅ 审核已完成：订单 #%d → %s",
   "admin_payrev_conflict": "⚠️ 审核目标已变更或失效——请重新打开案例。",
+  "admin_payrev_case_gone": "ℹ️ 该案件已不在复核队列中——已在别处解决或其目标已变更。请重新打开 /payreview。",
   "admin_refund_usage": "用法：/refund <订单号> [金额]\n金额可选，使用对应渠道的货币（USD、RUB、XTR）；不填则全额退款。",
   "admin_refund_card": "↩️ 退款订单 #%d\n渠道：%s\n金额：%s\n\n确认后退款将立即在支付方执行，并记入不可变支付账本。",
   "admin_refund_confirm_btn": "✔️ 确认退款",

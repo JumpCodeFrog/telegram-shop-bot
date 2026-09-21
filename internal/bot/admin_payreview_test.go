@@ -459,6 +459,35 @@ func TestPayReviewConfirmDetectsTargetsChanged(t *testing.T) {
 	}
 }
 
+// TestPayReviewCaseGoneMessageIsDistinct pins ruling P3 (HANDOFF §6.9): a case
+// that left the queue between taps answers with its own case-gone message at
+// every entry point (card, preview, confirm) — the conflict text stays reserved
+// for changed/invalid target sets.
+func TestPayReviewCaseGoneMessageIsDistinct(t *testing.T) {
+	e := newE2EEnv(t)
+	orderID := seedUnknownProviderCase(t, e)
+
+	// Resolve the case through the regular two-tap flow.
+	e.cb(e2eAdminID, fmt.Sprintf("admin:payrev:dismiss:unknown:%d", orderID), "en")
+	e.cb(e2eAdminID, fmt.Sprintf("admin:payrevdo:dismiss:unknown:%d", orderID), "en")
+	if got := e.qInt(`SELECT COUNT(*) FROM payment_resolutions`); got != 1 {
+		t.Fatalf("resolutions = %d, want 1", got)
+	}
+
+	want := e.bot.t("en", "admin_payrev_case_gone")
+	conflict := e.bot.t("en", "admin_payrev_conflict")
+	for _, stale := range []string{
+		fmt.Sprintf("admin:payrev:unknown:%d", orderID),           // card tap
+		fmt.Sprintf("admin:payrev:dismiss:unknown:%d", orderID),   // preview tap
+		fmt.Sprintf("admin:payrevdo:dismiss:unknown:%d", orderID), // confirm tap
+	} {
+		calls := e.cb(e2eAdminID, stale, "en")
+		if got := tgText(calls); !strings.Contains(got, want) || strings.Contains(got, conflict) {
+			t.Fatalf("stale %s text = %q, want case-gone %q", stale, got, want)
+		}
+	}
+}
+
 func TestPayReviewOrphanAnomalyResolvesByExactTarget(t *testing.T) {
 	e := newE2EEnv(t)
 	ctx := context.Background()

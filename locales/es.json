@@ -264,6 +264,7 @@
   "admin_payreview_confirm_btn": "✔️ Confirmar",
   "admin_payrev_resolved": "✅ Revisión resuelta: pedido #%d → %s",
   "admin_payrev_conflict": "⚠️ Los objetivos de revisión cambiaron o ya no son válidos — vuelve a abrir el caso.",
+  "admin_payrev_case_gone": "ℹ️ El caso ya no está en la cola de revisión: se resolvió en otro lugar o sus objetivos cambiaron. Vuelve a abrir /payreview.",
   "admin_refund_usage": "Uso: /refund <id_pedido> [importe]\nEl importe es opcional, en la moneda del canal (USD, RUB, XTR); omítelo para un reembolso total.",
   "admin_refund_card": "↩️ Reembolsar pedido #%d\nCanal: %s\nImporte: %s\n\nAl confirmar, el reembolso se ejecuta de inmediato en el proveedor y se registra en el libro de pagos inmutable.",
   "admin_refund_confirm_btn": "✔️ Confirmar reembolso",
