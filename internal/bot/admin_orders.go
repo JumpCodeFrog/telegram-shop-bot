@@ -112,7 +112,7 @@ func (b *Bot) formatAdminOrderCard(lang string, order *storage.Order, user *stor
 	}
 	sb.WriteString(fmt.Sprintf(b.t(lang, "admin_order_card_status"), status))
 	if order.PaymentMethod != "" {
-		sb.WriteString(fmt.Sprintf(b.t(lang, "admin_order_card_method"), b.paymentMethodText(lang, order.PaymentMethod)))
+		sb.WriteString(fmt.Sprintf(b.t(lang, "admin_order_card_method"), b.paymentMethodTextPlain(lang, order.PaymentMethod)))
 	}
 	if order.PaymentID != "" {
 		sb.WriteString(fmt.Sprintf(b.t(lang, "admin_order_card_payment_id"), order.PaymentID))

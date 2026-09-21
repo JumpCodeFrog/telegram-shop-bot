@@ -65,6 +65,16 @@ func TestPaymentMethodText_AllProvidersLocalized(t *testing.T) {
 	if got := b.paymentMethodText("en", "we<ird>"); got != "we&lt;ird&gt;" {
 		t.Errorf("unknown method fallback = %q", got)
 	}
+
+	// The plain-text variant shares every localized value but keeps an unknown
+	// method RAW: the admin /order card has no parse mode, so HTML entities
+	// there would be visible garbage.
+	if got := b.paymentMethodTextPlain("en", storage.PaymentMethodTON); got != b.paymentMethodText("en", storage.PaymentMethodTON) {
+		t.Errorf("plain variant diverged for a known method: %q", got)
+	}
+	if got := b.paymentMethodTextPlain("en", "we<ird>"); got != "we<ird>" {
+		t.Errorf("plain unknown fallback = %q, want raw", got)
+	}
 }
 
 func TestFormatProductText_EscapesHTML(t *testing.T) {
