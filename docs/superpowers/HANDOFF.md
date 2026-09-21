@@ -5,7 +5,7 @@
 
 ## 1. Состояние
 
-- **main = `4dd7842`**, на 102 коммита впереди `origin/main`. **НЕ запушено** — push
+- **main = `5420f3b`**, на 119 коммитов впереди `origin/main`. **НЕ запушено** — push
   только с явного согласия владельца. Все фичевые ветки сохранены (не удалены).
 - Ворота на HEAD: `go build` + `go vet` + `gofmt -l internal/ cmd/ worker/` (пусто) +
   `go test ./...` — зелёные; `-race` на money-пакетах зелёный.
@@ -164,7 +164,7 @@ scoped re-review и низко-рисковые ревью — `alibaba-cn/qwen3
 - verb-parity тест локалей (`TestLocaleFilesHaveMatchingPrintfVerbs`) ловит класс
   багов перестановки `%d/%s` в переводах — держать зелёным.
 
-## 8. Deliverables-реестр (10 планов)
+## 8. Deliverables-реестр (11 планов)
 
 | План | Ветка | Merge | Коммитов | Fix-раундов |
 |---|---|---|---|---|
@@ -178,6 +178,7 @@ scoped re-review и низко-рисковые ревью — `alibaba-cn/qwen3
 | Admin refunds (4.4) | feat/admin-refunds | `37cb865` | 7 | 2 (truthful guidance; amount-bearing recovery) |
 | Ctx + attribution (4.7, 4.13) | chore/ctx-attribution | `0f625b7` | 2 | 0 |
 | Money follow-ups (§6.13/6.1/6.7/6.6) | chore/money-followups | `4dd7842` | 8 | 2 (T2 comment direction; финал: CLI balance-бакет + docs-truthfulness) |
+| Polish follow-ups (§6.2/3/4/5/8/9/10/11/14/15) | chore/polish-followups | `5420f3b` | 15 | 3 (T5 P8-таксономия; T8(1) elevated digest-set; финал I-1 §5 recast) + T6 P7 re-dispatch (pre-commit BLOCKED) |
 
 Плюс: roadmap rewrite (`f6fb155`, `46ab401`, обновления в задачах) и controller-janitorial
 коммиты (gofmt `36a0c84`, coupling-комментарии `9697320`).
