@@ -65,7 +65,9 @@ func (b *Bot) listAllPaymentReviews(ctx context.Context) ([]storage.PaymentRevie
 
 // payReviewCaseCallback builds the callback data addressing one case. Orphan
 // anomalies share their proposed order ID with siblings, so they carry their
-// anomaly target ID as a disambiguator.
+// anomaly target ID as a disambiguator. Byte budget: Telegram caps callback
+// data at 64 bytes — sendPayReviewCard degrades a card whose action callbacks
+// would exceed the cap to the CLI-only hint (fail-closed).
 func payReviewCaseCallback(prefix, action string, item storage.PaymentReviewCase) string {
 	var sb strings.Builder
 	sb.WriteString(prefix)
@@ -241,15 +243,52 @@ func (b *Bot) findReviewCase(ctx context.Context, ref payReviewRef) (storage.Pay
 	return storage.PaymentReviewCase{}, storage.ErrNotFound
 }
 
-// payReviewActions lists the actions offered on a case card. A
-// provider-neutral row admits only terminal dismissal; every other case offers
-// the three candidate projections and the preview validates them against
-// ledger evidence.
+// payReviewActions lists the actions offered on a case card. A provider-neutral
+// row admits only terminal dismissal. Orphan cards (no local order) offer only
+// the actions that can actually pass against the storage decision gates
+// (payment_resolutions.go): digest-only facts fail every decision, path-5
+// refund orphans pass Refund pre-recovery and Dismiss post-recovery, other
+// capture orphans pass Settle (compensated). Attached cases keep the three
+// candidate projections — the preview validates them against ledger evidence.
+// This is a UX filter, never a gate: storage remains the final validator, and
+// a filtered-out action that storage would accept is a bug, not a policy.
 func payReviewActions(item storage.PaymentReviewCase) []string {
 	if item.Provider == storage.PaymentReviewProviderUnknown {
 		return []string{payReviewActionDismiss}
 	}
+	if isPayReviewOrphanAnomaly(item) {
+		reason := item.Targets[0].ReasonCode
+		switch {
+		case payReviewIsRefundLedgerFailureOrphan(item):
+			return []string{payReviewActionRefund, payReviewActionDismiss}
+		case reason == "webhook_parse_failure" || reason == "webhook_missing_payment_id" ||
+			reason == "stars_update_decode_failure":
+			// Digest-shaped orphans carry no external id and no amount, so
+			// storage rejects every decision (explicitNoAttemptAnomalyDecision)
+			// — no bot action can pass; CLI-only card. This is the complete
+			// digest-shaped orphan reason set: the webhook parse/missing-id
+			// digests plus the Stars undecodable-update digest.
+			return nil
+		default:
+			return []string{payReviewActionSettle}
+		}
+	}
 	return []string{payReviewActionSettle, payReviewActionRefund, payReviewActionDismiss}
+}
+
+// isPayReviewOrphanAnomaly reports the single-anomaly orphan card shape (no
+// local order — findReviewCase addresses it by the anomaly disambiguator).
+func isPayReviewOrphanAnomaly(item storage.PaymentReviewCase) bool {
+	return item.PaymentState == "" && len(item.Targets) == 1 &&
+		item.Targets[0].Kind == storage.PaymentReviewTargetAnomaly
+}
+
+// payReviewIsRefundLedgerFailureOrphan reports a path-5 refund-ledger-failure
+// orphan card (admin_refunds.go writes it with the reason grammar
+// refund_ledger_failure:order=<id>).
+func payReviewIsRefundLedgerFailureOrphan(item storage.PaymentReviewCase) bool {
+	return isPayReviewOrphanAnomaly(item) &&
+		strings.HasPrefix(item.Targets[0].ReasonCode, "refund_ledger_failure:")
 }
 
 func (b *Bot) payReviewActionLabel(lang, action string) string {
@@ -270,10 +309,13 @@ func (b *Bot) sendPayReviewCard(chatID int64, msgID int, ref payReviewRef, lang 
 	defer cancel()
 	item, err := b.findReviewCase(ctx, ref)
 	if err != nil {
-		if !errors.Is(err, storage.ErrNotFound) {
-			b.logger.Error("load payment review case", "error", err)
+		if errors.Is(err, storage.ErrNotFound) {
+			// The case left the queue between the list render and this tap.
+			b.sendOrEditStyled(chatID, msgID, b.t(lang, "admin_payrev_case_gone"), "", StyledKeyboard{})
+			return
 		}
-		b.sendOrEditStyled(chatID, msgID, b.t(lang, "admin_payrev_conflict"), "", StyledKeyboard{})
+		b.logger.Error("load payment review case", "error", err)
+		b.sendOrEditStyled(chatID, msgID, b.t(lang, "admin_payreview_failed"), "", StyledKeyboard{})
 		return
 	}
 
@@ -291,13 +333,33 @@ func (b *Bot) sendPayReviewCard(chatID int64, msgID int, ref payReviewRef, lang 
 		sb.WriteString(b.i18n.Tf(lang, "admin_payreview_card_target_line", target.Kind, target.ID, target.ReasonCode))
 	}
 
+	actions := payReviewActions(item)
+	if len(actions) == 0 {
+		sb.WriteString(b.t(lang, "admin_payreview_card_cli_only"))
+	} else if payReviewIsRefundLedgerFailureOrphan(item) {
+		sb.WriteString(b.t(lang, "admin_payreview_card_trap"))
+	}
+
 	kb := StyledKeyboard{}
 	row := []StyledButton{}
-	for _, action := range payReviewActions(item) {
-		row = append(row, Btn(b.payReviewActionLabel(lang, action),
-			payReviewCaseCallback("admin:payrev:", action, item)))
+	for _, action := range actions {
+		data := payReviewCaseCallback("admin:payrev:", action, item)
+		// Telegram rejects callback data longer than 64 bytes. Realistic
+		// payloads stay well inside (attached worst case
+		// admin:payrev:dismiss:nowpayments:<int64> = 52; orphan order
+		// components are local ids) — only a detached 19-digit provider order
+		// id plus a large anomaly id could exceed it. An unaddressable action
+		// is worse than no action: drop the row and point at the CLI.
+		if len(data) > 64 {
+			row = nil
+			sb.WriteString(b.t(lang, "admin_payreview_card_cli_only"))
+			break
+		}
+		row = append(row, Btn(b.payReviewActionLabel(lang, action), data))
 	}
-	kb = append(kb, row)
+	if len(row) > 0 {
+		kb = append(kb, row)
+	}
 	kb = append(kb, []StyledButton{Btn(b.t(lang, "admin_payreview_back_btn"), "admin:payrev:list")})
 	b.sendOrEditStyled(chatID, msgID, sb.String(), "", kb)
 }
@@ -317,11 +379,15 @@ func (b *Bot) onAdminPayReviewPreview(chatID int64, msgID int, userID int64, ref
 		}
 	}
 	if err != nil {
-		if !errors.Is(err, storage.ErrNotFound) && !errors.Is(err, storage.ErrPaymentReviewConflict) &&
-			!errors.Is(err, storage.ErrOrderStatusConflict) {
+		switch {
+		case errors.Is(err, storage.ErrNotFound):
+			b.sendOrEditStyled(chatID, msgID, b.t(lang, "admin_payrev_case_gone"), "", StyledKeyboard{})
+		case errors.Is(err, storage.ErrPaymentReviewConflict), errors.Is(err, storage.ErrOrderStatusConflict):
+			b.sendOrEditStyled(chatID, msgID, b.t(lang, "admin_payrev_conflict"), "", StyledKeyboard{})
+		default:
 			b.logger.Error("preview payment review", "error", err)
+			b.sendOrEditStyled(chatID, msgID, b.t(lang, "admin_payreview_failed"), "", StyledKeyboard{})
 		}
-		b.sendOrEditStyled(chatID, msgID, b.t(lang, "admin_payrev_conflict"), "", StyledKeyboard{})
 		return
 	}
 
@@ -370,8 +436,9 @@ func (b *Bot) onAdminPayReviewConfirm(chatID int64, msgID int, userID int64, ref
 		// order quarantined. Treat it as recorded but not terminal.
 		b.sendOrEditStyled(chatID, msgID,
 			b.i18n.Tf(lang, "admin_payrev_resolved", item.OrderID, storage.PaymentStateNeedsReview), "", StyledKeyboard{})
-	case errors.Is(err, storage.ErrNotFound) || errors.Is(err, storage.ErrPaymentReviewConflict) ||
-		errors.Is(err, storage.ErrOrderStatusConflict):
+	case errors.Is(err, storage.ErrNotFound):
+		b.sendOrEditStyled(chatID, msgID, b.t(lang, "admin_payrev_case_gone"), "", StyledKeyboard{})
+	case errors.Is(err, storage.ErrPaymentReviewConflict) || errors.Is(err, storage.ErrOrderStatusConflict):
 		b.sendOrEditStyled(chatID, msgID, b.t(lang, "admin_payrev_conflict"), "", StyledKeyboard{})
 	default:
 		b.logger.Error("resolve payment review", "error", err)

@@ -110,7 +110,7 @@ func (w *YooKassaPollingWorker) poll(ctx context.Context) {
 	// tail up — but a >cap backlog is an operator-scale event per
 	// yookassaPollMaxPages, so make it observable: exactly one Warn per
 	// truncated tick, never one per page.
-	slog.Warn("yookassa poller: page cap reached, tail deferred to next tick",
+	slog.Warn("YooKassa polling: page cap reached, tail deferred to next tick",
 		"pages", yookassaPollMaxPages, "cursor", cursor)
 }
 

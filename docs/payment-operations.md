@@ -201,8 +201,12 @@ introduces no new environment variables.
 
 ### What quarantined YooKassa facts look like
 
-Quarantined facts are `payment_anomalies` rows with provider `yookassa` and the
-order in `needs_review`:
+Quarantined YooKassa facts are recorded through two mechanisms, keyed by reason
+rather than by ingress path. The reasons tabulated below are `payment_anomalies`
+rows with provider `yookassa`; a fact tied to a known order flips it to
+`needs_review` (the two digest-only reasons carry no order identity — see their
+sha256 notes). The capture-class exceptions, including `out_of_stock_after_charge`
+on the poller path, are described after the table:
 
 | Reason | Meaning |
 |---|---|
@@ -211,6 +215,17 @@ order in `needs_review`:
 | `webhook_invalid_receipt` | Refetched payment cannot produce a valid receipt |
 | `receipt_mismatch` | Valid receipt that disagrees with the order's money tuple |
 | `out_of_stock_after_charge` | Paid payment whose product went out of stock before fulfillment |
+
+Not every quarantined fact is an anomaly row. `out_of_stock_after_charge` is
+path-dependent: the WEBHOOK writes the anomaly row tabulated above, but the
+backup POLLER records it via `RecordUnexpectedPayment` as a needs_review attempt
++ captured/needs_review event (no anomaly row). Separately, the shared
+`ConfirmPaymentReceipt` gate — reached by BOTH the webhook and the poller —
+yields capture-class quarantines via `RecordUnexpectedPayment` (never anomaly
+rows): `second_charge` and `capture_after_terminal_state` (a distinct re-charge
+of an order already settled or in a terminal state) and `capture_on_unresolved_order`.
+Every mechanism surfaces as a review-queue target — an anomaly target, or a
+needs_review event target for the capture class.
 
 YooKassa facts carry no payer id (the provider has no Telegram payer
 identity), so payer checks compare money and order linkage only.
@@ -404,15 +419,19 @@ facts preserved.
 
 ### What quarantined TON facts look like
 
-Quarantined facts are `payment_anomalies` rows with provider `ton` and the
-order in `needs_review`:
+Quarantined TON facts reach the review queue through two mechanisms — the
+poller is TON's only settlement path, and the order flips to `needs_review`
+either way. `receipt_mismatch` and `unknown_order` are written as
+`payment_anomalies` rows; `second_charge` and `out_of_stock_after_charge` are
+recorded via `RecordUnexpectedPayment` as a needs_review attempt/event capture
+(no anomaly row). Both surface as review-queue targets:
 
 | Reason | Meaning |
 |---|---|
 | `receipt_mismatch` | Underpay below the frozen snapshot (or a zero snapshot) |
 | `unknown_order` | Memo names an order that does not exist |
-| `second_charge` | A distinct second transfer for an already settled order |
-| `out_of_stock_after_charge` | Paid transfer whose product went out of stock before fulfillment; durable — never retried |
+| `second_charge` | A distinct second transfer for an already settled order; recorded as a needs_review capture, not an anomaly row (poller path) |
+| `out_of_stock_after_charge` | Paid transfer whose product went out of stock before fulfillment; durable — never retried; recorded as a needs_review capture, not an anomaly row (poller path) |
 
 TON facts carry no payer id (on-chain transfers have no Telegram payer
 identity), so payer checks compare money and order linkage only.
@@ -797,6 +816,7 @@ depends on the path:
 |---|---|---|
 | Provider webhooks (crypto, yookassa, stripe, nowpayments) | `webhook:<provider>` | settlement-success log line only (structured `actor` field next to `order_id` and the provider payment id) |
 | Stars `successful_payment` settlement (Telegram is the provider; the update arrives via webhook or long polling) | `webhook:stars` | settlement-success log line only |
+| Stars subscription renewal (recurring `successful_payment`, `is_recurring && !is_first_recurring`) | `webhook:stars` | settlement-success log line only |
 | Polling workers (crypto, ton, yookassa) | `worker:<provider>` | settle-success log line only |
 | CLI ingress (`payment-review ingest-stars` / `ingest-provider` / `resolve`) | the `--actor` flag value | durable `payment_ingress_audits` row |
 | Bot `/refund` executions and `/payreview` resolutions | `admin:<telegram_id>` | durable `payment_ingress_audits` row (refunds additionally log the same actor) |

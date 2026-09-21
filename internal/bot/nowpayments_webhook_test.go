@@ -380,6 +380,11 @@ func TestNowpaymentsWebhookReplayIsIdempotent(t *testing.T) {
 		WHERE provider='nowpayments' AND external_id='5077125051'`); got != 1 {
 		t.Fatalf("payment_attempts after replay = %d, want 1", got)
 	}
+	// The replay leaves the ledger projection exactly as the first settlement
+	// wrote it (the storage level pins settled; pin it at the bot level too).
+	if got := e.qStr(`SELECT payment_state FROM orders WHERE id = ?`, orderID); got != storage.PaymentStateSettled {
+		t.Fatalf("payment_state after replay = %q, want settled", got)
+	}
 	if got := e.tg.count() - before; got != 0 {
 		t.Fatalf("replay sent %d messages, want 0:\n%s", got, dumpCalls(e.tg.since(before)))
 	}

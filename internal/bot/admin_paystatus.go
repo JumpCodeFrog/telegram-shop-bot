@@ -32,16 +32,23 @@ func (b *Bot) formatPayStatus(lang string) string {
 		cryptoOn, stripeOn, nowOn bool
 		yooCreds                  bool
 	)
+	// Whitespace-only values are misconfiguration, not configuration — trim like doctor.go does.
 	if b.cfg != nil {
 		yooRate = b.cfg.USDToRUBRate
 		tonRate = b.cfg.USDPerTON
-		tonAddress = b.cfg.TONWalletAddress
-		tonAPIKey = b.cfg.TONAPIKey
+		tonAddress = strings.TrimSpace(b.cfg.TONWalletAddress)
+		tonAPIKey = strings.TrimSpace(b.cfg.TONAPIKey)
 		baseURL = b.cfg.WebhookURL
 		cryptoOn = strings.TrimSpace(b.cfg.CryptoBotToken) != ""
-		yooCreds = b.cfg.YooKassaShopID != "" && b.cfg.YooKassaSecretKey != "" && b.cfg.YooKassaReturnURL != ""
-		stripeOn = b.cfg.StripeSecretKey != "" && b.cfg.StripeWebhookSecret != "" && b.cfg.StripeReturnURL != ""
-		nowOn = b.cfg.NowpaymentsAPIKey != "" && b.cfg.NowpaymentsIPNSecret != "" && b.cfg.NowpaymentsReturnURL != ""
+		yooCreds = strings.TrimSpace(b.cfg.YooKassaShopID) != "" &&
+			strings.TrimSpace(b.cfg.YooKassaSecretKey) != "" &&
+			strings.TrimSpace(b.cfg.YooKassaReturnURL) != ""
+		stripeOn = strings.TrimSpace(b.cfg.StripeSecretKey) != "" &&
+			strings.TrimSpace(b.cfg.StripeWebhookSecret) != "" &&
+			strings.TrimSpace(b.cfg.StripeReturnURL) != ""
+		nowOn = strings.TrimSpace(b.cfg.NowpaymentsAPIKey) != "" &&
+			strings.TrimSpace(b.cfg.NowpaymentsIPNSecret) != "" &&
+			strings.TrimSpace(b.cfg.NowpaymentsReturnURL) != ""
 	}
 
 	var sb strings.Builder

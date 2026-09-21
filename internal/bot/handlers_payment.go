@@ -639,6 +639,11 @@ func (b *Bot) processSuccessfulPayment(msg *tgbotapi.Message) error {
 		if b.metrics != nil {
 			b.metrics.SuccessfulPayments.WithLabelValues("stars").Inc()
 		}
+		// Settlement attribution (docs/payment-operations.md §12): the renewal
+		// arrives through the same Telegram successful_payment ingress as the
+		// one-time settle — log-level actor, no durable actor row.
+		b.logger.Info("stars subscription renewal settled",
+			"order_id", orderID, "payment_id", sp.TelegramPaymentChargeID, "actor", "webhook:stars")
 		return nil
 	}
 	outcome, err := b.order.ConfirmPaymentReceipt(ctx, receipt)

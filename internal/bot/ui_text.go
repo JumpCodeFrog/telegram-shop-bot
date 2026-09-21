@@ -50,23 +50,44 @@ func (b *Bot) orderStatusText(lang, status string) string {
 }
 
 func (b *Bot) paymentMethodText(lang, method string) string {
+	if text, ok := b.paymentMethodLocalized(lang, method); ok {
+		return text
+	}
+	return escapeHTML(method)
+}
+
+// paymentMethodTextPlain is paymentMethodText for plain-text surfaces (the
+// admin /order card renders without a parse mode): localized values are
+// identical, but an unknown method falls back to the RAW string instead of
+// HTML entities that would be visible garbage. Reachability is legacy-only —
+// orders.payment_method is CHECK-constrained to the implemented providers.
+func (b *Bot) paymentMethodTextPlain(lang, method string) string {
+	if text, ok := b.paymentMethodLocalized(lang, method); ok {
+		return text
+	}
+	return method
+}
+
+// paymentMethodLocalized maps an implemented provider key to its localized
+// display name; ok=false means the method is unknown to the app layer.
+func (b *Bot) paymentMethodLocalized(lang, method string) (string, bool) {
 	switch method {
 	case storage.PaymentMethodStars:
-		return b.t(lang, "payment_method_stars")
+		return b.t(lang, "payment_method_stars"), true
 	case storage.PaymentMethodCrypto:
-		return b.t(lang, "payment_method_crypto")
+		return b.t(lang, "payment_method_crypto"), true
 	case storage.PaymentMethodYooKassa:
-		return b.t(lang, "payment_method_yookassa")
+		return b.t(lang, "payment_method_yookassa"), true
 	case storage.PaymentMethodStripe:
-		return b.t(lang, "payment_method_stripe")
+		return b.t(lang, "payment_method_stripe"), true
 	case storage.PaymentMethodTON:
-		return b.t(lang, "payment_method_ton")
+		return b.t(lang, "payment_method_ton"), true
 	case storage.PaymentMethodNowpayments:
-		return b.t(lang, "payment_method_nowpayments")
+		return b.t(lang, "payment_method_nowpayments"), true
 	case storage.PaymentMethodBalance:
-		return b.t(lang, "payment_method_balance")
+		return b.t(lang, "payment_method_balance"), true
 	default:
-		return escapeHTML(method)
+		return "", false
 	}
 }
 

@@ -6,8 +6,8 @@ import (
 	"testing"
 )
 
-// TestAppendPaymentIngressAuditAcceptsYooKassa proves the operator ingress
-// audit gate accepts the yookassa provider identity. No exported path can
+// TestAppendPaymentIngressAuditAcceptsYooKassaStarsStripe proves the operator
+// ingress audit gate accepts the yookassa provider identity. No exported path can
 // attribute a yookassa audit yet — IngestProviderCapture demands a Telegram
 // payer id the YooKassa API never provides, and the refund ingress gate
 // belongs to Task 7 — so the unexported helper is driven directly inside a
@@ -17,7 +17,9 @@ import (
 // allowlist still fails closed for providers without one.
 // Feature: shop_bot, Property 2: Round-trip хранилища данных
 // Validates: Requirements 12.5, 9.3
-func TestAppendPaymentIngressAuditAcceptsYooKassa(t *testing.T) {
+// The matrix this test actually exercises: yookassa, stars, stripe, and the
+// sepa fail-closed rejection — the name was YooKassa-scoped historically.
+func TestAppendPaymentIngressAuditAcceptsYooKassaStarsStripe(t *testing.T) {
 	db, err := New(":memory:")
 	if err != nil {
 		t.Fatalf("New(:memory:): %v", err)
