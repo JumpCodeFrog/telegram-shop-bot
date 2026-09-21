@@ -3,6 +3,7 @@ package launcher
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"shop_bot/internal/storage"
 )
@@ -578,6 +580,147 @@ func TestPaymentReviewCLIListsPreviewsAndResolvesNowpayments(t *testing.T) {
 	}
 	var finalList bytes.Buffer
 	if code := RunPaymentReview(ctx, []string{"list", "--provider", "nowpayments"}, baseOpts(&finalList)); code != 0 ||
+		!strings.Contains(finalList.String(), "targets=0") {
+		t.Fatalf("final list code=%d output=%q", code, finalList.String())
+	}
+}
+
+func TestPaymentReviewCLIListsAndResolvesBalancePathFiveOrphan(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "balance.db")
+	db, err := storage.New(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := db.Conn().Exec(`INSERT INTO orders
+		(user_id,total_usd,total_stars,payment_method,status,order_state,payment_state,fulfillment_state)
+		VALUES (42,12.50,0,'balance','pending','placed','pending','unfulfilled')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	orderID, _ := res.LastInsertId()
+	ctx := context.Background()
+	store := storage.NewSQLOrderStore(db)
+	// The settled balance capture exactly as the rail's settlement writes it
+	// (internal/shop/balance.go): the deterministic balance:<orderID> identity,
+	// the buyer as the required payer, the frozen USD money tuple.
+	if err := store.UpdateOrderStatusWithPaymentFact(ctx, orderID,
+		storage.OrderStatusPending, storage.OrderStatusPaid, storage.PaymentFact{
+			Provider:    storage.PaymentMethodBalance,
+			ExternalID:  fmt.Sprintf("balance:%d", orderID),
+			PayerID:     42,
+			AmountMinor: 1250,
+			Currency:    "USD",
+			Scale:       2,
+			OccurredAt:  time.Now().Add(-time.Hour).UTC(),
+		}); err != nil {
+		t.Fatal(err)
+	}
+	// The path-5 durable trace exactly as admin_refunds.go writes it: an
+	// ORPHAN refunded-kind anomaly in the rail's provider bucket (balance
+	// included), order link riding in the reason and raw_payload.
+	anomalyPayload, err := json.Marshal(map[string]any{
+		"order_id": orderID, "rail": storage.PaymentMethodBalance,
+		"refund_id": fmt.Sprintf("balance-refund:%d", orderID),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordPaymentAnomaly(ctx, storage.PaymentAnomaly{
+		Provider:          storage.PaymentMethodBalance,
+		EventKind:         storage.PaymentEventRefunded,
+		ExternalID:        fmt.Sprintf("balance-refund:%d", orderID),
+		RelatedExternalID: fmt.Sprintf("balance:%d", orderID),
+		PayerID:           42,
+		AmountMinor:       525,
+		Currency:          "USD",
+		Scale:             2,
+		Reason:            fmt.Sprintf("refund_ledger_failure:order=%d", orderID),
+		RawPayload:        string(anomalyPayload),
+	}); !errors.Is(err, storage.ErrPaymentNeedsReview) {
+		t.Fatalf("path-5 anomaly write: %v", err)
+	}
+	ledger := storage.NewSQLPaymentLedgerStore(db)
+	cases, err := ledger.ListPaymentReviews(ctx, storage.PaymentMethodBalance)
+	if err != nil || len(cases) != 1 || len(cases[0].Targets) != 1 {
+		t.Fatalf("cases=%+v err=%v", cases, err)
+	}
+	anomalyID := cases[0].Targets[0].ID
+	_ = db.Close()
+
+	envPath := filepath.Join(dir, ".env")
+	if err := os.WriteFile(envPath, []byte(fmt.Sprintf("BOT_TOKEN=%s\nDB_PATH=%s\n", testToken, dbPath)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	baseOpts := func(out *bytes.Buffer) PaymentReviewOptions {
+		return PaymentReviewOptions{
+			EnvPath: envPath, BaseDir: dir, Out: out,
+			LookupEnv: func(string) (string, bool) { return "", false },
+		}
+	}
+
+	var listOut bytes.Buffer
+	listCode := RunPaymentReview(ctx, []string{"list", "--provider", "balance"}, baseOpts(&listOut))
+	args := []string{
+		"resolve", "--provider", "balance", "--order", "0",
+		"--anomaly", strconv.FormatInt(anomalyID, 10),
+		"--decision", "accepted_refund", "--actor", "operator:test",
+		"--reason", "path-5 acknowledged after the ledger recovery",
+	}
+	var previewOut bytes.Buffer
+	previewCode := RunPaymentReview(ctx, args, baseOpts(&previewOut))
+	if listCode != 1 || previewCode != 0 {
+		t.Fatalf("list code=%d output=%q; preview code=%d output=%q",
+			listCode, listOut.String(), previewCode, previewOut.String())
+	}
+	if !strings.Contains(listOut.String(), "provider=balance") ||
+		!strings.Contains(listOut.String(), fmt.Sprintf("reasons=refund_ledger_failure:order_%d", orderID)) ||
+		strings.Contains(listOut.String(), fmt.Sprintf("balance-refund:%d", orderID)) ||
+		strings.Contains(listOut.String(), fmt.Sprintf("balance:%d", orderID)) {
+		t.Fatalf("list output is not the redacted orphan card: %q", listOut.String())
+	}
+	if !strings.Contains(previewOut.String(), "decision=accepted_refund") ||
+		!strings.Contains(previewOut.String(), "No changes applied") {
+		t.Fatalf("preview output=%q", previewOut.String())
+	}
+	checkDB, _ := storage.OpenReadOnly(dbPath)
+	var resolutions int
+	_ = checkDB.Conn().QueryRow(`SELECT COUNT(*) FROM payment_resolutions`).Scan(&resolutions)
+	_ = checkDB.Close()
+	if resolutions != 0 {
+		t.Fatalf("preview wrote resolutions=%d", resolutions)
+	}
+
+	var wrongOut bytes.Buffer
+	wrongArgs := append(append([]string{}, args...), "--apply", "--confirm-order", "999")
+	if code := RunPaymentReview(ctx, wrongArgs, baseOpts(&wrongOut)); code != 2 {
+		t.Fatalf("wrong confirmation code=%d output=%q", code, wrongOut.String())
+	}
+	var applyOut bytes.Buffer
+	applyArgs := append(append([]string{}, args...), "--apply", "--confirm-order", "0")
+	if code := RunPaymentReview(ctx, applyArgs, baseOpts(&applyOut)); code != 0 ||
+		!strings.Contains(applyOut.String(), "resolved") {
+		t.Fatalf("apply code=%d output=%q", code, applyOut.String())
+	}
+
+	finalDB, _ := storage.OpenReadOnly(dbPath)
+	var state, decision string
+	var refunds int
+	_ = finalDB.Conn().QueryRow(`SELECT payment_state FROM orders WHERE id=?`, orderID).Scan(&state)
+	_ = finalDB.Conn().QueryRow(`SELECT decision FROM payment_resolutions
+		WHERE target_kind='payment_anomaly' AND target_id=?`, anomalyID).Scan(&decision)
+	_ = finalDB.Conn().QueryRow(`SELECT COUNT(*) FROM refunds`).Scan(&refunds)
+	_ = finalDB.Conn().QueryRow(`SELECT COUNT(*) FROM payment_resolutions`).Scan(&resolutions)
+	_ = finalDB.Close()
+	// The documented trap semantics, pinned: resolving the orphan card
+	// appends the acknowledgement but writes NO refunds row, and the
+	// deliberately orderless trace leaves the settled order untouched.
+	if state != storage.PaymentStateSettled || decision != "accepted_refund" ||
+		refunds != 0 || resolutions != 1 {
+		t.Fatalf("state=%s decision=%s refunds=%d resolutions=%d", state, decision, refunds, resolutions)
+	}
+	var finalList bytes.Buffer
+	if code := RunPaymentReview(ctx, []string{"list", "--provider", "balance"}, baseOpts(&finalList)); code != 0 ||
 		!strings.Contains(finalList.String(), "targets=0") {
 		t.Fatalf("final list code=%d output=%q", code, finalList.String())
 	}
