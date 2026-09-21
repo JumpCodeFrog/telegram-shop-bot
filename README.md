@@ -57,6 +57,7 @@ A full-featured e-commerce bot for Telegram — catalog, cart, Telegram Stars & 
 - Order management & status updates; full order card: `/order <id>`
 - **Payment review queue** — `/payreview` triages quarantined payments in chat (two-tap settle/refund/dismiss)
 - **Provider status** — `/paystatus` shows every payment rail's configuration & webhook URLs
+- **Refunds** — `/refund <order_id> [amount]` with two-tap confirm: Stars, Stripe, YooKassa & balance execute and record in the ledger; crypto/TON/NOWPayments get manual-dashboard guidance
 - **Balance management** — `/setbalance` adjusts a buyer's USD balance (audited in `balance_txs`)
 - Promo code CRUD
 - Review moderation: `/reviews`
@@ -229,6 +230,7 @@ docker compose logs -f bot
 | `/setdelivered <id>` | Mark an order delivered (triggers review request) |
 | `/payreview` | Payment review queue — quarantined payments, two-tap settle/refund/dismiss |
 | `/paystatus` | Payment provider status per rail (config, rates, webhook URLs) |
+| `/refund <order_id> [amount]` | Refund a paid order — two-tap confirm, full or partial (Stars full-only) |
 | `/setbalance <user_id> <±amount> [reason]` | Adjust a user's USD balance |
 | `/reviews` | Latest reviews with delete buttons |
 | `/analytics` | Revenue chart, top buyers, promo report |

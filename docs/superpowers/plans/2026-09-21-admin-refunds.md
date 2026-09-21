@@ -5,8 +5,9 @@
 > **Ruling:** NO auto-triggers — refunds are operator-initiated from the bot admin
 > panel with two-tap confirm. Provider execution where APIs exist (Stars, Stripe,
 > YooKassa, balance); informational routing where they don't (crypto, TON,
-> NOWPayments — manual at provider dashboards, recorded via the existing
-> `payment-review` refund CLI).
+> NOWPayments — manual at provider dashboards; in-ledger recording for these rails
+> is a known follow-up — the refund-recording CLI covers Stars only, see
+> Out of scope).
 
 ## Goal
 
@@ -120,4 +121,12 @@ Task 2's matrix.
 Auto-refund triggers (any form); stock restock on refund; partial refunds for
 stars/crypto; NOWPayments/crypto refund APIs (don't exist for our flows); refund
 webhooks/IPN listeners (the ledger records at initiation; provider-side async
-completion is dashboard-visible).
+completion is dashboard-visible); the one-refund-per-order bot gate (settled-only —
+the first recorded refund flips the state to refunded/partially_refunded and closes
+the `/refund` path, so a partial-then-remainder refund has no bot path today; if the
+gate is ever relaxed to partially_refunded, the balance rail's order-scoped
+`order_refund:<orderID>` idempotency identity MUST become amount-scoped FIRST or a
+second partial would skip the credit); a refund-recording CLI for the manual rails
+(crypto/ton/nowpayments — `ingest-stars` authenticates against Telegram and is
+Stars-only, `ingest-provider` is capture-only, so their refunds stay
+provider-dashboard-visible with in-ledger recording as a follow-up).

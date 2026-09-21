@@ -96,6 +96,14 @@ money tuple, derived parent identity, and cumulative amount match the immutable
 capture. Invalid facts become durable review evidence instead of being retried
 blindly.
 
+For an admin-initiated refund, prefer the bot's `/refund` command (§11) —
+Stars refunds are full-amount only. The CLI above remains the path for
+provider-only refunds and for the one `/refund` failure it can recover: a
+Stars refund that EXECUTED at Telegram but whose ledger write failed can never
+be recorded by a `/refund` re-run (Telegram rejects the repeat
+`refundStarPayment`) — `ingest-stars --kind refund` records it from Telegram's
+authoritative refund transaction instead.
+
 ## 4. Preview and resolve an exact target set
 
 Pass every target printed for one provider. Repeat `--event` and `--anomaly` as
@@ -220,15 +228,20 @@ be resolved to `settled`.
 
 ### Refunds
 
-Refunds are operator-driven: initiate them in the YooKassa dashboard or via
-the YooKassa API. Nothing in this bot refunds automatically — the webhook
-acknowledges `refund.*` notifications without touching the ledger. The ledger
-records a refund through its refund ingestion path (`RecordRefund` /
-`IngestProviderRefund`), which validates it against the immutable captured
-attempt (exact parent identity, money tuple, cumulative amount) and appends
-durable review evidence for anything that disagrees. There is no dedicated
-refund-ingress CLI for YooKassa yet: `payment-review ingest-stars` reads the
-Telegram Bot API and cannot serve this rail.
+Refunds are operator-driven — nothing in this bot refunds automatically, and
+the webhook acknowledges `refund.*` notifications without touching the ledger.
+The primary path is the bot's `/refund <order_id> [amount]` admin command
+(§11): it previews, then on confirm calls `POST /v3/refunds` with the captured
+payment id and a deterministic `Idempotence-Key`, and records the refund
+through the ledger's ingestion path (`IngestProviderRefund`), which validates
+it against the immutable captured attempt (exact parent identity, money tuple,
+cumulative amount) and appends durable review evidence for anything that
+disagrees. A `pending` YooKassa refund is recorded as the initiation — its
+asynchronous completion is dashboard-visible. Refunds issued directly in the
+YooKassa dashboard remain possible but have NO ledger recording path: there is
+no dedicated refund-ingress CLI for YooKassa yet (`payment-review ingest-stars`
+reads the Telegram Bot API and cannot serve this rail, and `ingest-provider`
+is capture-only) — prefer `/refund` so the ledger stays authoritative.
 
 ### RUB rate snapshots
 
@@ -286,14 +299,20 @@ paragraph below for how that refund is recorded.
 
 ### Refunds
 
-Refunds are operator-driven: initiate them in the Stripe dashboard or via the
-Stripe API. Nothing in this bot refunds automatically. The ledger records a
-refund through its refund ingestion path (`RecordRefund` /
-`IngestProviderRefund`), which validates it against the immutable captured
-attempt (exact parent identity, money tuple, cumulative amount) and appends
-durable review evidence for anything that disagrees. There is no dedicated
-refund-ingress CLI for Stripe yet: `payment-review ingest-stars` reads the
-Telegram Bot API and cannot serve this rail.
+Refunds are operator-driven — nothing in this bot refunds automatically. The
+primary path is the bot's `/refund <order_id> [amount]` admin command (§11):
+it previews, then on confirm resolves the checkout session's `payment_intent`,
+calls `POST /v1/refunds` with a deterministic `Idempotency-Key`, and records
+the refund through the ledger's ingestion path (`IngestProviderRefund`), which
+validates it against the immutable captured attempt (exact parent identity,
+money tuple, cumulative amount) and appends durable review evidence for
+anything that disagrees. A refund Stripe reports as `failed` aborts before any
+recording — the operator sees the provider fact. Refunds issued directly in
+the Stripe dashboard remain possible but have NO ledger recording path: there
+is no dedicated refund-ingress CLI for Stripe yet (`payment-review
+ingest-stars` reads the Telegram Bot API and cannot serve this rail, and
+`ingest-provider` is capture-only) — prefer `/refund` so the ledger stays
+authoritative.
 
 ### USD-native amounts
 
@@ -411,12 +430,19 @@ be resolved to `settled`.
 
 ### Refunds
 
-Refunds are operator-driven: send them from the watched wallet. Nothing in
-this bot refunds automatically. The ledger records a refund through its
-refund ingestion path (`RecordRefund` / `IngestProviderRefund`), which
-validates it against the immutable captured attempt (exact parent identity,
-money tuple, cumulative amount) and appends durable review evidence for
-anything that disagrees. There is no dedicated refund-ingress CLI for TON.
+Refunds are operator-driven: send them from the watched wallet — the bot
+cannot move money on this rail, and nothing in this bot refunds automatically.
+`/refund` for a TON order renders an informational card only (wallet
+instructions, no execution, no confirm button). The ledger records a refund
+through its refund ingestion path (`RecordRefund` / `IngestProviderRefund`),
+which validates it against the immutable captured attempt (exact parent
+identity, money tuple, cumulative amount) and appends durable review evidence
+for anything that disagrees — but no refund RECORDING path exists for TON
+yet: there is no dedicated refund-ingress CLI (`payment-review ingest-stars`
+reads the Telegram Bot API and cannot serve this rail, and `ingest-provider`
+is capture-only). A wallet refund therefore stays an on-chain fact visible
+only in the wallet / chain explorer, the order's ledger payment state remains
+`settled`, and closing that gap is a documented follow-up.
 
 ### Subscriptions
 
@@ -479,14 +505,19 @@ be resolved to `settled`.
 
 ### Refunds
 
-Refunds are operator-driven: initiate them in the NOWPayments dashboard.
-Nothing in this bot refunds automatically. The ledger records a refund
-through its refund ingestion path (`RecordRefund` / `IngestProviderRefund`),
-which validates it against the immutable captured attempt (exact parent
-identity, money tuple, cumulative amount) and appends durable review evidence
-for anything that disagrees. There is no dedicated refund-ingress CLI for
-NOWPayments: `payment-review ingest-stars` reads the Telegram Bot API and
-cannot serve this rail.
+Refunds are operator-driven: initiate them in the NOWPayments dashboard — the
+bot cannot move money on this rail, and nothing in this bot refunds
+automatically. `/refund` for a NOWPayments order renders an informational card
+only (dashboard instructions, no execution, no confirm button). The ledger
+records a refund through its refund ingestion path (`RecordRefund` /
+`IngestProviderRefund`), which validates it against the immutable captured
+attempt (exact parent identity, money tuple, cumulative amount) and appends
+durable review evidence for anything that disagrees — but no refund RECORDING
+path exists for NOWPayments yet: there is no dedicated refund-ingress CLI
+(`payment-review ingest-stars` reads the Telegram Bot API and cannot serve
+this rail, and `ingest-provider` is capture-only). A dashboard refund
+therefore stays visible at the provider only, the order's ledger payment state
+remains `settled`, and closing that gap is a documented follow-up.
 
 ### USD-priced amounts
 
@@ -589,6 +620,138 @@ The balance rail never enters the review queue: a balance fact is validated
 against the order's exact USD snapshot and required payer before settlement,
 so there is no provider ambiguity to quarantine — ingress accepts or rejects
 it outright.
+
+**Refunds**: `/refund <order_id>` (§11) for a balance-paid order credits the
+buyer's balance back — the credit IS this rail's provider step (there is no
+external provider). The deterministic `order_refund:<orderID>` `balance_txs`
+audit type doubles as the idempotency identity: after a ledger-recording
+failure the `/refund` re-run finds the prior credit and skips it, so the money
+is minted exactly once (mirroring the crash-window net check the debit side
+uses above). Confirm executions are serialized process-wide, so a double tap
+delivered as two concurrent updates cannot race two credits. Note the
+identity's coupling to the one-refund-per-order gate — see §11 before ever
+relaxing that gate.
+
+## 11. Admin refunds from the bot (`/refund`)
+
+`/refund <order_id> [amount]` (admins only) is the bot's money-out surface.
+Refunds are admin-initiated ONLY: no webhook, worker, or order event refunds
+anything automatically. The amount is optional and denominated in the rail's
+currency (USD, RUB, XTR); omitting it refunds the order in full. An amount
+above the captured total is rejected before any provider call. To resolve a
+QUARANTINED case whose capture was already refunded elsewhere, keep using
+`/payreview` (§9) — `/refund` executes new money movement, it does not triage.
+
+### Two-tap flow
+
+The command renders a preview card (order, rail, amount) with a confirm
+button. The confirm tap RELOADs the order, REBUILDS the refund fact from
+scratch and RE-PREVIEWs it against the ledger (`PreviewProviderRefundIngress`
+dry-run: parent identity, payer, money tuple, cumulative cap) before executing
+— the same TOCTOU discipline as `/payreview`. Anything that drifted between
+the taps fails closed with a conflict message and zero provider calls. A
+double confirm is a replay: the recorded refund is found first (before the
+refundable gate) and answered with the done message — the provider is never
+called twice. Confirm executions are serialized process-wide, so concurrent
+taps cannot race. Every recorded refund is audited in the same ledger
+transaction (`payment_ingress_audits`, actor `admin:<telegram-id>`, reason
+`admin /refund`).
+
+### Executable rails
+
+| Rail | Execution | Amounts | Notes |
+|---|---|---|---|
+| `stars` | `refundStarPayment` (Telegram) | full only | Telegram has no partial star refund; an explicit amount must equal the frozen XTR total. The ledger identity is the capture's charge id |
+| `stripe` | `POST /v1/refunds` against the checkout session's `payment_intent` | full or partial | a refund whose Stripe status is `failed` aborts before recording |
+| `yookassa` | `POST /v3/refunds` against the captured payment id | full or partial | status `canceled` aborts before recording; a `pending` refund is recorded as the initiation — async completion is dashboard-visible |
+| `balance` | credit back via `AdjustBalance` | full or partial | the credit IS the provider step; see §10 |
+
+### Manual rails (crypto, ton, nowpayments)
+
+These rails have no refund API in this bot: `/refund` renders an
+informational card (issue the refund at the provider's dashboard or from the
+watched wallet) and executes nothing — no provider call, no write, no confirm
+button, on either tap. In-ledger recording for these rails is a KNOWN
+FOLLOW-UP: the refund-recording CLI (`payment-review ingest-stars --kind
+refund`, §3) authenticates against Telegram's star transactions and therefore
+covers Stars only, and `payment-review ingest-provider` is capture-only. Until
+a recording CLI exists, a manual refund stays visible at the provider and the
+order's payment state remains `settled`.
+
+### Ordering ruling: provider first, ledger second
+
+Money-out is the irreversible step, so the provider refund executes FIRST and
+the immutable ledger record (`IngestProviderRefund`) SECOND. A provider
+failure leaves the ledger untouched and the order unchanged. A ledger failure
+AFTER a provider success is recoverable — the inverse order could record
+money that never left.
+
+### Deterministic idempotency keys
+
+Every card-rail provider call carries the deterministic key
+`refund:<orderID>:<amountMinor>:<paymentID>` (stripe `Idempotency-Key` /
+yookassa `Idempotence-Key`), and the balance rail's `order_refund:<orderID>`
+`balance_txs` audit type is the equivalent identity. A re-run after a
+ledger-recording failure is collapsed into the original money movement, so the
+recovery is a money-safe no-op that only completes the record. The deliberate
+trade-off: two legitimate identical partial refunds of one order are blocked
+provider-side — on a money-out surface, blocking an exotic legitimate repeat
+beats ever risking a double payout.
+
+### Ledger-failure recovery is rail-aware
+
+The failure message (loud in chat, ERROR in logs with the refund id) names the
+remedy per rail:
+
+- `stripe` / `yookassa` / `balance` — re-run `/refund <order_id> <amount>`:
+  the dedup above prevents a second money movement, and the re-run only
+  completes the ledger record. Re-run with the SAME amount — an amount-less
+  re-run defaults to the full total, which is a different refund (the card
+  rails' providers reject it once a partial moved money, but the re-run then
+  completes nothing);
+- `stars` — do NOT re-run `/refund`: Telegram rejects the repeat
+  `refundStarPayment`, so a re-run can never record it. Record the refund with
+  the Stars CLI instead (§3): `payment-review ingest-stars --kind refund
+  --transaction <telegram-refund-id> --order N --actor … --reason … --apply
+  --confirm-order N` reads Telegram's authoritative refund transaction and
+  records it with the provider's own timestamp.
+
+### One bot-side refund per order
+
+The gate requires a `paid` or `delivered` order whose payment state is
+`settled`. The first recorded refund flips that state — `refunded` when the
+cumulative refunds equal the captured total, `partially_refunded` otherwise
+(ledger-derived) — which closes the bot path for that order. A
+partial-then-remainder refund therefore has NO bot path today: after a
+partial `/refund`, the remainder needs CLI/ledger tooling. This is a
+documented limitation of the settled-only gate, not an oversight.
+
+### Cumulative cap is ledger-enforced
+
+Both the preview dry-run and the ingest sum every succeeded refund for the
+capture and refuse to exceed it: an over-cap preview fails closed as a
+conflict message before any provider call, and an over-cap ingest quarantines
+as a `refund_exceeds_payment` anomaly instead of recording.
+
+### No restock
+
+A refund updates the payment projection only: stock, fulfillment, loyalty,
+referral and entitlement side effects are NOT reversed by it — fulfillment
+after a refund stays a manual, explicit policy decision. The one quarantine
+case is a fully refunded subscription entitlement without provenance: the
+refund records, and the order goes to `needs_review` for §9/CLI triage.
+
+### Balance gate coupling (load-bearing)
+
+The balance rail's idempotency identity `order_refund:<orderID>` is
+ORDER-scoped, which is sound only while the settled-only gate admits exactly
+one bot refund per order. If that gate is ever relaxed to accept
+`partially_refunded` orders (a remainder refund), the identity MUST become
+amount-scoped FIRST (e.g. `order_refund:<orderID>:<amountMinor>`) — otherwise
+the second partial refund finds the first credit's row, skips the credit, and
+records money that never moved. The coupling is commented at both ends: the
+balance branch of `executeRefund` (`internal/bot/admin_refunds.go`) and
+`BalanceTxExists` (`internal/storage/balance.go`).
 
 ## Exit codes
 

@@ -272,7 +272,7 @@
   "admin_refund_not_paid": "❌ 订单 #%d 不可退款（状态：%s）。退款要求订单已支付或已交付且支付已结算。",
   "admin_refund_partial_stars": "❌ Telegram Stars 只支持全额退款：订单 #%d 共 %d XTR。不带金额重新执行即可全额退款。",
   "admin_refund_provider_failed": "❌ 订单 #%d 的退款在支付方失败：%s\n未记录退款，订单状态未变。",
-  "admin_refund_ledger_failed_rerun": "🚨 订单 #%d 的退款 %s 已在支付方执行，但账本记录失败：%s\n请重新执行 /refund %d — 确定性幂等键会阻止重复出款，重跑只会补全账本记录。",
+  "admin_refund_ledger_failed_rerun": "🚨 订单 #%[2]d 的退款 %[1]s 已在支付方执行，但账本记录失败：%[3]s\n请重新执行 /refund %[4]d — 确定性幂等键会阻止重复出款，重跑只会补全账本记录。",
   "admin_refund_ledger_failed_stars": "🚨 Stars 退款 %s（订单 #%d）已在 Telegram 执行，但账本记录失败：%s\n请勿重新执行 /refund — Telegram 会拒绝对同一笔扣款再次退款，重跑永远无法补记账本。请改用 ingest-stars CLI 登记退款（它会读取 Telegram 的权威退款交易）：\n%s",
   "admin_refund_conflict": "⚠️ 该退款已无法按预览执行——订单、金额或账本证据已变化。请用 /refund 重新加载并核对金额。",
   "admin_paystatus_title": "💳 支付渠道状态：\n",
