@@ -266,7 +266,7 @@ func TestCanonicalizeNowpaymentsIPNKeepsHTMLCharactersRaw(t *testing.T) {
 	// \u0026 by default; a regression to the default would compute a
 	// different HMAC than NOWPayments' signer over any IPN body containing
 	// these characters — fail-closed in production (genuine IPNs never
-	// verify), and invisible to the signature tests below without this pin.
+	// verify), and invisible to the signature tests above without this pin.
 	got, err := canonicalizeNowpaymentsIPN([]byte(`{"b":"<b>&","a":[1,{"z":"<p>&x"}]}`))
 	if err != nil {
 		t.Fatalf("canonicalizeNowpaymentsIPN: %v", err)
