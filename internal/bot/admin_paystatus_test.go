@@ -52,6 +52,36 @@ func TestPayStatusAllUnconfigured(t *testing.T) {
 	}
 }
 
+// TestPayStatusWhitespaceOnlyCredentialsRenderOff pins the TrimSpace
+// unification (HANDOFF §6.10): a whitespace-only credential is a
+// misconfiguration, not a configured rail — /paystatus must render OFF for it
+// exactly like doctor diagnoses it, never a misleading ON/WARN.
+func TestPayStatusWhitespaceOnlyCredentialsRenderOff(t *testing.T) {
+	e := newE2EEnvWithConfig(t, func(c *config.Config) {
+		c.CryptoBotToken = " "
+		c.YooKassaShopID, c.YooKassaSecretKey, c.YooKassaReturnURL = " ", " ", " "
+		c.StripeSecretKey, c.StripeWebhookSecret, c.StripeReturnURL = " ", " ", " "
+		c.TONWalletAddress, c.TONAPIKey = " ", " "
+		c.NowpaymentsAPIKey, c.NowpaymentsIPNSecret, c.NowpaymentsReturnURL = " ", " ", " "
+	})
+
+	text := payStatusText(t, e)
+	for _, want := range []string{
+		e.bot.t("en", "admin_paystatus_crypto_off"),
+		e.bot.t("en", "admin_paystatus_yookassa_off"),
+		e.bot.t("en", "admin_paystatus_stripe_off"),
+		e.bot.t("en", "admin_paystatus_ton_off"),
+		e.bot.t("en", "admin_paystatus_nowpayments_off"),
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("paystatus missing %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, e.bot.t("en", "admin_paystatus_webhooks_title")) {
+		t.Errorf("whitespace-only credentials must not open the webhook section:\n%s", text)
+	}
+}
+
 func TestPayStatusFullyConfigured(t *testing.T) {
 	e := newE2EEnvWithConfig(t, func(c *config.Config) {
 		enableYooKassa(c)
@@ -132,7 +162,8 @@ func TestPayStatusYooKassaCredsWithoutRate(t *testing.T) {
 	if !strings.Contains(text, e.bot.t("en", "admin_paystatus_yookassa_warn")) {
 		t.Fatalf("paystatus missing the YooKassa WARN line:\n%s", text)
 	}
-	if strings.Contains(text, "YooKassa (RUB card) — ✅ ON") ||
+	yookassaOnPrefix := strings.Split(e.bot.t("en", "admin_paystatus_yookassa_on"), "%s")[0]
+	if strings.Contains(text, yookassaOnPrefix) ||
 		strings.Contains(text, e.bot.t("en", "admin_paystatus_yookassa_off")) {
 		t.Fatalf("WARN state must replace ON/OFF:\n%s", text)
 	}
