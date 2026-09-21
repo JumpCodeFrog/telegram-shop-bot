@@ -825,6 +825,92 @@ func TestRunDoctorPassesConfiguredNowpayments(t *testing.T) {
 	}
 }
 
+// TestRunDoctorPassesConfiguredTONViaEnvOverlay pins the environment-overlay
+// leg for ALL THREE TON keys: with no .env file at all, the process environment
+// alone must light the rail up fully. Dropping TON_API_KEY (or either other
+// key) from knownEnvironmentKeys degrades the report to the missing-API-key
+// WARN — and fails this test.
+func TestRunDoctorPassesConfiguredTONViaEnvOverlay(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "shop.db")
+	var output bytes.Buffer
+	report := RunDoctor(context.Background(), DoctorOptions{
+		EnvPath:   filepath.Join(dir, "missing.env"),
+		Out:       &output,
+		Inspector: &fakeInspector{state: TelegramState{Identity: BotIdentity{ID: 7, Username: "shop_bot", SupportsInlineQueries: true}}},
+		LookupEnv: func(key string) (string, bool) {
+			switch key {
+			case "BOT_TOKEN":
+				return testToken, true
+			case "ADMIN_IDS":
+				return "42", true
+			case "DB_PATH":
+				return dbPath, true
+			case "TON_WALLET_ADDRESS":
+				return tonDoctorTestAddress, true
+			case "USD_PER_TON":
+				return "5.25", true
+			case "TON_API_KEY":
+				return "ton_key_do_not_print", true
+			}
+			return "", false
+		},
+		CheckRedis: func(context.Context, string, string) error { return nil },
+	})
+	if report.ExitCode() != 0 {
+		t.Fatalf("ExitCode() = %d, want 0:\n%s", report.ExitCode(), output.String())
+	}
+	if !strings.Contains(output.String(), "[OK] TON payments: configured") {
+		t.Fatalf("missing configured line:\n%s", output.String())
+	}
+	if strings.Contains(output.String(), "ton_key_do_not_print") {
+		t.Fatal("doctor output leaked the TON API key")
+	}
+}
+
+// TestRunDoctorPassesConfiguredNowpaymentsViaEnvOverlay pins the overlay leg
+// for the NOWPayments triple: dropping NOWPAYMENTS_IPN_SECRET or
+// NOWPAYMENTS_RETURN_URL from knownEnvironmentKeys degrades the rail to the
+// partial-credential FAIL — and fails this test.
+func TestRunDoctorPassesConfiguredNowpaymentsViaEnvOverlay(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "shop.db")
+	var output bytes.Buffer
+	report := RunDoctor(context.Background(), DoctorOptions{
+		EnvPath:   filepath.Join(dir, "missing.env"),
+		Out:       &output,
+		Inspector: &fakeInspector{state: TelegramState{Identity: BotIdentity{ID: 7, Username: "shop_bot", SupportsInlineQueries: true}}},
+		LookupEnv: func(key string) (string, bool) {
+			switch key {
+			case "BOT_TOKEN":
+				return testToken, true
+			case "ADMIN_IDS":
+				return "42", true
+			case "DB_PATH":
+				return dbPath, true
+			case "NOWPAYMENTS_API_KEY":
+				return "np_key_do_not_print", true
+			case "NOWPAYMENTS_IPN_SECRET":
+				return "np_secret_do_not_print", true
+			case "NOWPAYMENTS_RETURN_URL":
+				return "https://shop.example.com/return", true
+			}
+			return "", false
+		},
+		CheckRedis: func(context.Context, string, string) error { return nil },
+	})
+	if report.ExitCode() != 0 {
+		t.Fatalf("ExitCode() = %d, want 0:\n%s", report.ExitCode(), output.String())
+	}
+	if !strings.Contains(output.String(), "[OK] NOWPayments payments: configured") {
+		t.Fatalf("missing configured line:\n%s", output.String())
+	}
+	if strings.Contains(output.String(), "np_key_do_not_print") ||
+		strings.Contains(output.String(), "np_secret_do_not_print") {
+		t.Fatal("doctor output leaked NOWPayments credentials")
+	}
+}
+
 func TestRunDoctorPassesConfiguredYooKassa(t *testing.T) {
 	dir := t.TempDir()
 	envPath := filepath.Join(dir, ".env")
