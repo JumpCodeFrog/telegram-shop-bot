@@ -5,7 +5,7 @@
 
 ## 1. Состояние
 
-- **main = `0f625b7`**, на 91 коммит впереди `origin/main`. **НЕ запушено** — push
+- **main = `4dd7842`**, на 102 коммита впереди `origin/main`. **НЕ запушено** — push
   только с явного согласия владельца. Все фичевые ветки сохранены (не удалены).
 - Ворота на HEAD: `go build` + `go vet` + `gofmt -l internal/ cmd/ worker/` (пусто) +
   `go test ./...` — зелёные; `-race` на money-пакетах зелёный.
@@ -83,6 +83,9 @@ Stripe, YooKassa, баланса; crypto/ton/nowpayments — вручную в �
 2. YooKassa `GetPayment`: покрытие invalid-ID / `toPayment` веток.
 3. doctor: 3 из 6 crypto env-ключей без behavioral overlay legs (только list-membership).
 4. bot-уровень: `payment_state` pin в yookassa webhook replay-тесте (storage-уровень есть).
+   ✅ pin существует с 20.09.2026 (коммит `ee7f926`, roadmap 4.11 — строка бэклога
+   устарела); остаток: симметричные пины в stripe/nowpayments replay-тестах → план
+   polish-followups.
 5. `docs/payment-operations.md` §5: intro таблицы карантина webhook-scoped —
    poller-факты это captures, не anomaly rows (уточнить формулировку).
 6. Refunds path-5: provider-success + ledger-failure оставляет только log+chat след —
@@ -109,6 +112,10 @@ Stripe, YooKassa, баланса; crypto/ton/nowpayments — вручную в �
 14. YooKassa poller: warn-префикс `yookassa poller:` vs файловый `YooKassa polling:`.
 15. `paymentMethodText` fallback для неизвестного провайдера HTML-эскейпится в
     plain-text карточке `/order` (косметика).
+16. CLI `payment-review list` рендерит reason-коды через `safeReviewCode` (`=`→`_`),
+    бот `/payreview` печатает raw reason — косметическое расхождение для карточек
+    `refund_ledger_failure:order=<id>` (park из финального ревью money-followups;
+    рассматривать вместе с §6.9).
 
 ## 7. Процесс (как велась работа — воспроизводим)
 
@@ -143,7 +150,7 @@ scoped re-review и низко-рисковые ревью — `alibaba-cn/qwen3
 - verb-parity тест локалей (`TestLocaleFilesHaveMatchingPrintfVerbs`) ловит класс
   багов перестановки `%d/%s` в переводах — держать зелёным.
 
-## 8. Deliverables-реестр (9 планов)
+## 8. Deliverables-реестр (10 планов)
 
 | План | Ветка | Merge | Коммитов | Fix-раундов |
 |---|---|---|---|---|
@@ -156,6 +163,7 @@ scoped re-review и низко-рисковые ревью — `alibaba-cn/qwen3
 | YooKassa poller (4.5) | feat/yookassa-poller | `5e22ae4` | 4 | 0 (+warn fold) |
 | Admin refunds (4.4) | feat/admin-refunds | `37cb865` | 7 | 2 (truthful guidance; amount-bearing recovery) |
 | Ctx + attribution (4.7, 4.13) | chore/ctx-attribution | `0f625b7` | 2 | 0 |
+| Money follow-ups (§6.13/6.1/6.7/6.6) | chore/money-followups | `4dd7842` | 8 | 2 (T2 comment direction; финал: CLI balance-бакет + docs-truthfulness) |
 
 Плюс: roadmap rewrite (`f6fb155`, `46ab401`, обновления в задачах) и controller-janitorial
 коммиты (gofmt `36a0c84`, coupling-комментарии `9697320`).
