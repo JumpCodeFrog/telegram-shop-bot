@@ -7,9 +7,11 @@ package bot
 // never move money.
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -220,6 +222,11 @@ func TestYooKassaWebhookSettlesAfterRefetch(t *testing.T) {
 	out := newOutboundCapture(t)
 	api := newYookassaWebhookAPIMock(t, http.StatusOK, "")
 	e := newYooKassaWebhookEnv(t, api, out)
+	// Pin the settlement attribution (docs/payment-operations.md §12): the
+	// success path must log the webhook actor. The bot's logger is injected
+	// (NewWithAPI), so the swap needs no slog.SetDefault dance.
+	var settleLogs bytes.Buffer
+	e.bot.logger = slog.New(slog.NewTextHandler(&settleLogs, nil))
 	const buyer = int64(7101)
 	orderID := placeRUBOrder(e, buyer)
 	api.setBody(yookassaRefetchJSON("pay_1", "succeeded", "1849.08", true, orderID))
@@ -283,6 +290,11 @@ func TestYooKassaWebhookSettlesAfterRefetch(t *testing.T) {
 	if ev.Event != "order.paid" || ev.OrderID != orderID || ev.UserID != buyer ||
 		ev.Method != "yookassa" || ev.PaymentID != "pay_1" {
 		t.Fatalf("outbound webhook event = %+v, want order.paid for order %d via yookassa pay_1", ev, orderID)
+	}
+
+	if got := strings.Count(settleLogs.String(), "actor=webhook:yookassa"); got != 1 {
+		t.Fatalf("settlement log actor=webhook:yookassa count = %d, want exactly 1; logs:\n%s",
+			got, settleLogs.String())
 	}
 }
 

@@ -676,6 +676,11 @@ func (b *Bot) processSuccessfulPayment(msg *tgbotapi.Message) error {
 	if b.metrics != nil {
 		b.metrics.SuccessfulPayments.WithLabelValues("stars").Inc()
 	}
+	// Settlement attribution (docs/payment-operations.md §12): the Telegram
+	// successful_payment update is the authority for this settle — log-level
+	// actor only, no durable actor row exists for webhook settles.
+	b.logger.Info("stars payment settled",
+		"order_id", orderID, "payment_id", sp.TelegramPaymentChargeID, "actor", "webhook:stars")
 
 	b.outWebhook.Send(service.OutboundWebhookEvent{
 		Event:      "order.paid",

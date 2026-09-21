@@ -194,6 +194,10 @@ func runBot() {
 	// 6. Context & Signal Handling
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	// Graceful shutdown: the bot's per-handler contexts derive from the
+	// signal ctx, so in-flight handler DB work cancels with the process
+	// signal; the 30s per-handler bound still applies.
+	b.SetRootContext(ctx)
 
 	// 7. Start Workers — every background goroutine goes through the group so
 	// shutdown can wait for them BEFORE the deferred db.Close() runs.

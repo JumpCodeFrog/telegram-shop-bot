@@ -67,8 +67,15 @@ func yooPayment(id string, orderID int64, amount string) payment.Payment {
 // writes a provider-yookassa attempt row with the payment id, decrements the
 // stock exactly once and triggers exactly one outcome notification. The list
 // request shape (status filter, page size, empty first cursor) is pinned via
-// the recorded call.
+// the recorded call, and the settle-success log must carry the worker actor
+// attribution (docs/payment-operations.md §12) — captured through the same
+// slog.SetDefault swap as TestYooKassaPollingPageCap.
 func TestYooKassaPollingSettlesPendingOrder(t *testing.T) {
+	prev := slog.Default()
+	var logs bytes.Buffer
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
 	svc, store, db := newTONSQLHarness(t)
 	ctx := context.Background()
 	productID := seedYooKassaProduct(t, ctx, db, 5)
@@ -120,6 +127,10 @@ func TestYooKassaPollingSettlesPendingOrder(t *testing.T) {
 	}
 	if stock := yooKassaStock(t, ctx, db, productID); stock != 4 {
 		t.Fatalf("stock=%d, want 4 (decremented exactly once at settlement)", stock)
+	}
+	if got := strings.Count(logs.String(), "actor=worker:yookassa"); got != 1 {
+		t.Fatalf("settle log actor=worker:yookassa count=%d, want exactly 1; logs:\n%s",
+			got, logs.String())
 	}
 }
 

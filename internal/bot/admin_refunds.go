@@ -429,6 +429,10 @@ func (b *Bot) onAdminRefundConfirm(chatID int64, msgID int, adminID, orderID, am
 		}
 		return
 	}
+	// Settlement attribution (docs/payment-operations.md §12): the log actor
+	// matches the durable payment_ingress_audits row written above.
+	b.logger.Info("refund recorded",
+		"order_id", orderID, "rail", rail, "refund_id", refundID, "actor", audit.Actor)
 	// ErrPaymentNeedsReview from the ingest means the refund row committed but
 	// a fully refunded subscription entitlement lacks provenance: recorded,
 	// order quarantined for review. Report the fresh state truthfully.

@@ -119,6 +119,11 @@ func (b *Bot) CryptoBotWebhookHandler() http.HandlerFunc {
 		if b.metrics != nil {
 			b.metrics.SuccessfulPayments.WithLabelValues("crypto").Inc()
 		}
+		// Settlement attribution (docs/payment-operations.md §12): the signed
+		// provider callback is the authority for this settle — log-level actor
+		// only, no durable actor row exists for webhook settles.
+		b.logger.Info("cryptobot webhook settled",
+			"order_id", payload.OrderID, "payment_id", payload.InvoiceID, "actor", "webhook:crypto")
 
 		order := outcome.Order
 		lang := b.userLang(ctx, order.UserID)
@@ -254,6 +259,11 @@ func (b *Bot) YooKassaWebhookHandler() http.HandlerFunc {
 		if b.metrics != nil {
 			b.metrics.SuccessfulPayments.WithLabelValues("yookassa").Inc()
 		}
+		// Settlement attribution (docs/payment-operations.md §12), same
+		// convention as the cryptobot webhook: the refetched provider payment
+		// is the authority for this settle.
+		b.logger.Info("yookassa webhook settled",
+			"order_id", receipt.OrderID, "payment_id", p.ID, "actor", "webhook:yookassa")
 		order := outcome.Order
 		lang := b.userLang(ctx, order.UserID)
 		b.send(tgbotapi.NewMessage(order.UserID, fmt.Sprintf(b.t(lang, "payment_success"), order.ID)))
@@ -362,6 +372,11 @@ func (b *Bot) StripeWebhookHandler() http.HandlerFunc {
 		if b.metrics != nil {
 			b.metrics.SuccessfulPayments.WithLabelValues("stripe").Inc()
 		}
+		// Settlement attribution (docs/payment-operations.md §12), same
+		// convention as the cryptobot webhook: the signed session is the
+		// authority for this settle.
+		b.logger.Info("stripe webhook settled",
+			"order_id", receipt.OrderID, "payment_id", session.ID, "actor", "webhook:stripe")
 		order := outcome.Order
 		lang := b.userLang(ctx, order.UserID)
 		b.send(tgbotapi.NewMessage(order.UserID, fmt.Sprintf(b.t(lang, "payment_success"), order.ID)))
@@ -472,6 +487,11 @@ func (b *Bot) NowpaymentsWebhookHandler() http.HandlerFunc {
 		if b.metrics != nil {
 			b.metrics.SuccessfulPayments.WithLabelValues("nowpayments").Inc()
 		}
+		// Settlement attribution (docs/payment-operations.md §12), same
+		// convention as the cryptobot webhook: the signed IPN is the
+		// authority for this settle.
+		b.logger.Info("nowpayments webhook settled",
+			"order_id", receipt.OrderID, "payment_id", ipn.PaymentID, "actor", "webhook:nowpayments")
 		order := outcome.Order
 		lang := b.userLang(ctx, order.UserID)
 		b.send(tgbotapi.NewMessage(order.UserID, fmt.Sprintf(b.t(lang, "payment_success"), order.ID)))

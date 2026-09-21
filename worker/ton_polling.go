@@ -118,8 +118,10 @@ func (w *TONPollingWorker) poll(ctx context.Context) {
 			}
 			continue
 		}
+		// Settlement attribution (docs/payment-operations.md §12): the poller
+		// is TON's only settlement path — log-level actor, no durable actor row.
 		slog.Info("TON polling: order marked paid",
-			"order_id", receipt.OrderID, "external_id", receipt.ExternalID)
+			"order_id", receipt.OrderID, "external_id", receipt.ExternalID, "actor", "worker:ton")
 		if w.notify != nil {
 			w.notify(ctx, outcome)
 		}
