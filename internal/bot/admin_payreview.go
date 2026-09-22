@@ -43,11 +43,11 @@ const (
 )
 
 // handlePayReview renders the review queue for admins; non-admins get nothing.
-func (b *Bot) handlePayReview(msg *tgbotapi.Message) {
+func (b *Bot) handlePayReview(ctx context.Context, msg *tgbotapi.Message) {
 	if !b.isAdmin(msg.From.ID) {
 		return
 	}
-	b.sendPayReviewList(msg.Chat.ID, 0, msg.From.LanguageCode)
+	b.sendPayReviewList(ctx, msg.Chat.ID, 0, msg.From.LanguageCode)
 }
 
 // listAllPaymentReviews concatenates the queue of every provider.
@@ -103,9 +103,7 @@ func payReviewReasons(item storage.PaymentReviewCase) string {
 }
 
 // sendPayReviewList renders the queue: one line plus one card button per case.
-func (b *Bot) sendPayReviewList(chatID int64, msgID int, lang string) {
-	ctx, cancel := b.handlerCtx()
-	defer cancel()
+func (b *Bot) sendPayReviewList(ctx context.Context, chatID int64, msgID int, lang string) {
 	cases, err := b.listAllPaymentReviews(ctx)
 	if err != nil {
 		b.logger.Error("list payment reviews", "error", err)
@@ -204,20 +202,20 @@ func parsePayReviewData(data string) payReviewRef {
 }
 
 // onAdminPayReviewCallback dispatches an already admin-gated payrev callback.
-func (b *Bot) onAdminPayReviewCallback(chatID int64, msgID int, userID int64, data, lang string) {
+func (b *Bot) onAdminPayReviewCallback(ctx context.Context, chatID int64, msgID int, userID int64, data, lang string) {
 	ref := parsePayReviewData(data)
 	if !ref.ok {
 		return
 	}
 	switch {
 	case ref.action == "list":
-		b.sendPayReviewList(chatID, msgID, lang)
+		b.sendPayReviewList(ctx, chatID, msgID, lang)
 	case ref.action == "":
-		b.sendPayReviewCard(chatID, msgID, ref, lang)
+		b.sendPayReviewCard(ctx, chatID, msgID, ref, lang)
 	case ref.confirm:
-		b.onAdminPayReviewConfirm(chatID, msgID, userID, ref, lang)
+		b.onAdminPayReviewConfirm(ctx, chatID, msgID, userID, ref, lang)
 	default:
-		b.onAdminPayReviewPreview(chatID, msgID, userID, ref, lang)
+		b.onAdminPayReviewPreview(ctx, chatID, msgID, userID, ref, lang)
 	}
 }
 
@@ -304,9 +302,7 @@ func (b *Bot) payReviewActionLabel(lang, action string) string {
 
 // sendPayReviewCard renders one case: order summary, payment state, every
 // target with its reason code, and the action buttons.
-func (b *Bot) sendPayReviewCard(chatID int64, msgID int, ref payReviewRef, lang string) {
-	ctx, cancel := b.handlerCtx()
-	defer cancel()
+func (b *Bot) sendPayReviewCard(ctx context.Context, chatID int64, msgID int, ref payReviewRef, lang string) {
 	item, err := b.findReviewCase(ctx, ref)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
@@ -367,9 +363,7 @@ func (b *Bot) sendPayReviewCard(chatID int64, msgID int, ref payReviewRef, lang 
 // onAdminPayReviewPreview is the first tap of an action: build the resolution
 // from the freshly reloaded case and validate it against the ledger without
 // writing anything.
-func (b *Bot) onAdminPayReviewPreview(chatID int64, msgID int, userID int64, ref payReviewRef, lang string) {
-	ctx, cancel := b.handlerCtx()
-	defer cancel()
+func (b *Bot) onAdminPayReviewPreview(ctx context.Context, chatID int64, msgID int, userID int64, ref payReviewRef, lang string) {
 	item, err := b.findReviewCase(ctx, ref)
 	if err == nil {
 		var resolution storage.PaymentReviewResolution
@@ -413,9 +407,7 @@ func payReviewResultState(item storage.PaymentReviewCase, action string) string 
 
 // onAdminPayReviewConfirm is the second tap: reload, rebuild, re-preview (the
 // target set may have changed since the first tap), then apply.
-func (b *Bot) onAdminPayReviewConfirm(chatID int64, msgID int, userID int64, ref payReviewRef, lang string) {
-	ctx, cancel := b.handlerCtx()
-	defer cancel()
+func (b *Bot) onAdminPayReviewConfirm(ctx context.Context, chatID int64, msgID int, userID int64, ref payReviewRef, lang string) {
 	item, err := b.findReviewCase(ctx, ref)
 	if err == nil {
 		var resolution storage.PaymentReviewResolution

@@ -2,6 +2,7 @@ package bot
 
 import (
 	"bytes"
+	"context"
 	"encoding/csv"
 	"errors"
 	"fmt"
@@ -15,14 +16,12 @@ import (
 	"shop_bot/internal/storage"
 )
 
-func (b *Bot) handleOrdersAll(msg *tgbotapi.Message) {
+func (b *Bot) handleOrdersAll(ctx context.Context, msg *tgbotapi.Message) {
 	if !b.isAdmin(msg.From.ID) {
 		return
 	}
 	lang := msg.From.LanguageCode
 	statusFilter := strings.TrimSpace(msg.CommandArguments())
-	ctx, cancel := b.handlerCtx()
-	defer cancel()
 	orders, err := b.order.GetAllOrders(ctx, statusFilter)
 	if err != nil {
 		b.logger.Error("get all orders", "status", statusFilter, "error", err)
@@ -49,7 +48,7 @@ func (b *Bot) handleOrdersAll(msg *tgbotapi.Message) {
 
 // handleOrderCard renders the full admin card for one order: buyer, items,
 // every non-zero money snapshot, status, payment facts and timestamps.
-func (b *Bot) handleOrderCard(msg *tgbotapi.Message) {
+func (b *Bot) handleOrderCard(ctx context.Context, msg *tgbotapi.Message) {
 	if !b.isAdmin(msg.From.ID) {
 		return
 	}
@@ -60,8 +59,6 @@ func (b *Bot) handleOrderCard(msg *tgbotapi.Message) {
 		return
 	}
 
-	ctx, cancel := b.handlerCtx()
-	defer cancel()
 	order, err := b.order.GetOrder(ctx, id)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
@@ -122,7 +119,7 @@ func (b *Bot) formatAdminOrderCard(lang string, order *storage.Order, user *stor
 	return sb.String()
 }
 
-func (b *Bot) handleSetDelivered(msg *tgbotapi.Message) {
+func (b *Bot) handleSetDelivered(ctx context.Context, msg *tgbotapi.Message) {
 	if !b.isAdmin(msg.From.ID) {
 		return
 	}
@@ -132,8 +129,6 @@ func (b *Bot) handleSetDelivered(msg *tgbotapi.Message) {
 		b.send(tgbotapi.NewMessage(msg.Chat.ID, b.t(lang, "admin_usage_setdelivered")))
 		return
 	}
-	ctx, cancel := b.handlerCtx()
-	defer cancel()
 	order, err := b.order.SetDelivered(ctx, id)
 	if err != nil {
 		b.logger.Error("set delivered", "order_id", id, "error", err)
@@ -202,7 +197,7 @@ func filterOrdersByDate(orders []storage.Order, from, to *time.Time) []storage.O
 	return filtered
 }
 
-func (b *Bot) handleExportOrders(msg *tgbotapi.Message) {
+func (b *Bot) handleExportOrders(ctx context.Context, msg *tgbotapi.Message) {
 	if !b.isAdmin(msg.From.ID) {
 		return
 	}
@@ -214,8 +209,6 @@ func (b *Bot) handleExportOrders(msg *tgbotapi.Message) {
 		return
 	}
 
-	ctx, cancel := b.handlerCtx()
-	defer cancel()
 	orders, err := b.order.GetAllOrders(ctx, "")
 	if err != nil {
 		b.logger.Error("export orders", "error", err)

@@ -108,11 +108,11 @@ func (b *Bot) routeMessage(ctx context.Context, msg *tgbotapi.Message) {
 	case "deleteproduct":
 		b.handleDeleteProduct(ctx, msg)
 	case "orders_all":
-		b.handleOrdersAll(msg)
+		b.handleOrdersAll(ctx, msg)
 	case "order":
-		b.handleOrderCard(msg)
+		b.handleOrderCard(ctx, msg)
 	case "setdelivered":
-		b.handleSetDelivered(msg)
+		b.handleSetDelivered(ctx, msg)
 	case "reviews":
 		b.handleReviewsAdmin(ctx, msg)
 
@@ -128,23 +128,23 @@ func (b *Bot) routeMessage(ctx context.Context, msg *tgbotapi.Message) {
 
 	// Promo codes.
 	case "addpromo":
-		b.handleAddPromo(msg)
+		b.handleAddPromo(ctx, msg)
 	case "listpromos":
-		b.handleListPromos(msg)
+		b.handleListPromos(ctx, msg)
 	case "deletepromo":
-		b.handleDeletePromo(msg)
+		b.handleDeletePromo(ctx, msg)
 
 	// Analytics.
 	case "analytics":
-		b.handleAnalytics(msg)
+		b.handleAnalytics(ctx, msg)
 
 	// Payment review queue.
 	case "payreview":
-		b.handlePayReview(msg)
+		b.handlePayReview(ctx, msg)
 
 	// Admin refunds.
 	case "refund":
-		b.handleRefundCommand(msg)
+		b.handleRefundCommand(ctx, msg)
 
 	// Payment provider status.
 	case "paystatus":
@@ -152,11 +152,11 @@ func (b *Bot) routeMessage(ctx context.Context, msg *tgbotapi.Message) {
 
 	// Balance adjustments.
 	case "setbalance":
-		b.handleSetBalance(msg)
+		b.handleSetBalance(ctx, msg)
 
 	// Export.
 	case "export_orders":
-		b.handleExportOrders(msg)
+		b.handleExportOrders(ctx, msg)
 
 	// Button style customization.
 	case "btnstyle":
@@ -291,25 +291,25 @@ func (b *Bot) handleCallback(ctx context.Context, cb *tgbotapi.CallbackQuery) {
 	case strings.HasPrefix(data, "admin:payrevdo:"):
 		b.ack(cb.ID)
 		if b.isAdmin(userID) {
-			b.onAdminPayReviewCallback(chatID, msgID, userID, data, lang)
+			b.onAdminPayReviewCallback(ctx, chatID, msgID, userID, data, lang)
 		}
 
 	case strings.HasPrefix(data, "admin:payrev:"):
 		b.ack(cb.ID)
 		if b.isAdmin(userID) {
-			b.onAdminPayReviewCallback(chatID, msgID, userID, data, lang)
+			b.onAdminPayReviewCallback(ctx, chatID, msgID, userID, data, lang)
 		}
 
 	case strings.HasPrefix(data, "admin:refund:"):
 		b.ack(cb.ID)
 		if b.isAdmin(userID) {
-			b.onAdminRefundCallback(chatID, msgID, userID, data, lang)
+			b.onAdminRefundCallback(ctx, chatID, msgID, userID, data, lang)
 		}
 
 	case strings.HasPrefix(data, "analytics:"):
 		b.ack(cb.ID)
 		if b.isAdmin(userID) {
-			b.handleAnalyticsCallback(chatID, msgID, data, cb.From.LanguageCode)
+			b.handleAnalyticsCallback(ctx, chatID, msgID, data, cb.From.LanguageCode)
 		}
 
 	case data == "admin:btnlist":

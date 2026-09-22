@@ -7,6 +7,7 @@ package bot
 // an "admin_adjust[: reason]" type so the operator trail stays complete.
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strconv"
@@ -17,7 +18,7 @@ import (
 	"shop_bot/internal/storage"
 )
 
-func (b *Bot) handleSetBalance(msg *tgbotapi.Message) {
+func (b *Bot) handleSetBalance(ctx context.Context, msg *tgbotapi.Message) {
 	if !b.isAdmin(msg.From.ID) {
 		return
 	}
@@ -47,8 +48,6 @@ func (b *Bot) handleSetBalance(msg *tgbotapi.Message) {
 		reason = "admin_adjust: " + strings.Join(args[2:], " ")
 	}
 
-	ctx, cancel := b.handlerCtx()
-	defer cancel()
 	newBalance, err := b.balances.AdjustBalance(ctx, targetID, amount, reason, msg.From.ID)
 	if err != nil {
 		switch {
