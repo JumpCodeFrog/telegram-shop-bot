@@ -409,7 +409,7 @@ func (b *Bot) Run(ctx context.Context) error {
 				uCancel()
 				cleanup()
 				if err != nil {
-					b.logger.Error("polling Stars payment not durably handled", "update_id", update.UpdateID, "error", err)
+					b.loggerFor(uCtx).Error("polling Stars payment not durably handled", "update_id", update.UpdateID, "error", err)
 					retryBatch = true
 					break
 				}

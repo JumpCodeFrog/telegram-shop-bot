@@ -549,7 +549,7 @@ func formatTON(nano int64) string {
 // handlePreCheckout handles Telegram PreCheckoutQuery for Stars payments.
 func (b *Bot) handlePreCheckout(ctx context.Context, query *tgbotapi.PreCheckoutQuery) {
 	if err := b.stars.HandlePreCheckout(ctx, query); err != nil {
-		b.logger.Error("handle pre-checkout", "error", err)
+		b.loggerFor(ctx).Error("handle pre-checkout", "error", err)
 	}
 }
 
@@ -558,7 +558,7 @@ func (b *Bot) handlePreCheckout(ctx context.Context, query *tgbotapi.PreCheckout
 // durable settlement or review fact could be written.
 func (b *Bot) handleSuccessfulPayment(ctx context.Context, msg *tgbotapi.Message) {
 	if err := b.processSuccessfulPayment(ctx, msg); err != nil {
-		b.logger.Error("Stars payment was not durably handled", "error", err)
+		b.loggerFor(ctx).Error("Stars payment was not durably handled", "error", err)
 	}
 }
 
@@ -580,7 +580,7 @@ func (b *Bot) processSuccessfulPayment(ctx context.Context, msg *tgbotapi.Messag
 		if quarantineErr := b.recordStarsPaymentAnomaly(ctx, msg, 0, "stars_invalid_order_payload"); quarantineErr != nil {
 			return fmt.Errorf("parse Stars order ID and quarantine provider fact: %w", quarantineErr)
 		}
-		b.logger.Warn("Stars payment quarantined: invalid order payload")
+		b.loggerFor(ctx).Warn("Stars payment quarantined: invalid order payload")
 		return nil
 	}
 
@@ -605,13 +605,13 @@ func (b *Bot) processSuccessfulPayment(ctx context.Context, msg *tgbotapi.Messag
 			if errors.Is(renewalErr, storage.ErrPaymentNeedsReview) ||
 				errors.Is(renewalErr, storage.ErrPaymentReceiptMismatch) ||
 				errors.Is(renewalErr, storage.ErrPaymentIdentityConflict) {
-				b.logger.Warn("Stars subscription renewal quarantined", "order_id", orderID, "reason", renewalErr)
+				b.loggerFor(ctx).Warn("Stars subscription renewal quarantined", "order_id", orderID, "reason", renewalErr)
 				return nil
 			}
 			if quarantineErr := b.recordStarsPaymentAnomaly(ctx, msg, orderID, "stars_subscription_renewal_failure"); quarantineErr != nil {
 				return errors.Join(renewalErr, quarantineErr)
 			}
-			b.logger.Warn("Stars subscription renewal quarantined", "order_id", orderID, "reason", renewalErr)
+			b.loggerFor(ctx).Warn("Stars subscription renewal quarantined", "order_id", orderID, "reason", renewalErr)
 			return nil
 		}
 		if b.metrics != nil {
@@ -620,7 +620,7 @@ func (b *Bot) processSuccessfulPayment(ctx context.Context, msg *tgbotapi.Messag
 		// Settlement attribution (docs/payment-operations.md §12): the renewal
 		// arrives through the same Telegram successful_payment ingress as the
 		// one-time settle — log-level actor, no durable actor row.
-		b.logger.Info("stars subscription renewal settled",
+		b.loggerFor(ctx).Info("stars subscription renewal settled",
 			"order_id", orderID, "payment_id", sp.TelegramPaymentChargeID, "actor", "webhook:stars")
 		return nil
 	}
@@ -629,20 +629,20 @@ func (b *Bot) processSuccessfulPayment(ctx context.Context, msg *tgbotapi.Messag
 		if errors.Is(err, storage.ErrProductOutOfStock) {
 			recordErr := b.order.RecordUnexpectedPayment(ctx, receipt, "out_of_stock_after_charge")
 			if recordErr == nil || errors.Is(recordErr, storage.ErrPaymentNeedsReview) {
-				b.logger.Warn("Stars payment quarantined after stock conflict", "order_id", orderID)
+				b.loggerFor(ctx).Warn("Stars payment quarantined after stock conflict", "order_id", orderID)
 				return nil
 			}
 		}
 		if errors.Is(err, storage.ErrOrderStatusConflict) {
 			// Duplicate Stars payment event — already confirmed, safe to ignore.
-			b.logger.Info("stars payment already confirmed (idempotent)", "order_id", orderID)
+			b.loggerFor(ctx).Info("stars payment already confirmed (idempotent)", "order_id", orderID)
 			return nil
 		}
 		if errors.Is(err, storage.ErrPaymentNeedsReview) ||
 			errors.Is(err, storage.ErrPaymentReceiptMismatch) ||
 			errors.Is(err, storage.ErrPaymentIdentityConflict) ||
 			errors.Is(err, storage.ErrNotFound) {
-			b.logger.Warn("Stars payment durably quarantined", "order_id", orderID, "reason", err)
+			b.loggerFor(ctx).Warn("Stars payment durably quarantined", "order_id", orderID, "reason", err)
 			return nil
 		}
 		// ConfirmPaymentReceipt durably quarantines known validation failures.
@@ -652,7 +652,7 @@ func (b *Bot) processSuccessfulPayment(ctx context.Context, msg *tgbotapi.Messag
 		if quarantineErr := b.recordStarsPaymentAnomaly(ctx, msg, orderID, "stars_payment_processing_failure"); quarantineErr != nil {
 			return errors.Join(err, quarantineErr)
 		}
-		b.logger.Warn("Stars payment quarantined", "order_id", orderID, "reason", err)
+		b.loggerFor(ctx).Warn("Stars payment quarantined", "order_id", orderID, "reason", err)
 		return nil
 	}
 
@@ -662,7 +662,7 @@ func (b *Bot) processSuccessfulPayment(ctx context.Context, msg *tgbotapi.Messag
 	// Settlement attribution (docs/payment-operations.md §12): the Telegram
 	// successful_payment update is the authority for this settle — log-level
 	// actor only, no durable actor row exists for webhook settles.
-	b.logger.Info("stars payment settled",
+	b.loggerFor(ctx).Info("stars payment settled",
 		"order_id", orderID, "payment_id", sp.TelegramPaymentChargeID, "actor", "webhook:stars")
 
 	b.outWebhook.Send(service.OutboundWebhookEvent{

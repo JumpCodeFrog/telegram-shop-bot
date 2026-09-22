@@ -562,7 +562,7 @@ func (b *Bot) TelegramWebhookHandler() http.HandlerFunc {
 			err := b.processSuccessfulPayment(uCtx, update.Message)
 			uCancel()
 			if err != nil {
-				b.logger.Error("telegram webhook: Stars payment not durably handled", "error", err)
+				b.loggerFor(uCtx).Error("telegram webhook: Stars payment not durably handled", "error", err)
 				http.Error(w, "internal error", http.StatusInternalServerError)
 				return
 			}
