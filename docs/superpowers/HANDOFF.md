@@ -5,8 +5,14 @@
 
 ## 1. Состояние
 
-- **main = `5420f3b`**, на 119 коммитов впереди `origin/main`. **НЕ запушено** — push
+- **main = `6fe11d7`**, на 120 коммитов впереди `origin/main` (мержи сессии 21–22.09:
+  money-followups `4dd7842`, polish-followups `5420f3b` + janitorial). **НЕ запушено** — push
   только с явного согласия владельца. Все фичевые ветки сохранены (не удалены).
+- **Следующее большое дело: roadmap 4.14** — design-spec УТВЕРЖДЁН владельцем 22.09.2026:
+  `docs/superpowers/specs/2026-09-22-update-ctx-trace-design.md` (фактический объём Large:
+  79 сайтов `b.handlerCtx()` в 24 файлах + атомарность сигнатур цепочки; стратегия —
+  staged-миграция с временным bridge). Затем 4.15 (sketch — spec §9, свой brainstorm).
+  Ruling'и закрытых планов — §9; следующий шаг — writing-plans из spec.
 - Ворота на HEAD: `go build` + `go vet` + `gofmt -l internal/ cmd/ worker/` (пусто) +
   `go test ./...` — зелёные; `-race` на money-пакетах зелёный.
 - Роадмап (§4) закрыт полностью, кроме отложенного решением 4.3 и остатков 4.14/4.15.
@@ -72,9 +78,11 @@ Stripe, YooKassa, баланса; crypto/ton/nowpayments — вручную в �
 ## 6. Открытый бэклог (консолидация из всех ledger'ов)
 
 **Roadmap §4:** 4.3 Coinbase/BTCPay (отложено решением — NOWPayments покрывает спрос);
-4.14 per-update ctx + trace propagation (цепочка middleware `func(tgbotapi.Update)`);
+4.14 per-update ctx + trace propagation — **design-spec утверждён 22.09.2026**:
+`docs/superpowers/specs/2026-09-22-update-ctx-trace-design.md` (фактический scope Large,
+staged-миграция с bridge; следующий шаг — writing-plans → SDD);
 4.15 durable actor column в ledger (сейчас webhook/worker settles атрибутированы
-только в логах — §12 payment-operations).
+только в логах — §12 payment-operations; sketch — spec §9, зависит от 4.14).
 
 **Мелкие FOLLOW-UP (без дома, все — polish/покрытие):**
 1. NOWPayments-каноникаizer: пин свойства no-HTML-escape (тест с `<>&` в теле) —
@@ -130,6 +138,19 @@ Stripe, YooKassa, баланса; crypto/ton/nowpayments — вручную в �
     бот `/payreview` печатает raw reason — косметическое расхождение для карточек
     `refund_ledger_failure:order=<id>` (park из финального ревью money-followups;
     рассматривать вместе с §6.9).
+17. `/payreview` action-фильтр key'уется по reason, не по форме факта: degenerate
+    non-digest формы (amount≤0 при не-digest reason — `webhook_invalid_receipt` с
+    непредставимой суммой и т.п.) оставляют мёртвый, но fail-closed `[Settle]`
+    (polish-followups финал M-2; безопасно — storage отвергает). Радикальное решение:
+    exposes amount/external-id presence в целях `ListPaymentReviews` → shape-keyed
+    фильтр. Только если станет операторской annoyance.
+18. Test-hardening batch (parked minors polish-followups): renewal E2E-leg не пинит
+    settled `payment_events`-строку (T6(1)); `called`-флаг в GetPayment-тестах
+    cross-goroutine — atomic/channel для `-race`-строгости (T1(1)); trap-ключ без
+    trailing `\n` при cli_only с `\n` (T8(2), косметика, практически недостижимая ветка).
+19. docs §5/§7: intro-формулировка «order in `needs_review`» loose для digest-only
+    строк (нет order identity) — pre-existing nit (polish-followups T5(4)); чинить
+    вместе с любым будущим docs-проходом по карантин-таблицам.
 
 ## 7. Процесс (как велась работа — воспроизводим)
 
@@ -163,6 +184,23 @@ scoped re-review и низко-рисковые ревью — `alibaba-cn/qwen3
   (TON notifications, Task 12b).
 - verb-parity тест локалей (`TestLocaleFilesHaveMatchingPrintfVerbs`) ловит класс
   багов перестановки `%d/%s` в переводах — держать зелёным.
+- Plan-дефект, найденный по ходу (BLOCKED имплементера / Important ревьюера): контроллер
+  верифицирует факт сам против кода → CORRECTED-ruling в ledger → если задача ещё НЕ
+  исполнена: amend плана + regenerate brief + re-dispatch; если исполнена: fix round с
+  controller-drafted точным текстом. Прецеденты: P7 (renewal semantics), P8 (taxonomy).
+- Pre-authorized stop-условия в диспатче («если DB-asserts упадут до log-assert — STOP и
+  BLOCKED») работают: T6 поймал план-дефект ДО коммита. Включать их в рискованные задачи.
+- Minor elevating: parked Minor становится fix-now, если от него зависит truthfulness
+  ДОКУМЕНТОВ следующей задачи (прецедент T8(1): CHANGELOG-claim «offer only the actions
+  that can actually pass» был бы ложен без полноты digest-набора).
+- Docs-truthfulness — самый рискованный класс: controller-supplied проза §5 ошибалась
+  ДВАЖДЫ (P8, затем I-1). Правила: (а) перед поставкой прозы верифицируй полный механизм
+  grep'ом ВСех writer-сайтов (не только названных в finding); (б) reviewer таких задач
+  делает named-risk truth-checks против кода, модель glm-5.3 даже для «docs-only»;
+  (в) фраза-классификатор должна быть per-reason/per-mechanism, а не per-path — пути
+  часто разделяют один gate.
+- Ревьюер-модель: «docs-only» НЕ автоматически flash — оператор-facing money-доки
+  (CHANGELOG/§5/§11/§12) ревьюит glm-5.3.
 
 ## 8. Deliverables-реестр (11 планов)
 
@@ -182,3 +220,57 @@ scoped re-review и низко-рисковые ревью — `alibaba-cn/qwen3
 
 Плюс: roadmap rewrite (`f6fb155`, `46ab401`, обновления в задачах) и controller-janitorial
 коммиты (gofmt `36a0c84`, coupling-комментарии `9697320`).
+
+## 9. Rulings digest закрытых планов (ledger'ы удалены — раздел служит durable-рекордом)
+
+> Pre-plan ruling'и Полным текстом живут в самих планах (committed): «Design Rulings» R1–R7
+> в `docs/superpowers/plans/2026-09-21-money-followups.md`, P1–P12 (вкл. P7/P8 CORRECTED)
+> в `docs/superpowers/plans/2026-09-21-polish-followups.md`. Здесь — сжатая сводка +
+> внутри-сессионные решения, которые в планах не отражены.
+
+**Money-followups (merge `4dd7842`, финал «With fixes» → fix → re-review APPROVED):**
+- R1: path-5 след = ORPHAN-аномалия (ProposedOrderID=0, БЕЗ needs_review-флипа — флип
+  заблокировал бы /refund re-run remedy за settled-only гейтом); order-link в reason+payload.
+- R2: `balance` в bot payReviewProviders. R3: `BalanceTxExists`→`BalanceTxTotal`
+  (existence+net); LOAD-BEARING комментарии на 3 сайтах. R4: divergence-гард в balance-ветке
+  `executeRefund`, существующее сообщение, без новых ключей. R5: операторские сообщения
+  байт-неизменны. R6: детерминированный RawPayload → одна строка на повторные сбои.
+  R7: outbox/миграция отклонены (несоразмерно).
+- A: printf-фикс snippet'а брифа принят (дефект плана). B: rename в доке `refundableOrder`
+  → в T4. C: исторические упоминания `BalanceTxExists` остаются. D: docs sweep stale-ссылок.
+  T3-minor: mixed-units текст ошибки KEEP as specced.
+- Финал-fix: **E** — CLI `payment-review` принимает `balance` (allow-list+usage; ingest-*
+  НЕ тронуты — balance-факты синтетические); **F** — I-2 docs-only (§11 «Pre-recovery trap»
+  warning + полярность §6.9; БЕЗ code-гейта — orphan `accepted_refund` есть механизм
+  операторского признания); **G** — docs-pass (eight buckets, §10 scoping, §2 += balance).
+
+**Polish-followups (merge `5420f3b`, финал «With fixes» → fix → re-review ADDRESSED):**
+- P1: §6.4 устарел (пин с `ee7f926`); остаток — stripe/nowpayments симметрия. P2: §6.10
+  misattributed → `admin_paystatus.go`, trim-унификация (whitespace ⇒ OFF; production
+  env-path уже тримится config.Load — фикс есть защитная консистентность). P3: ErrNotFound →
+  `admin_payrev_case_gone` на 3 сайтах. P4: orphan-фильтр кнопок по reason-семействам
+  (UX-фильтр, НЕ гейт; storage — финальный валидатор). P5: ru settle → «Урегулировать».
+  P6: 64-байтовый callback-гард (fail-closed → CLI-only). P9–P12: scope/rename-решения (в плане).
+- **P7 CORRECTED** (T6 BLOCKED pre-commit): renewal СОХРАНЯЕТ первоначальный
+  `subscriptions.telegram_charge_id` (ch-sub-1 — на нём держится cancel-leg);
+  `renewSubscriptionTx` продлевает ТОЛЬКО expires_at и требует STRICT-продления
+  (subscription_orders.go:111/:128) → helper +5s; новый charge = succeeded `payment_attempts`-
+  строка (payment_recording.go:370-388). План amended `155055f`.
+- **P8 CORRECTED ×2** (T5 fix `045f200`, затем финал I-1 fix `97af70f`): финальная таксономия
+  карантинов — per-REASON-class, НЕ per-path: `receipt_mismatch`/`unknown_order`/
+  `identity_conflict`/webhook-digest'ы/`webhook_invalid_receipt`/webhook-`out_of_stock` =
+  anomaly-строки; `second_charge`+`capture_after_terminal_state` (order.go:419-423) и
+  `capture_on_unresolved_order` (:373-378) = captures ШАРЕННОГО `ConfirmPaymentReceipt`-гейта
+  (достигают ОБА пути — webhook.go:236 и поллеры); `out_of_stock_after_charge` — ЕДИНСТВЕННЫЙ
+  path-split reason (webhook=anomaly :247, poller=capture :136). Оба механизма флипают order
+  в needs_review и видны в review-очереди.
+- **T8(1) ELEVATED** (fix `1ba1c6d`): digest-only набор ПОЛОН = {`webhook_parse_failure`,
+  `webhook_missing_payment_id`, `stars_update_decode_failure`}; elevation-основание:
+  load-bearing для truthfulness docs Task 10 (см. §7 урок).
+- **FW-1** (финал I-1, fix `97af70f`): §5 intro+параграф переложены mechanism-first
+  per-reason-class; CHANGELOG-парентеза «per path»→«per reason class»; T5(3)/(4)/(5)/(6)
+  свёрнуты; §7 не тронут (true as far as it goes; M-1 subset-enumeration PARK → §6.17-19 дома).
+- Model overrides: T10-ревью и final-fix re-review — glm-5.3 (docs-truthfulness).
+- Парковки финала: M-1 (§7 subset), M-2 (shape-keyed фильтр невозможен bot-side — дом §6.17),
+  T7(1) (preview default-arm → failed — намеренно, правдивее), T8(2)/T8(3) и прочие report/
+  cosmetic-ниты — дома в §6.18-19 либо списаны как report-only.
