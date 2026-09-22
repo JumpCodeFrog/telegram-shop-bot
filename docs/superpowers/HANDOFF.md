@@ -5,14 +5,12 @@
 
 ## 1. Состояние
 
-- **main = `6fe11d7`**, на 120 коммитов впереди `origin/main` (мержи сессии 21–22.09:
-  money-followups `4dd7842`, polish-followups `5420f3b` + janitorial). **НЕ запушено** — push
-  только с явного согласия владельца. Все фичевые ветки сохранены (не удалены).
-- **Следующее большое дело: roadmap 4.14** — design-spec УТВЕРЖДЁН владельцем 22.09.2026:
-  `docs/superpowers/specs/2026-09-22-update-ctx-trace-design.md` (фактический объём Large:
-  79 сайтов `b.handlerCtx()` в 24 файлах + атомарность сигнатур цепочки; стратегия —
-  staged-миграция с временным bridge). Затем 4.15 (sketch — spec §9, свой brainstorm).
-  Ruling'и закрытых планов — §9; следующий шаг — writing-plans из spec.
+- **main = `c67e66e`**, на 133 коммита впереди `origin/main` (мерж 4.14 update-ctx-trace).
+  **НЕ запушено** — push только с явного согласия владельца. Все фичевые ветки сохранены.
+- **Roadmap 4.14 ЗАКРЫТ 22.09.2026** (merge `c67e66e`): per-update ctx + trace через весь
+  chain — spec `docs/superpowers/specs/2026-09-22-update-ctx-trace-design.md` (IMPLEMENTED),
+  план `docs/superpowers/plans/2026-09-22-update-ctx-trace.md`. Следующее большое дело:
+  **roadmap 4.15** (durable actor column — sketch в spec §9, свой brainstorm).
 - Ворота на HEAD: `go build` + `go vet` + `gofmt -l internal/ cmd/ worker/` (пусто) +
   `go test ./...` — зелёные; `-race` на money-пакетах зелёный.
 - Роадмап (§4) закрыт полностью, кроме отложенного решением 4.3 и остатков 4.14/4.15.
@@ -78,11 +76,10 @@ Stripe, YooKassa, баланса; crypto/ton/nowpayments — вручную в �
 ## 6. Открытый бэклог (консолидация из всех ledger'ов)
 
 **Roadmap §4:** 4.3 Coinbase/BTCPay (отложено решением — NOWPayments покрывает спрос);
-4.14 per-update ctx + trace propagation — **design-spec утверждён 22.09.2026**:
-`docs/superpowers/specs/2026-09-22-update-ctx-trace-design.md` (фактический scope Large,
-staged-миграция с bridge; следующий шаг — writing-plans → SDD);
+4.14 ✅ ЗАКРЫТ 22.09.2026 (merge `c67e66e` — per-update ctx + trace, spec IMPLEMENTED);
 4.15 durable actor column в ledger (сейчас webhook/worker settles атрибутированы
-только в логах — §12 payment-operations; sketch — spec §9, зависит от 4.14).
+только в логах — §12 payment-operations; sketch — spec §9, зависит от 4.14 ✅, свой
+brainstorm перед планом).
 
 **Мелкие FOLLOW-UP (без дома, все — polish/покрытие):**
 1. NOWPayments-каноникаizer: пин свойства no-HTML-escape (тест с `<>&` в теле) —
@@ -151,6 +148,10 @@ staged-миграция с bridge; следующий шаг — writing-plans �
 19. docs §5/§7: intro-формулировка «order in `needs_review`» loose для digest-only
     строк (нет order identity) — pre-existing nit (polish-followups T5(4)); чинить
     вместе с любым будущим docs-проходом по карантин-таблицам.
+20. Fleet-wide `loggerFor(ctx)` sweep (4.14 follow-up, spec §8): перевести остальные
+    ~200 handler-логов на trace_id-bound логгер (сейчас — только Logging/Recover +
+    13 payment-critical); в том же заходе добавить Warn-строку на `middleware/auth.go`
+    Upsert-swallow (финал-ревью 4.14, triage #1). Поверхностно, логи только.
 
 ## 7. Процесс (как велась работа — воспроизводим)
 
@@ -202,7 +203,7 @@ scoped re-review и низко-рисковые ревью — `alibaba-cn/qwen3
 - Ревьюер-модель: «docs-only» НЕ автоматически flash — оператор-facing money-доки
   (CHANGELOG/§5/§11/§12) ревьюит glm-5.3.
 
-## 8. Deliverables-реестр (11 планов)
+## 8. Deliverables-реестр (12 планов)
 
 | План | Ветка | Merge | Коммитов | Fix-раундов |
 |---|---|---|---|---|
@@ -217,6 +218,7 @@ scoped re-review и низко-рисковые ревью — `alibaba-cn/qwen3
 | Ctx + attribution (4.7, 4.13) | chore/ctx-attribution | `0f625b7` | 2 | 0 |
 | Money follow-ups (§6.13/6.1/6.7/6.6) | chore/money-followups | `4dd7842` | 8 | 2 (T2 comment direction; финал: CLI balance-бакет + docs-truthfulness) |
 | Polish follow-ups (§6.2/3/4/5/8/9/10/11/14/15) | chore/polish-followups | `5420f3b` | 15 | 3 (T5 P8-таксономия; T8(1) elevated digest-set; финал I-1 §5 recast) + T6 P7 re-dispatch (pre-commit BLOCKED) |
+| Update-ctx + trace (4.14) | feat/update-ctx-trace | `c67e66e` | 12 | 2 (T9 grep-recipe elevated; финал I-1 main.go shutdown-комментарий) |
 
 Плюс: roadmap rewrite (`f6fb155`, `46ab401`, обновления в задачах) и controller-janitorial
 коммиты (gofmt `36a0c84`, coupling-комментарии `9697320`).
@@ -274,3 +276,24 @@ scoped re-review и низко-рисковые ревью — `alibaba-cn/qwen3
 - Парковки финала: M-1 (§7 subset), M-2 (shape-keyed фильтр невозможен bot-side — дом §6.17),
   T7(1) (preview default-arm → failed — намеренно, правдивее), T8(2)/T8(3) и прочие report/
   cosmetic-ниты — дома в §6.18-19 либо списаны как report-only.
+
+**Update-ctx-trace / 4.14 (merge `c67e66e`, финал «With fixes» → fix → re-review ADDRESSED):**
+- Design rulings Q1–Q8 — в spec (IMPLEMENTED). Plan-level: **R1** — spec-Q7 TODO-маркеры
+  отменены, completion-proof = `grep handlerCtx` → EMPTY (равная сила, меньше шума);
+  **R2** — `HandleUpdate(root, update)`: webhook передаёт `r.Context()`, usability-smoke —
+  `context.Background()`; **R3** — `sendMainMenu` остаётся ctx-LAST, `handleWizardPhotoStep`
+  уже ctx-first — без нормализации (минимальный diff).
+- **R4**: T9-minor (grep-рецепт `trace_id=<id>` валиден только для text-handler; production
+  JSON — `"trace_id":"<id>"`) ELEVATED по docs-truthfulness правилу §7 → fix round
+  (двуформатный рецепт) → scoped re-review ADDRESSED. Второй minor («(§12 above)») parked.
+- Финал I-1 (единственный Important за весь план): stale shutdown-комментарий в
+  `cmd/bot/main.go` («per-handler») — fix `b501509`, re-review подтвердил truthfulness
+  всех трёх утверждений нового комментария.
+- Триаж deferred minors финала (все PARKED с причинами): auth Upsert-swallow (pre-existing;
+  warn-строка — в §6.20 fleet-sweep), SetRootContext×3 в тесте (test-local), blank-line
+  removals (gofmt-идиоматика), report-арифметика T6/T8 (process-артефакты), «(§12 above)».
+- Отступления принятые по ходу: T1 extra-file `admin_refunds_test.go` (прямой вызов
+  `e.handle` — forced minimal fix, plan-gap); T7 четвёртый stale-комментарий (bot.go:231,
+  plan-gap, минимальная правка). Оба — plan-дополнения controller-approved.
+- Ревьюеры: T1–T4/T6/T8/T9 glm-5.3, T5/T7/re-reviews qwen3.8-flash, финал qwen3.8-max-0902.
+  -race гейты: T1/T4/T6/T7 зелёные (включая double-tap refundMu pin).

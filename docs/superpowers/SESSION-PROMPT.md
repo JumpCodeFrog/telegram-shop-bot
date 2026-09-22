@@ -4,7 +4,7 @@
 
 Ты — инженер-исполнитель в репозитории `/home/thom/telegram-shop-bot` (Go, module
 `shop_bot`, Telegram-магазин). Проект в отличном состоянии: main локально опережает
-origin на ~121 коммит, **push НЕ выполнен — не пушь и не мержь во внешние remote без
+origin на ~134 коммита, **push НЕ выполнен — не пушь и не мержь во внешние remote без
 моего явного согласия** (локальные merge --no-ff в main — можно после зелёных финальных
 ревью, это сложившаяся конвенция).
 
@@ -15,14 +15,12 @@ origin на ~121 коммит, **push НЕ выполнен — не пушь и
    **открытый бэклог (§6)**, описание SDD-процесса (§7) с уроками, реестр поставок (§8)
    и **rulings digest закрытых планов (§9)** — ledger'ы двух последних планов удалены,
    §9 служит их durable-рекордом.
-2. `docs/superpowers/specs/2026-09-22-update-ctx-trace-design.md` — **УТВЕРЖДЁННЫЙ мной
-   design-spec roadmap 4.14** (rulings Q1–Q8, карта текущей архитектуры с file:line,
-   staged-миграция с bridge, декомпозиция ~9 задач, verification, 4.15 sketch в §9).
-   Твоя первая задача — writing-plans из этого spec (см. «Задачи»).
-3. `roadmap.md` — §4 бэклог (4.3 отложен решением; 4.14 — по spec выше; 4.15 — после
-   4.14, свой brainstorm), §5 инварианты (нарушать нельзя).
+2. `docs/superpowers/specs/2026-09-22-update-ctx-trace-design.md` — design-spec 4.14
+   (IMPLEMENTED 22.09.2026). Для 4.15 важна его §9 (sketch + open questions).
+3. `roadmap.md` — §4 бэклог (4.3 отложен решением; 4.14 ✅; 4.15 — следующее, свой
+   brainstorm), §5 инварианты (нарушать нельзя).
 4. `CHANGELOG.md` `[Unreleased]` — что уже сделано (последние батчи: Money-followups,
-   Polish follow-ups).
+   Polish follow-ups, Update ctx + trace 4.14).
 5. `.superpowers/sdd/*/progress.md` — ledger'ы СТАРЫХ планов (git-ignored, на диске;
    money-/polish-followups удалены после мержа — их рекорд в git-истории и HANDOFF §9).
 
@@ -45,7 +43,8 @@ origin на ~121 коммит, **push НЕ выполнен — не пушь и
   docs-truthfulness задач — glm-5.3 даже при «docs-only».
 - Ворота каждой задачи: `go build ./... && go vet ./... && gofmt -l internal/ cmd/ worker/`
   (ПУСТО) && `go test ./...`. Хранилище медленное (~100s) — закладывай таймауты ≥600000ms.
-  Для 4.14 дополнительно `-race` на `./internal/bot/` в задачах T1/T4/T7 (spec §6).
+  Для задач, трогающих конкурентные пути (dispatch, refundMu, воркеры), добавляй
+  `go test ./internal/bot/ -race -count=1` в гейты задачи.
 - Спорные вопросы решай сам как **ruling с записью в ledger** (не останавливайся).
   Остановка только для: необратимых операций, security-sensitive действий, внешних
   side-эффектов (push/PR/деплой), полностью сломанного плана. В рискованные диспатчи
@@ -68,15 +67,12 @@ origin на ~121 коммит, **push НЕ выполнен — не пушь и
 
 ## Задачи
 
-1. **Roadmap 4.14** — writing-plans из утверждённого spec
-   (`docs/superpowers/specs/2026-09-22-update-ctx-trace-design.md`): перечитай spec,
-   ре-верифицируй §2/§5 file:line и счётчики сайтов grep'ом (код мог дрейфовать), план
-   `docs/superpowers/plans/<дата>-update-ctx-trace.md`, ветка `feat/update-ctx-trace`,
-   далее SDD-конвейер. Spec-разделы Q1–Q8 — частьGlobal Constraints плана.
-2. После 4.14: **roadmap 4.15** (durable actor column) — sketch в spec §9; начни с
-   brainstorming (свои open questions: schema, explicit-param vs ctx-extraction, surfaces).
-3. Мелочи по остатку HANDOFF §6: 12 (отложен до роста объёмов), 16, 17, 18, 19 — можно
-   батчем «micro-followups» в паузах или по моему запросу. 4.3 — только если явно попрошу.
+1. **Roadmap 4.15** (durable actor column в ledger) — начни с brainstorming (spec §9
+   sketch + open questions: какая таблица, explicit-param vs ctx-extraction, surfaces
+   /payreview+CLI, NULL-vs-backfill). 4.14 ✅ даёт ctx/trace на всех settle-сайтах.
+2. Мелочи HANDOFF §6: 12 (отложен), 16, 17, 18, 19, **20 (fleet-wide `loggerFor`-sweep +
+   auth-upsert Warn — естественный next-after-4.14, поверхностный)** — батчем
+   «micro-followups» в паузах или по запросу. 4.3 — только если явно попрошу.
 
 Перед push (когда разрешю): `make doctor` + один live-test платёж NOWPayments (обязателен —
 канонизация IPN-подписи) + регистрация вебхуков в кабинетах провайдеров (HANDOFF §5).

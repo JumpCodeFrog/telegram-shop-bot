@@ -1,7 +1,6 @@
 # Design Spec — Roadmap 4.14: per-update ctx + trace propagation
 
-> **Status:** design APPROVED by the owner 22.09.2026. This spec is the authority for
-> `superpowers:writing-plans` → SDD execution in the next session.
+> **Status:** IMPLEMENTED 22.09.2026 — merge `c67e66e` (branch `feat/update-ctx-trace`, 9 tasks + final-review fix, ledger `.superpowers/sdd/2026-09-22-update-ctx-trace/` deleted post-merge; rulings digest — HANDOFF §9).
 > **Author:** controller session 21–22.09.2026 (after `chore/money-followups` merge
 > `4dd7842` and `chore/polish-followups` merge `5420f3b`).
 > **Base for planning:** main tip at session start (run `git log --oneline -3`; this spec
