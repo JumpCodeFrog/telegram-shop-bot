@@ -574,8 +574,8 @@ func (b *Bot) handlePreCheckout(query *tgbotapi.PreCheckoutQuery) {
 // handleSuccessfulPayment is the router-compatible wrapper. Provider ingress
 // calls processSuccessfulPayment directly so it can withhold its ACK when no
 // durable settlement or review fact could be written.
-func (b *Bot) handleSuccessfulPayment(msg *tgbotapi.Message) {
-	if err := b.processSuccessfulPayment(msg); err != nil {
+func (b *Bot) handleSuccessfulPayment(ctx context.Context, msg *tgbotapi.Message) {
+	if err := b.processSuccessfulPayment(ctx, msg); err != nil {
 		b.logger.Error("Stars payment was not durably handled", "error", err)
 	}
 }
@@ -584,7 +584,7 @@ func (b *Bot) handleSuccessfulPayment(msg *tgbotapi.Message) {
 // means the charge was either settled, recognized as an exact replay, or
 // durably quarantined for operator review. Any non-nil result is retryable by
 // the Telegram webhook/polling ingress and must not be acknowledged there.
-func (b *Bot) processSuccessfulPayment(msg *tgbotapi.Message) error {
+func (b *Bot) processSuccessfulPayment(ctx context.Context, msg *tgbotapi.Message) error {
 	if msg == nil {
 		return nil
 	}
@@ -595,8 +595,6 @@ func (b *Bot) processSuccessfulPayment(msg *tgbotapi.Message) error {
 
 	orderID, err := strconv.ParseInt(sp.InvoicePayload, 10, 64)
 	if err != nil || orderID <= 0 {
-		ctx, cancel := b.handlerCtx()
-		defer cancel()
 		if quarantineErr := b.recordStarsPaymentAnomaly(ctx, msg, 0, "stars_invalid_order_payload"); quarantineErr != nil {
 			return fmt.Errorf("parse Stars order ID and quarantine provider fact: %w", quarantineErr)
 		}
@@ -604,8 +602,6 @@ func (b *Bot) processSuccessfulPayment(msg *tgbotapi.Message) error {
 		return nil
 	}
 
-	ctx, cancel := b.handlerCtx()
-	defer cancel()
 	payerID := int64(0)
 	if msg.From != nil {
 		payerID = msg.From.ID

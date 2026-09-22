@@ -2,6 +2,7 @@ package bot
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -85,10 +86,10 @@ func TestLoggingMiddleware_LogsFields(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(&buf, nil))
 
 	called := false
-	handler := func(u tgbotapi.Update) { called = true }
+	handler := func(ctx context.Context, u tgbotapi.Update) { called = true }
 
 	wrapped := LoggingMiddleware(logger)(handler)
-	wrapped(newMessageUpdate(42))
+	wrapped(context.Background(), newMessageUpdate(42))
 
 	if !called {
 		t.Fatal("handler was not called")
@@ -110,9 +111,9 @@ func TestLoggingMiddleware_CallbackQuery(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, nil))
 
-	handler := func(u tgbotapi.Update) {}
+	handler := func(ctx context.Context, u tgbotapi.Update) {}
 	wrapped := LoggingMiddleware(logger)(handler)
-	wrapped(newCallbackUpdate(99))
+	wrapped(context.Background(), newCallbackUpdate(99))
 
 	logOutput := buf.String()
 	if !strings.Contains(logOutput, "type=callback_query") {
@@ -130,10 +131,10 @@ func TestRecoverMiddleware_NoPanic(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(&buf, nil))
 
 	called := false
-	handler := func(u tgbotapi.Update) { called = true }
+	handler := func(ctx context.Context, u tgbotapi.Update) { called = true }
 
 	wrapped := RecoverMiddleware(logger)(handler)
-	wrapped(tgbotapi.Update{})
+	wrapped(context.Background(), tgbotapi.Update{})
 
 	if !called {
 		t.Fatal("handler was not called")
@@ -147,12 +148,12 @@ func TestRecoverMiddleware_CatchesPanic(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, nil))
 
-	handler := func(u tgbotapi.Update) { panic("test panic") }
+	handler := func(ctx context.Context, u tgbotapi.Update) { panic("test panic") }
 
 	wrapped := RecoverMiddleware(logger)(handler)
 
 	// Should not panic
-	wrapped(tgbotapi.Update{})
+	wrapped(context.Background(), tgbotapi.Update{})
 
 	logOutput := buf.String()
 	if !strings.Contains(logOutput, "PANIC recovered") {
@@ -168,7 +169,7 @@ func TestRecoverMiddleware_ContinuesAfterPanic(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(&buf, nil))
 
 	callCount := 0
-	handler := func(u tgbotapi.Update) {
+	handler := func(ctx context.Context, u tgbotapi.Update) {
 		callCount++
 		if callCount == 1 {
 			panic("first call panic")
@@ -178,9 +179,9 @@ func TestRecoverMiddleware_ContinuesAfterPanic(t *testing.T) {
 	wrapped := RecoverMiddleware(logger)(handler)
 
 	// First call panics — should be recovered
-	wrapped(tgbotapi.Update{})
+	wrapped(context.Background(), tgbotapi.Update{})
 	// Second call should work fine
-	wrapped(tgbotapi.Update{})
+	wrapped(context.Background(), tgbotapi.Update{})
 
 	if callCount != 2 {
 		t.Fatalf("expected 2 calls, got %d", callCount)
@@ -191,10 +192,10 @@ func TestRecoverMiddleware_ContinuesAfterPanic(t *testing.T) {
 
 func TestAdminOnly_AllowsAdmin(t *testing.T) {
 	called := false
-	handler := func(u tgbotapi.Update) { called = true }
+	handler := func(ctx context.Context, u tgbotapi.Update) { called = true }
 
 	wrapped := AdminOnly([]int64{100, 200})(handler)
-	wrapped(newMessageUpdate(100))
+	wrapped(context.Background(), newMessageUpdate(100))
 
 	if !called {
 		t.Fatal("handler was not called for admin")
@@ -203,10 +204,10 @@ func TestAdminOnly_AllowsAdmin(t *testing.T) {
 
 func TestAdminOnly_BlocksNonAdmin(t *testing.T) {
 	called := false
-	handler := func(u tgbotapi.Update) { called = true }
+	handler := func(ctx context.Context, u tgbotapi.Update) { called = true }
 
 	wrapped := AdminOnly([]int64{100, 200})(handler)
-	wrapped(newMessageUpdate(999))
+	wrapped(context.Background(), newMessageUpdate(999))
 
 	if called {
 		t.Fatal("handler was called for non-admin")
@@ -215,10 +216,10 @@ func TestAdminOnly_BlocksNonAdmin(t *testing.T) {
 
 func TestAdminOnly_BlocksZeroUserID(t *testing.T) {
 	called := false
-	handler := func(u tgbotapi.Update) { called = true }
+	handler := func(ctx context.Context, u tgbotapi.Update) { called = true }
 
 	wrapped := AdminOnly([]int64{100})(handler)
-	wrapped(tgbotapi.Update{}) // no user info → userID=0
+	wrapped(context.Background(), tgbotapi.Update{}) // no user info → userID=0
 
 	if called {
 		t.Fatal("handler was called for zero user_id")
@@ -227,10 +228,10 @@ func TestAdminOnly_BlocksZeroUserID(t *testing.T) {
 
 func TestAdminOnly_EmptyAdminList(t *testing.T) {
 	called := false
-	handler := func(u tgbotapi.Update) { called = true }
+	handler := func(ctx context.Context, u tgbotapi.Update) { called = true }
 
 	wrapped := AdminOnly([]int64{})(handler)
-	wrapped(newMessageUpdate(42))
+	wrapped(context.Background(), newMessageUpdate(42))
 
 	if called {
 		t.Fatal("handler was called with empty admin list")
@@ -239,10 +240,10 @@ func TestAdminOnly_EmptyAdminList(t *testing.T) {
 
 func TestAdminOnly_CallbackQuery(t *testing.T) {
 	called := false
-	handler := func(u tgbotapi.Update) { called = true }
+	handler := func(ctx context.Context, u tgbotapi.Update) { called = true }
 
 	wrapped := AdminOnly([]int64{77})(handler)
-	wrapped(newCallbackUpdate(77))
+	wrapped(context.Background(), newCallbackUpdate(77))
 
 	if !called {
 		t.Fatal("handler was not called for admin via callback")
@@ -254,27 +255,27 @@ func TestAdminOnly_CallbackQuery(t *testing.T) {
 func TestChain_AppliesInOrder(t *testing.T) {
 	var order []string
 
-	mw1 := func(h func(tgbotapi.Update)) func(tgbotapi.Update) {
-		return func(u tgbotapi.Update) {
+	mw1 := func(h func(ctx context.Context, u tgbotapi.Update)) func(ctx context.Context, u tgbotapi.Update) {
+		return func(ctx context.Context, u tgbotapi.Update) {
 			order = append(order, "mw1-before")
-			h(u)
+			h(ctx, u)
 			order = append(order, "mw1-after")
 		}
 	}
-	mw2 := func(h func(tgbotapi.Update)) func(tgbotapi.Update) {
-		return func(u tgbotapi.Update) {
+	mw2 := func(h func(ctx context.Context, u tgbotapi.Update)) func(ctx context.Context, u tgbotapi.Update) {
+		return func(ctx context.Context, u tgbotapi.Update) {
 			order = append(order, "mw2-before")
-			h(u)
+			h(ctx, u)
 			order = append(order, "mw2-after")
 		}
 	}
 
-	handler := func(u tgbotapi.Update) {
+	handler := func(ctx context.Context, u tgbotapi.Update) {
 		order = append(order, "handler")
 	}
 
 	chained := Chain(handler, mw1, mw2)
-	chained(tgbotapi.Update{})
+	chained(context.Background(), tgbotapi.Update{})
 
 	expected := []string{"mw1-before", "mw2-before", "handler", "mw2-after", "mw1-after"}
 	if len(order) != len(expected) {
@@ -297,7 +298,7 @@ func TestProperty_AdminOnlyAccess(t *testing.T) {
 		adminIDs := rapid.SliceOfNDistinct(rapid.Int64Range(1, 1_000_000), 1, 10, func(id int64) int64 { return id }).Draw(t, "adminIDs")
 
 		called := false
-		handler := func(u tgbotapi.Update) { called = true }
+		handler := func(ctx context.Context, u tgbotapi.Update) { called = true }
 		wrapped := AdminOnly(adminIDs)(handler)
 
 		// Pick a random admin from the list — handler MUST be called.
@@ -305,14 +306,14 @@ func TestProperty_AdminOnlyAccess(t *testing.T) {
 		adminID := adminIDs[adminIdx]
 
 		called = false
-		wrapped(newMessageUpdate(adminID))
+		wrapped(context.Background(), newMessageUpdate(adminID))
 		if !called {
 			t.Fatalf("handler was NOT called for admin user_id=%d, adminIDs=%v", adminID, adminIDs)
 		}
 
 		// Also test via callback update.
 		called = false
-		wrapped(newCallbackUpdate(adminID))
+		wrapped(context.Background(), newCallbackUpdate(adminID))
 		if !called {
 			t.Fatalf("handler was NOT called for admin (callback) user_id=%d", adminID)
 		}
@@ -328,7 +329,7 @@ func TestProperty_AdminOnlyAccess(t *testing.T) {
 		}
 		if !isAdmin {
 			called = false
-			wrapped(newMessageUpdate(nonAdminID))
+			wrapped(context.Background(), newMessageUpdate(nonAdminID))
 			if called {
 				t.Fatalf("handler was called for non-admin user_id=%d, adminIDs=%v", nonAdminID, adminIDs)
 			}
@@ -346,7 +347,7 @@ func TestProperty_LoggingContainsRequiredFields(t *testing.T) {
 		var buf bytes.Buffer
 		logger := slog.New(slog.NewTextHandler(&buf, nil))
 
-		handler := func(u tgbotapi.Update) {}
+		handler := func(ctx context.Context, u tgbotapi.Update) {}
 		wrapped := LoggingMiddleware(logger)(handler)
 
 		var update tgbotapi.Update
@@ -359,7 +360,7 @@ func TestProperty_LoggingContainsRequiredFields(t *testing.T) {
 			expectedType = "message"
 		}
 
-		wrapped(update)
+		wrapped(context.Background(), update)
 
 		logOutput := buf.String()
 
@@ -389,7 +390,7 @@ func TestProperty_RecoverMiddlewareCatchesPanics(t *testing.T) {
 		var buf bytes.Buffer
 		logger := slog.New(slog.NewTextHandler(&buf, nil))
 
-		panicHandler := func(u tgbotapi.Update) {
+		panicHandler := func(ctx context.Context, u tgbotapi.Update) {
 			panic(panicMsg)
 		}
 		wrapped := RecoverMiddleware(logger)(panicHandler)
@@ -401,7 +402,7 @@ func TestProperty_RecoverMiddlewareCatchesPanics(t *testing.T) {
 					t.Fatalf("RecoverMiddleware did not catch panic: %v", r)
 				}
 			}()
-			wrapped(tgbotapi.Update{})
+			wrapped(context.Background(), tgbotapi.Update{})
 		}()
 
 		logOutput := buf.String()
@@ -415,11 +416,44 @@ func TestProperty_RecoverMiddlewareCatchesPanics(t *testing.T) {
 		// Second call — middleware must still work after catching a panic.
 		buf.Reset()
 		secondCalled := false
-		normalHandler := func(u tgbotapi.Update) { secondCalled = true }
+		normalHandler := func(ctx context.Context, u tgbotapi.Update) { secondCalled = true }
 		wrappedNormal := RecoverMiddleware(logger)(normalHandler)
-		wrappedNormal(tgbotapi.Update{})
+		wrappedNormal(context.Background(), tgbotapi.Update{})
 		if !secondCalled {
 			t.Fatal("handler was not called on subsequent invocation after panic recovery")
 		}
 	})
+}
+
+func TestLoggingMiddleware_LogsTraceAndUpdateID(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+	b := &Bot{}
+	upd := newMessageUpdate(42)
+	upd.UpdateID = 777
+	ctx, cancel := b.newUpdateCtx(nil, upd)
+	defer cancel()
+	mw := LoggingMiddleware(logger)
+	mw(func(ctx context.Context, update tgbotapi.Update) {})(ctx, upd)
+	out := buf.String()
+	if !strings.Contains(out, "trace_id="+TraceID(ctx)) {
+		t.Fatalf("log missing trace_id: %s", out)
+	}
+	if !strings.Contains(out, "update_id=777") {
+		t.Fatalf("log missing update_id: %s", out)
+	}
+}
+
+func TestRecoverMiddleware_LogsTraceID(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+	b := &Bot{}
+	upd := newMessageUpdate(42)
+	ctx, cancel := b.newUpdateCtx(nil, upd)
+	defer cancel()
+	mw := RecoverMiddleware(logger)
+	mw(func(ctx context.Context, update tgbotapi.Update) { panic("boom") })(ctx, upd)
+	if !strings.Contains(buf.String(), "trace_id="+TraceID(ctx)) {
+		t.Fatalf("panic log missing trace_id: %s", buf.String())
+	}
 }

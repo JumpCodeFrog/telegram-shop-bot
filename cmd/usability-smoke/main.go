@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -414,54 +415,54 @@ func main() {
 	fmt.Println("Сценарий: /start -> каталог -> товар -> + на карточке -> /cart -> +1 -> checkout -> confirm -> terms/support -> Stars invoice")
 
 	startCalls := step("/start", recorder, func() {
-		b.HandleUpdate(commandUpdate(1, chatID, userID, "/start", lang))
+		b.HandleUpdate(context.Background(), commandUpdate(1, chatID, userID, "/start", lang))
 	})
 	welcomeMsgID := lastMessageID(startCalls)
 
 	step("Каталог из главного меню", recorder, func() {
-		b.HandleUpdate(callbackUpdate(2, chatID, userID, welcomeMsgID, "back:catalog", lang))
+		b.HandleUpdate(context.Background(), callbackUpdate(2, chatID, userID, welcomeMsgID, "back:catalog", lang))
 	})
 
 	step("Список товаров категории", recorder, func() {
-		b.HandleUpdate(callbackUpdate(3, chatID, userID, welcomeMsgID, "category:1", lang))
+		b.HandleUpdate(context.Background(), callbackUpdate(3, chatID, userID, welcomeMsgID, "category:1", lang))
 	})
 
 	step("Карточка товара", recorder, func() {
-		b.HandleUpdate(callbackUpdate(4, chatID, userID, welcomeMsgID, "product:1", lang))
+		b.HandleUpdate(context.Background(), callbackUpdate(4, chatID, userID, welcomeMsgID, "product:1", lang))
 	})
 
 	step("Плюс на карточке товара", recorder, func() {
-		b.HandleUpdate(callbackUpdate(5, chatID, userID, welcomeMsgID, "productqty:plus:1", lang))
+		b.HandleUpdate(context.Background(), callbackUpdate(5, chatID, userID, welcomeMsgID, "productqty:plus:1", lang))
 	})
 
 	cartCalls := step("/cart", recorder, func() {
-		b.HandleUpdate(commandUpdate(6, chatID, userID, "/cart", lang))
+		b.HandleUpdate(context.Background(), commandUpdate(6, chatID, userID, "/cart", lang))
 	})
 	cartMsgID := lastMessageID(cartCalls)
 
 	step("Увеличение количества в корзине", recorder, func() {
-		b.HandleUpdate(callbackUpdate(7, chatID, userID, cartMsgID, "cart:plus:1", lang))
+		b.HandleUpdate(context.Background(), callbackUpdate(7, chatID, userID, cartMsgID, "cart:plus:1", lang))
 	})
 
 	step("Checkout", recorder, func() {
-		b.HandleUpdate(callbackUpdate(8, chatID, userID, cartMsgID, "cart:checkout", lang))
+		b.HandleUpdate(context.Background(), callbackUpdate(8, chatID, userID, cartMsgID, "cart:checkout", lang))
 	})
 
 	paymentCalls := step("Подтверждение заказа", recorder, func() {
-		b.HandleUpdate(callbackUpdate(9, chatID, userID, cartMsgID, "order:confirm", lang))
+		b.HandleUpdate(context.Background(), callbackUpdate(9, chatID, userID, cartMsgID, "order:confirm", lang))
 	})
 	paymentMsgID := lastMessageID(paymentCalls)
 
 	step("Условия покупки", recorder, func() {
-		b.HandleUpdate(callbackUpdate(10, chatID, userID, paymentMsgID, "terms", lang))
+		b.HandleUpdate(context.Background(), callbackUpdate(10, chatID, userID, paymentMsgID, "terms", lang))
 	})
 
 	step("Поддержка по оплате", recorder, func() {
-		b.HandleUpdate(commandUpdate(11, chatID, userID, "/paysupport", lang))
+		b.HandleUpdate(context.Background(), commandUpdate(11, chatID, userID, "/paysupport", lang))
 	})
 
 	step("Запрос Stars invoice", recorder, func() {
-		b.HandleUpdate(callbackUpdate(12, chatID, userID, paymentMsgID, "pay:stars:1", lang))
+		b.HandleUpdate(context.Background(), callbackUpdate(12, chatID, userID, paymentMsgID, "pay:stars:1", lang))
 	})
 
 	fmt.Println("Итог: сценарий пройден локально через фейковый Telegram API без реального клиента.")

@@ -116,8 +116,9 @@ type Bot struct {
 	// constructors keep working unchanged.
 	rootCtx context.Context
 
-	// handler is the fully-chained update handler (used for both polling and webhook).
-	handler func(tgbotapi.Update)
+	// handler is the fully-chained update handler (used for both polling and
+	// webhook); every call passes the per-update ctx.
+	handler func(ctx context.Context, update tgbotapi.Update)
 
 	handlerOnce sync.Once
 }
@@ -261,7 +262,7 @@ func (b *Bot) prepareHandler(ctx context.Context) {
 	b.handler = Chain(b.route,
 		LoggingMiddleware(b.logger, b.metrics),
 		RecoverMiddleware(b.logger),
-		middleware.Auth(b.users, b.handlerCtx),
+		middleware.Auth(b.users),
 		RateLimitMiddleware(ctx, rate.Every(10*time.Second/30), 10),
 	)
 }
@@ -418,7 +419,9 @@ func (b *Bot) Run(ctx context.Context) error {
 				// A payment is an ordering barrier. Finish older updates first, then
 				// advance getUpdates offset only after settlement/review is durable.
 				wg.Wait()
-				err := b.processSuccessfulPayment(update.Message)
+				uCtx, uCancel := b.newUpdateCtx(ctx, update)
+				err := b.processSuccessfulPayment(uCtx, update.Message)
+				uCancel()
 				cleanup()
 				if err != nil {
 					b.logger.Error("polling Stars payment not durably handled", "update_id", update.UpdateID, "error", err)
@@ -444,7 +447,9 @@ func (b *Bot) Run(ctx context.Context) error {
 			go func(upd tgbotapi.Update, done func()) {
 				defer wg.Done()
 				defer done()
-				b.handler(upd)
+				uCtx, uCancel := b.newUpdateCtx(ctx, upd)
+				defer uCancel()
+				b.handler(uCtx, upd)
 			}(update, cleanup)
 		}
 		if retryBatch {
@@ -461,12 +466,16 @@ func (b *Bot) Run(ctx context.Context) error {
 }
 
 // HandleUpdate processes a single Telegram update through the full middleware
-// chain. It is useful for local smoke tooling and webhook-style entry points.
-func (b *Bot) HandleUpdate(update tgbotapi.Update) {
+// chain. root scopes the update's processing (the webhook passes its request
+// ctx); nil falls back to the process root, then Background. Used by the
+// Telegram webhook and local smoke tooling.
+func (b *Bot) HandleUpdate(root context.Context, update tgbotapi.Update) {
 	// ensureHandler keeps this ctx for the handler-chain lifetime (rate-limit
-	// cleanup goroutine), so it must be background, not a 30s handlerCtx.
+	// cleanup goroutine), so it must be background, not a per-update ctx.
 	b.ensureHandler(context.Background())
-	b.handler(update)
+	uCtx, cancel := b.newUpdateCtx(root, update)
+	defer cancel()
+	b.handler(uCtx, update)
 }
 
 // RegisterTelegramWebhook registers the bot's webhook URL with the Telegram API.

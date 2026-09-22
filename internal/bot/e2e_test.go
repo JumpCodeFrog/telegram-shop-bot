@@ -144,7 +144,7 @@ type e2eEnv struct {
 	db      *storage.DB
 	bot     *Bot
 	tg      *fakeTelegram
-	handle  func(tgbotapi.Update)
+	handle  func(ctx context.Context, upd tgbotapi.Update)
 	updSeq  int
 	catID   int64
 	prodReg int64 // regular product: $10 / 500⭐, stock 5
@@ -208,7 +208,7 @@ func newE2EEnvWithConfig(t *testing.T, mutate func(*config.Config)) *e2eEnv {
 		// The production chain minus rate limiting (its per-user token bucket
 		// would silently drop mid-journey updates) and logging. Auth stays:
 		// it upserts users exactly like production.
-		handle: middleware.Auth(b.users, b.handlerCtx)(b.route),
+		handle: middleware.Auth(b.users)(b.route),
 	}
 	env.seedCatalog()
 	return env
@@ -277,7 +277,9 @@ func (e *e2eEnv) seedCatalog() {
 func (e *e2eEnv) do(upd tgbotapi.Update) []tgCall {
 	e.t.Helper()
 	before := e.tg.count()
-	e.handle(upd)
+	ctx, cancel := e.bot.newUpdateCtx(context.Background(), upd)
+	defer cancel()
+	e.handle(ctx, upd)
 	return e.tg.since(before)
 }
 

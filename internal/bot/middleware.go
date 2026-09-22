@@ -13,8 +13,9 @@ import (
 	"shop_bot/internal/service"
 )
 
-// Middleware wraps a handler function, adding cross-cutting behavior.
-type Middleware func(handler func(update tgbotapi.Update)) func(update tgbotapi.Update)
+// Middleware wraps a ctx-aware handler function, adding cross-cutting
+// behavior. The ctx is the per-update context derived at ingress.
+type Middleware func(handler func(ctx context.Context, update tgbotapi.Update)) func(ctx context.Context, update tgbotapi.Update)
 
 // extractUserID returns the user ID from an update, or 0 if not available.
 func extractUserID(update tgbotapi.Update) int64 {
@@ -56,18 +57,20 @@ func LoggingMiddleware(logger *slog.Logger, metrics ...*service.MetricsService) 
 	if len(metrics) > 0 {
 		m = metrics[0]
 	}
-	return func(handler func(update tgbotapi.Update)) func(update tgbotapi.Update) {
-		return func(update tgbotapi.Update) {
+	return func(handler func(ctx context.Context, update tgbotapi.Update)) func(ctx context.Context, update tgbotapi.Update) {
+		return func(ctx context.Context, update tgbotapi.Update) {
 			start := time.Now()
 			userID := extractUserID(update)
 			uType := updateType(update)
 
-			handler(update)
+			handler(ctx, update)
 
 			duration := time.Since(start)
 			logger.Info("incoming update",
 				"type", uType,
 				"user_id", userID,
+				"update_id", update.UpdateID,
+				"trace_id", TraceID(ctx),
 				"timestamp", start.Format(time.RFC3339Nano),
 				"duration_ms", duration.Milliseconds(),
 			)
@@ -80,18 +83,20 @@ func LoggingMiddleware(logger *slog.Logger, metrics ...*service.MetricsService) 
 
 // RecoverMiddleware catches panics in the handler, logs the stack trace, and continues processing.
 func RecoverMiddleware(logger *slog.Logger) Middleware {
-	return func(handler func(update tgbotapi.Update)) func(update tgbotapi.Update) {
-		return func(update tgbotapi.Update) {
+	return func(handler func(ctx context.Context, update tgbotapi.Update)) func(ctx context.Context, update tgbotapi.Update) {
+		return func(ctx context.Context, update tgbotapi.Update) {
 			defer func() {
 				if r := recover(); r != nil {
 					stack := debug.Stack()
 					logger.Error("PANIC recovered",
 						"error", r,
+						"update_id", update.UpdateID,
+						"trace_id", TraceID(ctx),
 						"stack", string(stack),
 					)
 				}
 			}()
-			handler(update)
+			handler(ctx, update)
 		}
 	}
 }
@@ -103,13 +108,13 @@ func AdminOnly(adminIDs []int64) Middleware {
 	for _, id := range adminIDs {
 		allowed[id] = struct{}{}
 	}
-	return func(handler func(update tgbotapi.Update)) func(update tgbotapi.Update) {
-		return func(update tgbotapi.Update) {
+	return func(handler func(ctx context.Context, update tgbotapi.Update)) func(ctx context.Context, update tgbotapi.Update) {
+		return func(ctx context.Context, update tgbotapi.Update) {
 			userID := extractUserID(update)
 			if _, ok := allowed[userID]; !ok {
 				return
 			}
-			handler(update)
+			handler(ctx, update)
 		}
 	}
 }
@@ -123,7 +128,9 @@ type userLimiter struct {
 // RateLimitMiddleware enforces a per-user token bucket rate limit.
 // Each user gets a burst of burstSize requests, replenishing at r per second.
 // Updates without a user ID (e.g. PreCheckoutQuery) always pass through.
-// Stale entries are evicted every hour. ctx controls the cleanup goroutine.
+// Stale entries are evicted every hour. ctx controls the cleanup goroutine
+// and is process-lifetime; it is unrelated to the per-update ctx the chain
+// carries.
 func RateLimitMiddleware(ctx context.Context, r rate.Limit, burstSize int) Middleware {
 	var mu sync.Mutex
 	limiters := make(map[int64]*userLimiter)
@@ -160,20 +167,20 @@ func RateLimitMiddleware(ctx context.Context, r rate.Limit, burstSize int) Middl
 		return ul.limiter
 	}
 
-	return func(handler func(update tgbotapi.Update)) func(update tgbotapi.Update) {
-		return func(update tgbotapi.Update) {
+	return func(handler func(ctx context.Context, update tgbotapi.Update)) func(ctx context.Context, update tgbotapi.Update) {
+		return func(ctx context.Context, update tgbotapi.Update) {
 			userID := extractUserID(update)
 			if userID != 0 && !getLimiter(userID).Allow() {
 				return
 			}
-			handler(update)
+			handler(ctx, update)
 		}
 	}
 }
 
 // Chain applies middlewares in order, wrapping the handler from right to left.
 // The first middleware in the list is the outermost wrapper.
-func Chain(handler func(update tgbotapi.Update), middlewares ...Middleware) func(update tgbotapi.Update) {
+func Chain(handler func(ctx context.Context, update tgbotapi.Update), middlewares ...Middleware) func(ctx context.Context, update tgbotapi.Update) {
 	for i := len(middlewares) - 1; i >= 0; i-- {
 		handler = middlewares[i](handler)
 	}

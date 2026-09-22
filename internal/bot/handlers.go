@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"context"
 	"strconv"
 	"strings"
 
@@ -8,7 +9,7 @@ import (
 )
 
 // route dispatches an incoming update to the appropriate handler.
-func (b *Bot) route(update tgbotapi.Update) {
+func (b *Bot) route(ctx context.Context, update tgbotapi.Update) {
 	switch {
 	case update.PreCheckoutQuery != nil:
 		b.handlePreCheckout(update.PreCheckoutQuery)
@@ -17,26 +18,23 @@ func (b *Bot) route(update tgbotapi.Update) {
 		b.handleInlineQuery(update.InlineQuery)
 
 	case update.Message != nil:
-		b.routeMessage(update.Message)
+		b.routeMessage(ctx, update.Message)
 
 	case update.CallbackQuery != nil:
-		b.handleCallback(update.CallbackQuery)
+		b.handleCallback(ctx, update.CallbackQuery)
 	}
 }
 
 // routeMessage dispatches a message to the correct command handler.
-func (b *Bot) routeMessage(msg *tgbotapi.Message) {
+func (b *Bot) routeMessage(ctx context.Context, msg *tgbotapi.Message) {
 	if msg.SuccessfulPayment != nil {
-		b.handleSuccessfulPayment(msg)
+		b.handleSuccessfulPayment(ctx, msg)
 		return
 	}
 
-	routeCtx, routeCancel := b.handlerCtx()
-	defer routeCancel()
-
 	// Check if user is entering a promo code.
 	if msg.Command() == "" {
-		promoAt, _ := b.fsm.GetPromoState(routeCtx, msg.From.ID)
+		promoAt, _ := b.fsm.GetPromoState(ctx, msg.From.ID)
 		if !promoAt.IsZero() {
 			b.handlePromoInput(msg)
 			return
@@ -45,7 +43,7 @@ func (b *Bot) routeMessage(msg *tgbotapi.Message) {
 
 	// Check if user is writing a review text (post-rating FSM step).
 	if msg.Command() == "" {
-		reviewState, _ := b.fsm.GetReviewState(routeCtx, msg.From.ID)
+		reviewState, _ := b.fsm.GetReviewState(ctx, msg.From.ID)
 		if reviewState != nil {
 			b.handleReviewTextInput(msg, reviewState)
 			return
@@ -53,7 +51,7 @@ func (b *Bot) routeMessage(msg *tgbotapi.Message) {
 	}
 
 	// Check if the user is in an add-product dialog.
-	addState, _ := b.fsm.GetAddProductState(routeCtx, msg.From.ID)
+	addState, _ := b.fsm.GetAddProductState(ctx, msg.From.ID)
 	inAddState := addState != nil
 
 	if msg.Command() == "" ||
@@ -185,7 +183,7 @@ func (b *Bot) alert(cbID, text string) {
 }
 
 // handleCallback routes callback queries based on their data prefix.
-func (b *Bot) handleCallback(cb *tgbotapi.CallbackQuery) {
+func (b *Bot) handleCallback(ctx context.Context, cb *tgbotapi.CallbackQuery) {
 	// Inline-mode callbacks arrive without an attached message; nothing to render on.
 	if cb.Message == nil {
 		b.ack(cb.ID)
