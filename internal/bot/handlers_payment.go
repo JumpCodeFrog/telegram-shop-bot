@@ -18,7 +18,7 @@ import (
 	"shop_bot/internal/storage"
 )
 
-func (b *Bot) onPayStars(cbID string, chatID, userID int64, msgID int, data, lang string) {
+func (b *Bot) onPayStars(ctx context.Context, cbID string, chatID, userID int64, msgID int, data, lang string) {
 	orderID, err := parseIDFromCallback(data, "pay:stars:")
 	if err != nil {
 		b.logger.Error("parse pay:stars callback", "error", err)
@@ -26,8 +26,6 @@ func (b *Bot) onPayStars(cbID string, chatID, userID int64, msgID int, data, lan
 		return
 	}
 
-	ctx, cancel := b.handlerCtx()
-	defer cancel()
 	target, err := b.loadPayableOrder(ctx, userID, orderID)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
@@ -58,7 +56,7 @@ func (b *Bot) onPayStars(cbID string, chatID, userID int64, msgID int, data, lan
 	}
 }
 
-func (b *Bot) onOrderCancel(cbID string, chatID, userID int64, msgID int, data, lang string) {
+func (b *Bot) onOrderCancel(ctx context.Context, cbID string, chatID, userID int64, msgID int, data, lang string) {
 	orderID, err := parseIDFromCallback(data, "order:cancel:")
 	if err != nil {
 		b.logger.Error("parse order:cancel callback", "error", err)
@@ -66,8 +64,6 @@ func (b *Bot) onOrderCancel(cbID string, chatID, userID int64, msgID int, data, 
 		return
 	}
 
-	ctx, cancel := b.handlerCtx()
-	defer cancel()
 	if _, err := b.loadPayableOrder(ctx, userID, orderID); err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
 			b.alert(cbID, b.t(lang, "order_not_found"))
@@ -111,7 +107,7 @@ func (b *Bot) onOrderCancel(cbID string, chatID, userID int64, msgID int, data, 
 	b.send(reply)
 }
 
-func (b *Bot) onPayCrypto(cbID string, chatID, userID int64, msgID int, data, lang string) {
+func (b *Bot) onPayCrypto(ctx context.Context, cbID string, chatID, userID int64, msgID int, data, lang string) {
 	if !b.cryptoPaymentsEnabled() {
 		b.alert(cbID, b.t(lang, "crypto_unavailable"))
 		return
@@ -124,8 +120,6 @@ func (b *Bot) onPayCrypto(cbID string, chatID, userID int64, msgID int, data, la
 		return
 	}
 
-	ctx, cancel := b.handlerCtx()
-	defer cancel()
 	target, err := b.loadPayableOrder(ctx, userID, orderID)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
@@ -182,7 +176,7 @@ func (b *Bot) onPayCrypto(cbID string, chatID, userID int64, msgID int, data, la
 	b.send(reply)
 }
 
-func (b *Bot) onPayYooKassa(cbID string, chatID, userID int64, msgID int, data, lang string) {
+func (b *Bot) onPayYooKassa(ctx context.Context, cbID string, chatID, userID int64, msgID int, data, lang string) {
 	if !b.yooKassaPaymentsEnabled() {
 		b.alert(cbID, b.t(lang, "yookassa_unavailable"))
 		return
@@ -195,8 +189,6 @@ func (b *Bot) onPayYooKassa(cbID string, chatID, userID int64, msgID int, data, 
 		return
 	}
 
-	ctx, cancel := b.handlerCtx()
-	defer cancel()
 	target, err := b.loadPayableOrder(ctx, userID, orderID)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
@@ -261,7 +253,7 @@ func (b *Bot) onPayYooKassa(cbID string, chatID, userID int64, msgID int, data, 
 	b.send(reply)
 }
 
-func (b *Bot) onPayStripe(cbID string, chatID, userID int64, msgID int, data, lang string) {
+func (b *Bot) onPayStripe(ctx context.Context, cbID string, chatID, userID int64, msgID int, data, lang string) {
 	if !b.stripePaymentsEnabled() {
 		b.alert(cbID, b.t(lang, "stripe_unavailable"))
 		return
@@ -274,8 +266,6 @@ func (b *Bot) onPayStripe(cbID string, chatID, userID int64, msgID int, data, la
 		return
 	}
 
-	ctx, cancel := b.handlerCtx()
-	defer cancel()
 	target, err := b.loadPayableOrder(ctx, userID, orderID)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
@@ -339,7 +329,7 @@ func (b *Bot) onPayStripe(cbID string, chatID, userID int64, msgID int, data, la
 	b.send(reply)
 }
 
-func (b *Bot) onPayTON(cbID string, chatID, userID int64, msgID int, data, lang string) {
+func (b *Bot) onPayTON(ctx context.Context, cbID string, chatID, userID int64, msgID int, data, lang string) {
 	if !b.tonPaymentsEnabled() {
 		b.alert(cbID, b.t(lang, "ton_unavailable"))
 		return
@@ -352,8 +342,6 @@ func (b *Bot) onPayTON(cbID string, chatID, userID int64, msgID int, data, lang 
 		return
 	}
 
-	ctx, cancel := b.handlerCtx()
-	defer cancel()
 	target, err := b.loadPayableOrder(ctx, userID, orderID)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
@@ -407,7 +395,7 @@ func (b *Bot) onPayTON(cbID string, chatID, userID int64, msgID int, data, lang 
 	b.send(reply)
 }
 
-func (b *Bot) onPayNowpayments(cbID string, chatID, userID int64, msgID int, data, lang string) {
+func (b *Bot) onPayNowpayments(ctx context.Context, cbID string, chatID, userID int64, msgID int, data, lang string) {
 	if !b.nowpaymentsEnabled() {
 		b.alert(cbID, b.t(lang, "nowpayments_unavailable"))
 		return
@@ -420,8 +408,6 @@ func (b *Bot) onPayNowpayments(cbID string, chatID, userID int64, msgID int, dat
 		return
 	}
 
-	ctx, cancel := b.handlerCtx()
-	defer cancel()
 	target, err := b.loadPayableOrder(ctx, userID, orderID)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
@@ -486,7 +472,7 @@ func (b *Bot) onPayNowpayments(cbID string, chatID, userID int64, msgID int, dat
 // rail: no adapter call, no invoice — ConfirmBalancePayment debits the buyer
 // and commits the settlement in one step, then the standard announce surface
 // delivers the notifications.
-func (b *Bot) onPayBalance(cbID string, chatID, userID int64, msgID int, data, lang string) {
+func (b *Bot) onPayBalance(ctx context.Context, cbID string, chatID, userID int64, msgID int, data, lang string) {
 	orderID, err := parseIDFromCallback(data, "pay:balance:")
 	if err != nil {
 		b.logger.Error("parse pay:balance callback", "error", err)
@@ -494,8 +480,6 @@ func (b *Bot) onPayBalance(cbID string, chatID, userID int64, msgID int, data, l
 		return
 	}
 
-	ctx, cancel := b.handlerCtx()
-	defer cancel()
 	target, err := b.loadPayableOrder(ctx, userID, orderID)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
@@ -563,9 +547,7 @@ func formatTON(nano int64) string {
 // --- Payment handlers ---
 
 // handlePreCheckout handles Telegram PreCheckoutQuery for Stars payments.
-func (b *Bot) handlePreCheckout(query *tgbotapi.PreCheckoutQuery) {
-	ctx, cancel := b.handlerCtx()
-	defer cancel()
+func (b *Bot) handlePreCheckout(ctx context.Context, query *tgbotapi.PreCheckoutQuery) {
 	if err := b.stars.HandlePreCheckout(ctx, query); err != nil {
 		b.logger.Error("handle pre-checkout", "error", err)
 	}

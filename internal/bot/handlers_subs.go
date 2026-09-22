@@ -137,16 +137,13 @@ func (b *Bot) takePendingSubExpiry(chargeID string) (time.Time, bool) {
 }
 
 // handleMySubs handles the /mysubs command.
-func (b *Bot) handleMySubs(msg *tgbotapi.Message) {
-	b.sendMySubs(msg.Chat.ID, msg.From.ID, 0, msg.From.LanguageCode)
+func (b *Bot) handleMySubs(ctx context.Context, msg *tgbotapi.Message) {
+	b.sendMySubs(ctx, msg.Chat.ID, msg.From.ID, 0, msg.From.LanguageCode)
 }
 
 // sendMySubs renders the active-subscriptions screen with a cancel button per
 // subscription.
-func (b *Bot) sendMySubs(chatID, userID int64, msgID int, lang string) {
-	ctx, cancel := b.handlerCtx()
-	defer cancel()
-
+func (b *Bot) sendMySubs(ctx context.Context, chatID, userID int64, msgID int, lang string) {
 	subs, err := b.subs.ListActiveByUser(ctx, userID)
 	if err != nil {
 		b.logger.Error("list subscriptions", "user_id", userID, "error", err)
@@ -179,16 +176,13 @@ func (b *Bot) sendMySubs(chatID, userID int64, msgID int, lang string) {
 
 // onSubCancel handles the sub:cancel:<id> callback: it cancels the recurring
 // Stars subscription on the Telegram side, then marks it canceled locally.
-func (b *Bot) onSubCancel(cbID string, chatID, userID int64, msgID int, data, lang string) {
+func (b *Bot) onSubCancel(ctx context.Context, cbID string, chatID, userID int64, msgID int, data, lang string) {
 	subID, err := parseIDFromCallback(data, "sub:cancel:")
 	if err != nil {
 		b.logger.Error("parse sub:cancel callback", "error", err)
 		b.ack(cbID)
 		return
 	}
-
-	ctx, cancel := b.handlerCtx()
-	defer cancel()
 
 	// Resolve the subscription through the user's own active list: this both
 	// finds the charge ID and guarantees the caller owns the subscription.
@@ -222,7 +216,7 @@ func (b *Bot) onSubCancel(cbID string, chatID, userID int64, msgID int, data, la
 	}
 
 	b.toast(cbID, b.t(lang, "sub_canceled"))
-	b.sendMySubs(chatID, userID, msgID, lang)
+	b.sendMySubs(ctx, chatID, userID, msgID, lang)
 }
 
 // cancelStarSubscription cancels a recurring Stars subscription via the raw

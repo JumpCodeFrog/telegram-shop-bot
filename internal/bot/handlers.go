@@ -12,7 +12,7 @@ import (
 func (b *Bot) route(ctx context.Context, update tgbotapi.Update) {
 	switch {
 	case update.PreCheckoutQuery != nil:
-		b.handlePreCheckout(update.PreCheckoutQuery)
+		b.handlePreCheckout(ctx, update.PreCheckoutQuery)
 
 	case update.InlineQuery != nil:
 		b.handleInlineQuery(ctx, update.InlineQuery)
@@ -84,7 +84,7 @@ func (b *Bot) routeMessage(ctx context.Context, msg *tgbotapi.Message) {
 		b.handleOrders(ctx, msg)
 
 	case "mysubs":
-		b.handleMySubs(msg)
+		b.handleMySubs(ctx, msg)
 
 	case "profile":
 		b.handleProfile(ctx, msg)
@@ -239,28 +239,28 @@ func (b *Bot) handleCallback(ctx context.Context, cb *tgbotapi.CallbackQuery) {
 		b.onOrderConfirm(ctx, chatID, userID, b.prepareTextRenderMessageID(chatID, cb.Message), data, lang)
 
 	case strings.HasPrefix(data, "order:cancel:"):
-		b.onOrderCancel(cb.ID, chatID, userID, b.prepareTextRenderMessageID(chatID, cb.Message), data, lang)
+		b.onOrderCancel(ctx, cb.ID, chatID, userID, b.prepareTextRenderMessageID(chatID, cb.Message), data, lang)
 
 	case strings.HasPrefix(data, "pay:stars:"):
-		b.onPayStars(cb.ID, chatID, userID, msgID, data, lang)
+		b.onPayStars(ctx, cb.ID, chatID, userID, msgID, data, lang)
 
 	case strings.HasPrefix(data, "pay:crypto:"):
-		b.onPayCrypto(cb.ID, chatID, userID, msgID, data, lang)
+		b.onPayCrypto(ctx, cb.ID, chatID, userID, msgID, data, lang)
 
 	case strings.HasPrefix(data, "pay:yookassa:"):
-		b.onPayYooKassa(cb.ID, chatID, userID, msgID, data, lang)
+		b.onPayYooKassa(ctx, cb.ID, chatID, userID, msgID, data, lang)
 
 	case strings.HasPrefix(data, "pay:stripe:"):
-		b.onPayStripe(cb.ID, chatID, userID, msgID, data, lang)
+		b.onPayStripe(ctx, cb.ID, chatID, userID, msgID, data, lang)
 
 	case strings.HasPrefix(data, "pay:ton:"):
-		b.onPayTON(cb.ID, chatID, userID, msgID, data, lang)
+		b.onPayTON(ctx, cb.ID, chatID, userID, msgID, data, lang)
 
 	case strings.HasPrefix(data, "pay:nowpayments:"):
-		b.onPayNowpayments(cb.ID, chatID, userID, msgID, data, lang)
+		b.onPayNowpayments(ctx, cb.ID, chatID, userID, msgID, data, lang)
 
 	case strings.HasPrefix(data, "pay:balance:"):
-		b.onPayBalance(cb.ID, chatID, userID, msgID, data, lang)
+		b.onPayBalance(ctx, cb.ID, chatID, userID, msgID, data, lang)
 
 	case strings.HasPrefix(data, "admin:togglestock:"):
 		b.ack(cb.ID)
@@ -345,7 +345,7 @@ func (b *Bot) handleCallback(ctx context.Context, cb *tgbotapi.CallbackQuery) {
 		b.handleReviewCallback(ctx, cb)
 
 	case strings.HasPrefix(data, "sub:cancel:"):
-		b.onSubCancel(cb.ID, chatID, userID, b.prepareTextRenderMessageID(chatID, cb.Message), data, lang)
+		b.onSubCancel(ctx, cb.ID, chatID, userID, b.prepareTextRenderMessageID(chatID, cb.Message), data, lang)
 
 	case strings.HasPrefix(data, "ref:"):
 		b.ack(cb.ID)
