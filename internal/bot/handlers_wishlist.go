@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"context"
 	"fmt"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
@@ -9,7 +10,7 @@ import (
 )
 
 // onWishlistToggle toggles a product in the user's wishlist and updates the button in-place.
-func (b *Bot) onWishlistToggle(cbID string, chatID, userID int64, msgID int, data, lang string) {
+func (b *Bot) onWishlistToggle(ctx context.Context, cbID string, chatID, userID int64, msgID int, data, lang string) {
 	prodID, err := parseIDFromCallback(data, "wish:")
 	if err != nil {
 		b.logger.Error("parse wish callback", "error", err)
@@ -17,8 +18,6 @@ func (b *Bot) onWishlistToggle(cbID string, chatID, userID int64, msgID int, dat
 		return
 	}
 
-	ctx, cancel := b.handlerCtx()
-	defer cancel()
 	inWishlist, err := b.wishlist.IsInWishlist(ctx, userID, prodID)
 	if err != nil {
 		b.logger.Error("check wishlist", "error", err)
@@ -49,12 +48,12 @@ func (b *Bot) onWishlistToggle(cbID string, chatID, userID int64, msgID int, dat
 	}
 
 	// Re-fetch product to rebuild keyboard with updated wishlist state.
-	b.refreshProductKeyboard(chatID, userID, msgID, prodID, lang)
+	b.refreshProductKeyboard(ctx, chatID, userID, msgID, prodID, lang)
 }
 
 // onWishlistRemove removes a product from the wishlist screen (✖ button)
 // and re-renders the wishlist in place.
-func (b *Bot) onWishlistRemove(cbID string, chatID, userID int64, msgID int, data, lang string) {
+func (b *Bot) onWishlistRemove(ctx context.Context, cbID string, chatID, userID int64, msgID int, data, lang string) {
 	prodID, err := parseIDFromCallback(data, "wish:rm:")
 	if err != nil {
 		b.logger.Error("parse wish remove callback", "error", err)
@@ -62,15 +61,13 @@ func (b *Bot) onWishlistRemove(cbID string, chatID, userID int64, msgID int, dat
 		return
 	}
 
-	ctx, cancel := b.handlerCtx()
-	defer cancel()
 	if err := b.wishlist.Remove(ctx, userID, prodID); err != nil {
 		b.logger.Error("wishlist remove", "error", err)
 		b.alert(cbID, b.t(lang, "error_short"))
 		return
 	}
 	b.toast(cbID, b.t(lang, "wishlist_removed"))
-	b.sendWishlist(chatID, userID, msgID, lang)
+	b.sendWishlist(ctx, chatID, userID, msgID, lang)
 }
 
 // wishlistKeyboard builds one row per wishlist item: product button + ✖ removal.
@@ -89,15 +86,12 @@ func (b *Bot) wishlistKeyboard(lang string, products []storage.Product) StyledKe
 }
 
 // handleWishlist shows the user's wishlist.
-func (b *Bot) handleWishlist(msg *tgbotapi.Message) {
-	b.sendWishlist(msg.Chat.ID, msg.From.ID, 0, msg.From.LanguageCode)
+func (b *Bot) handleWishlist(ctx context.Context, msg *tgbotapi.Message) {
+	b.sendWishlist(ctx, msg.Chat.ID, msg.From.ID, 0, msg.From.LanguageCode)
 }
 
 // sendWishlist renders the wishlist. If msgID > 0 it edits the existing message.
-func (b *Bot) sendWishlist(chatID, userID int64, msgID int, lang string) {
-	ctx, cancel := b.handlerCtx()
-	defer cancel()
-
+func (b *Bot) sendWishlist(ctx context.Context, chatID, userID int64, msgID int, lang string) {
 	products, err := b.wishlist.GetUserWishlist(ctx, userID)
 	if err != nil {
 		b.logger.Error("get user wishlist", "error", err)

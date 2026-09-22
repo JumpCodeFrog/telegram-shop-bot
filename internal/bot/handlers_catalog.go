@@ -15,14 +15,12 @@ import (
 const productsPerPage = 5
 
 // handleCatalog displays product categories with emoji.
-func (b *Bot) handleCatalog(msg *tgbotapi.Message) {
-	b.sendCatalog(msg.Chat.ID, 0, msg.From.LanguageCode)
+func (b *Bot) handleCatalog(ctx context.Context, msg *tgbotapi.Message) {
+	b.sendCatalog(ctx, msg.Chat.ID, 0, msg.From.LanguageCode)
 }
 
 // sendCatalog sends the category list. If msgID > 0, it edits the existing message.
-func (b *Bot) sendCatalog(chatID int64, msgID int, lang string) {
-	ctx, cancel := b.handlerCtx()
-	defer cancel()
+func (b *Bot) sendCatalog(ctx context.Context, chatID int64, msgID int, lang string) {
 	categories, err := b.catalog.ListCategories(ctx)
 	if err != nil {
 		b.logger.Error("list categories", "error", err)
@@ -47,7 +45,7 @@ func (b *Bot) sendCatalog(chatID int64, msgID int, lang string) {
 	b.sendOrEditStyled(chatID, msgID, b.t(lang, "catalog_choose_category"), "", kb)
 }
 
-func (b *Bot) onCategorySelected(chatID, userID int64, msgID int, data, lang string) {
+func (b *Bot) onCategorySelected(ctx context.Context, chatID, userID int64, msgID int, data, lang string) {
 	// Parse: category:<id> or category:<id>:page:<n>
 	parts := strings.SplitN(data, ":", 4)
 	catID, err := strconv.ParseInt(parts[1], 10, 64)
@@ -63,8 +61,6 @@ func (b *Bot) onCategorySelected(chatID, userID int64, msgID int, data, lang str
 		}
 	}
 
-	ctx, cancel := b.handlerCtx()
-	defer cancel()
 	category, err := b.catalog.GetCategory(ctx, catID)
 	if err != nil {
 		b.logger.Error("get category", "category_id", catID, "error", err)
@@ -129,15 +125,13 @@ func (b *Bot) onCategorySelected(chatID, userID int64, msgID int, data, lang str
 	b.sendOrEditStyled(chatID, msgID, text, "HTML", kb)
 }
 
-func (b *Bot) onProductSelected(chatID, userID int64, msgID int, data, lang string) {
+func (b *Bot) onProductSelected(ctx context.Context, chatID, userID int64, msgID int, data, lang string) {
 	prodID, err := parseIDFromCallback(data, "product:")
 	if err != nil {
 		b.logger.Error("parse product callback", "error", err)
 		return
 	}
 
-	ctx, cancel := b.handlerCtx()
-	defer cancel()
 	p, err := b.catalog.GetProduct(ctx, prodID)
 	if err != nil {
 		b.logger.Error("get product", "error", err)
@@ -285,10 +279,7 @@ func (b *Bot) cartQuantity(ctx context.Context, userID, prodID int64) (int, erro
 	return 0, nil
 }
 
-func (b *Bot) refreshProductKeyboard(chatID, userID int64, msgID int, prodID int64, lang string) {
-	ctx, cancel := b.handlerCtx()
-	defer cancel()
-
+func (b *Bot) refreshProductKeyboard(ctx context.Context, chatID, userID int64, msgID int, prodID int64, lang string) {
 	p, err := b.catalog.GetProduct(ctx, prodID)
 	if err != nil {
 		b.logger.Error("get product for keyboard refresh", "product_id", prodID, "error", err)

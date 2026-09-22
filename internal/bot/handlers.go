@@ -36,7 +36,7 @@ func (b *Bot) routeMessage(ctx context.Context, msg *tgbotapi.Message) {
 	if msg.Command() == "" {
 		promoAt, _ := b.fsm.GetPromoState(ctx, msg.From.ID)
 		if !promoAt.IsZero() {
-			b.handlePromoInput(msg)
+			b.handlePromoInput(ctx, msg)
 			return
 		}
 	}
@@ -45,7 +45,7 @@ func (b *Bot) routeMessage(ctx context.Context, msg *tgbotapi.Message) {
 	if msg.Command() == "" {
 		reviewState, _ := b.fsm.GetReviewState(ctx, msg.From.ID)
 		if reviewState != nil {
-			b.handleReviewTextInput(msg, reviewState)
+			b.handleReviewTextInput(ctx, msg, reviewState)
 			return
 		}
 	}
@@ -75,11 +75,11 @@ func (b *Bot) routeMessage(ctx context.Context, msg *tgbotapi.Message) {
 	case "terms":
 		b.onTerms(msg.Chat.ID, 0, msg.From.LanguageCode)
 	case "catalog":
-		b.handleCatalog(msg)
+		b.handleCatalog(ctx, msg)
 	case "search":
 		b.handleSearch(ctx, msg)
 	case "cart":
-		b.handleCart(msg)
+		b.handleCart(ctx, msg)
 	case "orders":
 		b.handleOrders(ctx, msg)
 
@@ -93,7 +93,7 @@ func (b *Bot) routeMessage(ctx context.Context, msg *tgbotapi.Message) {
 		b.handleReferral(ctx, msg)
 
 	case "wishlist":
-		b.handleWishlist(msg)
+		b.handleWishlist(ctx, msg)
 
 	case "cancel":
 		b.handleCancel(ctx, msg)
@@ -114,7 +114,7 @@ func (b *Bot) routeMessage(ctx context.Context, msg *tgbotapi.Message) {
 	case "setdelivered":
 		b.handleSetDelivered(msg)
 	case "reviews":
-		b.handleReviewsAdmin(msg)
+		b.handleReviewsAdmin(ctx, msg)
 
 	// Category management.
 	case "addcategory":
@@ -199,44 +199,44 @@ func (b *Bot) handleCallback(ctx context.Context, cb *tgbotapi.CallbackQuery) {
 	switch {
 	case strings.HasPrefix(data, "category:"):
 		b.ack(cb.ID)
-		b.onCategorySelected(chatID, userID, b.prepareTextRenderMessageID(chatID, cb.Message), data, lang)
+		b.onCategorySelected(ctx, chatID, userID, b.prepareTextRenderMessageID(chatID, cb.Message), data, lang)
 
 	case strings.HasPrefix(data, "product:"):
 		b.ack(cb.ID)
-		b.onProductSelected(chatID, userID, msgID, data, lang)
+		b.onProductSelected(ctx, chatID, userID, msgID, data, lang)
 
 	case strings.HasPrefix(data, "productqty:plus:"):
-		b.onProductQuantityChange(cb.ID, chatID, userID, msgID, data, "productqty:plus:", 1, lang)
+		b.onProductQuantityChange(ctx, cb.ID, chatID, userID, msgID, data, "productqty:plus:", 1, lang)
 
 	case strings.HasPrefix(data, "productqty:minus:"):
-		b.onProductQuantityChange(cb.ID, chatID, userID, msgID, data, "productqty:minus:", -1, lang)
+		b.onProductQuantityChange(ctx, cb.ID, chatID, userID, msgID, data, "productqty:minus:", -1, lang)
 
 	case strings.HasPrefix(data, "cart:add:"):
-		b.onCartAdd(cb.ID, chatID, userID, msgID, data, lang)
+		b.onCartAdd(ctx, cb.ID, chatID, userID, msgID, data, lang)
 
 	case strings.HasPrefix(data, "cart:plus:"):
 		b.ack(cb.ID)
-		b.onCartPlus(chatID, userID, msgID, data, lang)
+		b.onCartPlus(ctx, chatID, userID, msgID, data, lang)
 
 	case strings.HasPrefix(data, "cart:minus:"):
 		b.ack(cb.ID)
-		b.onCartMinus(chatID, userID, msgID, data, lang)
+		b.onCartMinus(ctx, chatID, userID, msgID, data, lang)
 
 	case strings.HasPrefix(data, "cart:del:"):
 		b.ack(cb.ID)
-		b.onCartDel(chatID, userID, msgID, data, lang)
+		b.onCartDel(ctx, chatID, userID, msgID, data, lang)
 
 	case data == "cart:checkout":
 		b.ack(cb.ID)
-		b.onCartCheckout(chatID, userID, b.prepareTextRenderMessageID(chatID, cb.Message), lang)
+		b.onCartCheckout(ctx, chatID, userID, b.prepareTextRenderMessageID(chatID, cb.Message), lang)
 
 	case data == "promo:enter":
 		b.ack(cb.ID)
-		b.onPromoEnter(chatID, userID, lang)
+		b.onPromoEnter(ctx, chatID, userID, lang)
 
 	case strings.HasPrefix(data, "order:confirm"):
 		b.ack(cb.ID)
-		b.onOrderConfirm(chatID, userID, b.prepareTextRenderMessageID(chatID, cb.Message), data, lang)
+		b.onOrderConfirm(ctx, chatID, userID, b.prepareTextRenderMessageID(chatID, cb.Message), data, lang)
 
 	case strings.HasPrefix(data, "order:cancel:"):
 		b.onOrderCancel(cb.ID, chatID, userID, b.prepareTextRenderMessageID(chatID, cb.Message), data, lang)
@@ -332,17 +332,17 @@ func (b *Bot) handleCallback(ctx context.Context, cb *tgbotapi.CallbackQuery) {
 		}
 
 	case strings.HasPrefix(data, "wish:rm:"):
-		b.onWishlistRemove(cb.ID, chatID, userID, msgID, data, lang)
+		b.onWishlistRemove(ctx, cb.ID, chatID, userID, msgID, data, lang)
 
 	case strings.HasPrefix(data, "wish:"):
-		b.onWishlistToggle(cb.ID, chatID, userID, msgID, data, lang)
+		b.onWishlistToggle(ctx, cb.ID, chatID, userID, msgID, data, lang)
 
 	case data == "profile_view":
 		b.ack(cb.ID)
 		b.sendProfile(ctx, chatID, userID, b.prepareTextRenderMessageID(chatID, cb.Message), lang)
 
 	case strings.HasPrefix(data, "review:"):
-		b.handleReviewCallback(cb)
+		b.handleReviewCallback(ctx, cb)
 
 	case strings.HasPrefix(data, "sub:cancel:"):
 		b.onSubCancel(cb.ID, chatID, userID, b.prepareTextRenderMessageID(chatID, cb.Message), data, lang)
@@ -386,10 +386,10 @@ func (b *Bot) onBack(ctx context.Context, chatID, userID int64, msgID int, data,
 		b.sendMainMenu(chatID, userID, msgID, lang, ctx)
 
 	case target == "catalog":
-		b.sendCatalog(chatID, msgID, lang)
+		b.sendCatalog(ctx, chatID, msgID, lang)
 
 	case target == "cart":
-		b.sendCart(chatID, userID, msgID, lang)
+		b.sendCart(ctx, chatID, userID, msgID, lang)
 
 	case target == "orders":
 		b.sendOrders(ctx, chatID, userID, msgID, lang)
@@ -398,13 +398,13 @@ func (b *Bot) onBack(ctx context.Context, chatID, userID int64, msgID int, data,
 		b.sendProfile(ctx, chatID, userID, msgID, lang)
 
 	case target == "wishlist":
-		b.sendWishlist(chatID, userID, msgID, lang)
+		b.sendWishlist(ctx, chatID, userID, msgID, lang)
 
 	case target == "search":
 		b.sendSearchHint(chatID, msgID, lang)
 
 	case strings.HasPrefix(target, "category:"):
-		b.onCategorySelected(chatID, userID, msgID, target, lang)
+		b.onCategorySelected(ctx, chatID, userID, msgID, target, lang)
 	}
 }
 

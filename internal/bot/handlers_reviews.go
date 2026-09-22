@@ -74,7 +74,7 @@ func (b *Bot) sendReviewInvite(ctx context.Context, order *storage.Order) {
 }
 
 // handleReviewCallback routes every "review:" callback to its sub-handler.
-func (b *Bot) handleReviewCallback(cb *tgbotapi.CallbackQuery) {
+func (b *Bot) handleReviewCallback(ctx context.Context, cb *tgbotapi.CallbackQuery) {
 	data := cb.Data
 	chatID := cb.Message.Chat.ID
 	msgID := cb.Message.MessageID
@@ -83,26 +83,26 @@ func (b *Bot) handleReviewCallback(cb *tgbotapi.CallbackQuery) {
 
 	switch {
 	case data == "review:skip":
-		b.onReviewSkip(cb.ID, chatID, userID, msgID, lang)
+		b.onReviewSkip(ctx, cb.ID, chatID, userID, msgID, lang)
 
 	case strings.HasPrefix(data, "review:list:"):
 		b.ack(cb.ID)
-		b.onReviewList(chatID, b.prepareTextRenderMessageID(chatID, cb.Message), data, lang)
+		b.onReviewList(ctx, chatID, b.prepareTextRenderMessageID(chatID, cb.Message), data, lang)
 
 	case strings.HasPrefix(data, "review:del:"):
 		b.ack(cb.ID)
 		if b.isAdmin(userID) {
-			b.onReviewDelete(chatID, data, lang)
+			b.onReviewDelete(ctx, chatID, data, lang)
 		}
 
 	default:
-		b.onReviewRate(cb.ID, chatID, userID, msgID, data, lang)
+		b.onReviewRate(ctx, cb.ID, chatID, userID, msgID, data, lang)
 	}
 }
 
 // onReviewRate handles "review:<orderID>:<rating>": records the rating for
 // every product of the order and asks for an optional text.
-func (b *Bot) onReviewRate(cbID string, chatID, userID int64, msgID int, data, lang string) {
+func (b *Bot) onReviewRate(ctx context.Context, cbID string, chatID, userID int64, msgID int, data, lang string) {
 	parts := strings.Split(strings.TrimPrefix(data, "review:"), ":")
 	if len(parts) != 2 {
 		b.ack(cbID)
@@ -114,9 +114,6 @@ func (b *Bot) onReviewRate(cbID string, chatID, userID int64, msgID int, data, l
 		b.ack(cbID)
 		return
 	}
-
-	ctx, cancel := b.handlerCtx()
-	defer cancel()
 
 	order, err := b.order.GetOrder(ctx, orderID)
 	if err != nil && !errors.Is(err, storage.ErrNotFound) {
@@ -149,9 +146,7 @@ func (b *Bot) onReviewRate(cbID string, chatID, userID int64, msgID int, data, l
 }
 
 // onReviewSkip finishes the review flow without a text.
-func (b *Bot) onReviewSkip(cbID string, chatID, userID int64, msgID int, lang string) {
-	ctx, cancel := b.handlerCtx()
-	defer cancel()
+func (b *Bot) onReviewSkip(ctx context.Context, cbID string, chatID, userID int64, msgID int, lang string) {
 	_ = b.fsm.DelReviewState(ctx, userID) // best effort: state also expires by TTL
 
 	b.ack(cbID)
@@ -159,13 +154,11 @@ func (b *Bot) onReviewSkip(cbID string, chatID, userID int64, msgID int, lang st
 }
 
 // handleReviewTextInput consumes the free-form text step of the review FSM.
-func (b *Bot) handleReviewTextInput(msg *tgbotapi.Message, state *storage.ReviewState) {
+func (b *Bot) handleReviewTextInput(ctx context.Context, msg *tgbotapi.Message, state *storage.ReviewState) {
 	userID := msg.From.ID
 	chatID := msg.Chat.ID
 	lang := msg.From.LanguageCode
 
-	ctx, cancel := b.handlerCtx()
-	defer cancel()
 	// Clear the state up front so a failing save never traps the user in the FSM.
 	_ = b.fsm.DelReviewState(ctx, userID)
 
@@ -198,15 +191,13 @@ func (b *Bot) handleReviewTextInput(msg *tgbotapi.Message, state *storage.Review
 }
 
 // onReviewList shows the last 3 reviews of a product ("review:list:<productID>").
-func (b *Bot) onReviewList(chatID int64, msgID int, data, lang string) {
+func (b *Bot) onReviewList(ctx context.Context, chatID int64, msgID int, data, lang string) {
 	prodID, err := parseIDFromCallback(data, "review:list:")
 	if err != nil {
 		b.logger.Error("parse review list callback", "data", data, "error", err)
 		return
 	}
 
-	ctx, cancel := b.handlerCtx()
-	defer cancel()
 	reviews, err := b.reviews.ListByProduct(ctx, prodID, 3)
 	if err != nil {
 		b.logger.Error("review: list by product", "product_id", prodID, "error", err)
@@ -238,14 +229,12 @@ func (b *Bot) onReviewList(chatID int64, msgID int, data, lang string) {
 
 // handleReviewsAdmin implements the admin-only /reviews command: the 10 most
 // recent reviews with a delete button per review.
-func (b *Bot) handleReviewsAdmin(msg *tgbotapi.Message) {
+func (b *Bot) handleReviewsAdmin(ctx context.Context, msg *tgbotapi.Message) {
 	if !b.isAdmin(msg.From.ID) {
 		return
 	}
 	lang := msg.From.LanguageCode
 
-	ctx, cancel := b.handlerCtx()
-	defer cancel()
 	reviews, err := b.reviews.ListRecent(ctx, 10)
 	if err != nil {
 		b.logger.Error("review: list recent", "error", err)
@@ -277,15 +266,13 @@ func (b *Bot) handleReviewsAdmin(msg *tgbotapi.Message) {
 
 // onReviewDelete removes a review by ID ("review:del:<id>", admin only —
 // enforced by the caller).
-func (b *Bot) onReviewDelete(chatID int64, data, lang string) {
+func (b *Bot) onReviewDelete(ctx context.Context, chatID int64, data, lang string) {
 	id, err := parseIDFromCallback(data, "review:del:")
 	if err != nil {
 		b.logger.Error("parse review delete callback", "data", data, "error", err)
 		return
 	}
 
-	ctx, cancel := b.handlerCtx()
-	defer cancel()
 	if err := b.reviews.Delete(ctx, id); err != nil {
 		b.logger.Error("review: delete", "review_id", id, "error", err)
 		b.send(tgbotapi.NewMessage(chatID, b.t(lang, "review_error")))
