@@ -111,8 +111,8 @@ type Bot struct {
 	refundMu sync.Mutex
 
 	// rootCtx is the process-lifetime cancellation root (SetRootContext) that
-	// handlerCtx derives its per-handler timeouts from. Nil until set:
-	// handlerCtx falls back to context.Background(), so direct/test
+	// newUpdateCtx derives per-update contexts from. Nil until set:
+	// newUpdateCtx falls back to context.Background(), so direct/test
 	// constructors keep working unchanged.
 	rootCtx context.Context
 
@@ -124,28 +124,13 @@ type Bot struct {
 }
 
 // SetRootContext installs the process-lifetime cancellation root that
-// handlerCtx derives its per-handler timeouts from. Call ONCE before starting
+// per-update contexts derive from (newUpdateCtx). Call ONCE before starting
 // the bot — main passes its signal.NotifyContext ctx — so shutdown
-// cancellation reaches in-flight handler DB work instead of letting it
-// outlive the process signal by up to the 30s per-handler bound. Nil-safe:
-// an unset (or nil) root leaves handlerCtx on its context.Background()
-// fallback.
+// cancellation reaches in-flight update work instead of letting it outlive
+// the process signal by up to the 30s per-update bound. Nil-safe: an unset
+// (or nil) root leaves newUpdateCtx on its context.Background() fallback.
 func (b *Bot) SetRootContext(ctx context.Context) {
 	b.rootCtx = ctx
-}
-
-// handlerCtx returns a context with a 30-second deadline for use in handler
-// DB/service calls: a per-handler timeout until full update-context
-// propagation exists, derived from the SetRootContext process-lifetime root
-// so shutdown cancellation reaches in-flight handler work (the nil fallback
-// keeps direct/test constructors working without a root). This prevents a
-// single slow query from holding a goroutine indefinitely.
-func (b *Bot) handlerCtx() (context.Context, context.CancelFunc) {
-	root := b.rootCtx
-	if root == nil {
-		root = context.Background()
-	}
-	return context.WithTimeout(root, 30*time.Second)
 }
 
 // New creates a new Bot with all dependencies injected.
@@ -243,7 +228,7 @@ func NewWithAPI(cfg *config.Config, api *tgbotapi.BotAPI, db *storage.DB, metric
 		subs:            storage.NewSQLSubscriptionStore(db),
 	}
 	// One-time setup at construction: no request/update context exists yet, so
-	// context.Background() is the honest root (not a per-handler handlerCtx).
+	// context.Background() is the honest root (not a per-update ctx).
 	b.reloadButtonStyles(context.Background())
 	// handler is built lazily in Run so we have a context.
 	return b, nil
@@ -270,7 +255,7 @@ func (b *Bot) prepareHandler(ctx context.Context) {
 func (b *Bot) ensureHandler(ctx context.Context) {
 	if ctx == nil {
 		// Long-lived: this ctx controls the rate-limit cleanup goroutine for
-		// the process lifetime; a per-handler handlerCtx (30s) would kill it.
+		// the process lifetime; a per-update ctx (30s) would kill it.
 		ctx = context.Background()
 	}
 
