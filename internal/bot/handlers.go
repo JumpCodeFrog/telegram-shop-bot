@@ -58,7 +58,7 @@ func (b *Bot) routeMessage(ctx context.Context, msg *tgbotapi.Message) {
 		(msg.Command() == "skip" && inAddState) ||
 		(msg.Command() == "done" && inAddState) ||
 		(msg.Command() == "cancel" && inAddState) {
-		if b.handleAddProductStep(msg) {
+		if b.handleAddProductStep(ctx, msg) {
 			return
 		}
 	}
@@ -102,11 +102,11 @@ func (b *Bot) routeMessage(ctx context.Context, msg *tgbotapi.Message) {
 	case "admin":
 		b.handleAdmin(msg)
 	case "addproduct":
-		b.handleAddProduct(msg)
+		b.handleAddProduct(ctx, msg)
 	case "editproduct":
-		b.routeEditProduct(msg)
+		b.routeEditProduct(ctx, msg)
 	case "deleteproduct":
-		b.handleDeleteProduct(msg)
+		b.handleDeleteProduct(ctx, msg)
 	case "orders_all":
 		b.handleOrdersAll(msg)
 	case "order":
@@ -118,13 +118,13 @@ func (b *Bot) routeMessage(ctx context.Context, msg *tgbotapi.Message) {
 
 	// Category management.
 	case "addcategory":
-		b.handleAddCategory(msg)
+		b.handleAddCategory(ctx, msg)
 	case "editcategory":
-		b.handleEditCategory(msg)
+		b.handleEditCategory(ctx, msg)
 	case "deletecategory":
-		b.handleDeleteCategory(msg)
+		b.handleDeleteCategory(ctx, msg)
 	case "listcategories":
-		b.handleListCategories(msg)
+		b.handleListCategories(ctx, msg)
 
 	// Promo codes.
 	case "addpromo":
@@ -160,7 +160,7 @@ func (b *Bot) routeMessage(ctx context.Context, msg *tgbotapi.Message) {
 
 	// Button style customization.
 	case "btnstyle":
-		b.handleBtnStyleAdmin(msg)
+		b.handleBtnStyleAdmin(ctx, msg)
 	}
 }
 
@@ -265,27 +265,27 @@ func (b *Bot) handleCallback(ctx context.Context, cb *tgbotapi.CallbackQuery) {
 	case strings.HasPrefix(data, "admin:togglestock:"):
 		b.ack(cb.ID)
 		if b.isAdmin(userID) {
-			b.onAdminToggleStock(chatID, data, lang)
+			b.onAdminToggleStock(ctx, chatID, data, lang)
 		}
 
 	case strings.HasPrefix(data, "admin:photos:"):
 		b.ack(cb.ID)
 		if b.isAdmin(userID) {
 			if prodID, err := parseIDFromCallback(data, "admin:photos:"); err == nil {
-				b.sendAdminPhotoList(chatID, msgID, prodID, lang)
+				b.sendAdminPhotoList(ctx, chatID, msgID, prodID, lang)
 			}
 		}
 
 	case strings.HasPrefix(data, "admin:photodel:"):
 		b.ack(cb.ID)
 		if b.isAdmin(userID) {
-			b.onAdminPhotoDelete(chatID, msgID, data, lang)
+			b.onAdminPhotoDelete(ctx, chatID, msgID, data, lang)
 		}
 
 	case strings.HasPrefix(data, "admin:photoadd:"):
 		b.ack(cb.ID)
 		if b.isAdmin(userID) {
-			b.onAdminPhotoAdd(chatID, userID, data, lang)
+			b.onAdminPhotoAdd(ctx, chatID, userID, data, lang)
 		}
 
 	case strings.HasPrefix(data, "admin:payrevdo:"):
@@ -315,20 +315,20 @@ func (b *Bot) handleCallback(ctx context.Context, cb *tgbotapi.CallbackQuery) {
 	case data == "admin:btnlist":
 		b.ack(cb.ID)
 		if b.isAdmin(userID) {
-			b.sendBtnStyleList(chatID, msgID, lang)
+			b.sendBtnStyleList(ctx, chatID, msgID, lang)
 		}
 
 	case strings.HasPrefix(data, "admin:btnpick:"):
 		b.ack(cb.ID)
 		if b.isAdmin(userID) {
 			key := strings.TrimPrefix(data, "admin:btnpick:")
-			b.sendBtnStylePicker(chatID, msgID, key, lang)
+			b.sendBtnStylePicker(ctx, chatID, msgID, key, lang)
 		}
 
 	case strings.HasPrefix(data, "admin:setstyle:"):
 		b.ack(cb.ID)
 		if b.isAdmin(userID) {
-			b.onAdminSetStyle(chatID, msgID, data, lang)
+			b.onAdminSetStyle(ctx, chatID, msgID, data, lang)
 		}
 
 	case strings.HasPrefix(data, "wish:rm:"):
