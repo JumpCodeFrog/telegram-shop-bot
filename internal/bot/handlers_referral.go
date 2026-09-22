@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -8,17 +9,14 @@ import (
 )
 
 // handleReferral handles the /referral command.
-func (b *Bot) handleReferral(msg *tgbotapi.Message) {
-	b.sendReferralScreen(msg.Chat.ID, msg.From.ID, 0, msg.From.LanguageCode)
+func (b *Bot) handleReferral(ctx context.Context, msg *tgbotapi.Message) {
+	b.sendReferralScreen(ctx, msg.Chat.ID, msg.From.ID, 0, msg.From.LanguageCode)
 }
 
 // sendReferralScreen renders the referral program screen: the personal deep
 // link, the number of invited friends and the total referral points earned.
 // A referral code is generated lazily on first open.
-func (b *Bot) sendReferralScreen(chatID, userID int64, msgID int, lang string) {
-	ctx, cancel := b.handlerCtx()
-	defer cancel()
-
+func (b *Bot) sendReferralScreen(ctx context.Context, chatID, userID int64, msgID int, lang string) {
 	user, err := b.users.GetByTelegramID(ctx, userID)
 	if err != nil {
 		b.logger.Error("referral screen: load user", "error", err)

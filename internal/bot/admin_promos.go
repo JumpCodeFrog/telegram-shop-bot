@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"strings"
@@ -10,7 +11,7 @@ import (
 	"shop_bot/internal/storage"
 )
 
-func (b *Bot) handleAddPromo(msg *tgbotapi.Message) {
+func (b *Bot) handleAddPromo(ctx context.Context, msg *tgbotapi.Message) {
 	if !b.isAdmin(msg.From.ID) {
 		return
 	}
@@ -20,18 +21,14 @@ func (b *Bot) handleAddPromo(msg *tgbotapi.Message) {
 	}
 	discount, _ := strconv.Atoi(args[1])
 	p := &storage.PromoCode{Code: strings.ToUpper(args[0]), Discount: discount, IsActive: true}
-	ctx, cancel := b.handlerCtx()
-	defer cancel()
 	_, _ = b.promos.CreatePromo(ctx, p)
 	b.send(tgbotapi.NewMessage(msg.Chat.ID, b.t(msg.From.LanguageCode, "admin_promo_created")))
 }
 
-func (b *Bot) handleListPromos(msg *tgbotapi.Message) {
+func (b *Bot) handleListPromos(ctx context.Context, msg *tgbotapi.Message) {
 	if !b.isAdmin(msg.From.ID) {
 		return
 	}
-	ctx, cancel := b.handlerCtx()
-	defer cancel()
 	promos, _ := b.promos.ListPromos(ctx)
 	var sb strings.Builder
 	for _, p := range promos {
@@ -40,13 +37,11 @@ func (b *Bot) handleListPromos(msg *tgbotapi.Message) {
 	b.send(tgbotapi.NewMessage(msg.Chat.ID, sb.String()))
 }
 
-func (b *Bot) handleDeletePromo(msg *tgbotapi.Message) {
+func (b *Bot) handleDeletePromo(ctx context.Context, msg *tgbotapi.Message) {
 	if !b.isAdmin(msg.From.ID) {
 		return
 	}
 	id, _ := strconv.ParseInt(msg.CommandArguments(), 10, 64)
-	ctx, cancel := b.handlerCtx()
-	defer cancel()
 	_ = b.promos.DeactivatePromo(ctx, id)
 	b.send(tgbotapi.NewMessage(msg.Chat.ID, b.t(msg.From.LanguageCode, "admin_promo_deactivated")))
 }

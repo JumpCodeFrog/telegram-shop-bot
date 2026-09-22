@@ -1272,7 +1272,10 @@ func TestAdminRefundConfirmBalanceConcurrentDoubleTap(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			<-start // release both goroutines at the same instant
-			e.handle(update(900_000 + i))
+			upd := update(900_000 + i)
+			ctx, cancel := e.bot.newUpdateCtx(context.Background(), upd)
+			defer cancel()
+			e.handle(ctx, upd)
 		}(i)
 	}
 	close(start)

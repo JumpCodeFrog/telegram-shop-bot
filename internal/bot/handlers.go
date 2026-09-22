@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"context"
 	"strconv"
 	"strings"
 
@@ -8,66 +9,63 @@ import (
 )
 
 // route dispatches an incoming update to the appropriate handler.
-func (b *Bot) route(update tgbotapi.Update) {
+func (b *Bot) route(ctx context.Context, update tgbotapi.Update) {
 	switch {
 	case update.PreCheckoutQuery != nil:
-		b.handlePreCheckout(update.PreCheckoutQuery)
+		b.handlePreCheckout(ctx, update.PreCheckoutQuery)
 
 	case update.InlineQuery != nil:
-		b.handleInlineQuery(update.InlineQuery)
+		b.handleInlineQuery(ctx, update.InlineQuery)
 
 	case update.Message != nil:
-		b.routeMessage(update.Message)
+		b.routeMessage(ctx, update.Message)
 
 	case update.CallbackQuery != nil:
-		b.handleCallback(update.CallbackQuery)
+		b.handleCallback(ctx, update.CallbackQuery)
 	}
 }
 
 // routeMessage dispatches a message to the correct command handler.
-func (b *Bot) routeMessage(msg *tgbotapi.Message) {
+func (b *Bot) routeMessage(ctx context.Context, msg *tgbotapi.Message) {
 	if msg.SuccessfulPayment != nil {
-		b.handleSuccessfulPayment(msg)
+		b.handleSuccessfulPayment(ctx, msg)
 		return
 	}
 
-	routeCtx, routeCancel := b.handlerCtx()
-	defer routeCancel()
-
 	// Check if user is entering a promo code.
 	if msg.Command() == "" {
-		promoAt, _ := b.fsm.GetPromoState(routeCtx, msg.From.ID)
+		promoAt, _ := b.fsm.GetPromoState(ctx, msg.From.ID)
 		if !promoAt.IsZero() {
-			b.handlePromoInput(msg)
+			b.handlePromoInput(ctx, msg)
 			return
 		}
 	}
 
 	// Check if user is writing a review text (post-rating FSM step).
 	if msg.Command() == "" {
-		reviewState, _ := b.fsm.GetReviewState(routeCtx, msg.From.ID)
+		reviewState, _ := b.fsm.GetReviewState(ctx, msg.From.ID)
 		if reviewState != nil {
-			b.handleReviewTextInput(msg, reviewState)
+			b.handleReviewTextInput(ctx, msg, reviewState)
 			return
 		}
 	}
 
 	// Check if the user is in an add-product dialog.
-	addState, _ := b.fsm.GetAddProductState(routeCtx, msg.From.ID)
+	addState, _ := b.fsm.GetAddProductState(ctx, msg.From.ID)
 	inAddState := addState != nil
 
 	if msg.Command() == "" ||
 		(msg.Command() == "skip" && inAddState) ||
 		(msg.Command() == "done" && inAddState) ||
 		(msg.Command() == "cancel" && inAddState) {
-		if b.handleAddProductStep(msg) {
+		if b.handleAddProductStep(ctx, msg) {
 			return
 		}
 	}
 
 	switch msg.Command() {
 	case "start":
-		b.handleStart(msg)
+		b.handleStart(ctx, msg)
 	case "help":
 		b.handleHelp(msg)
 	case "support":
@@ -77,76 +75,76 @@ func (b *Bot) routeMessage(msg *tgbotapi.Message) {
 	case "terms":
 		b.onTerms(msg.Chat.ID, 0, msg.From.LanguageCode)
 	case "catalog":
-		b.handleCatalog(msg)
+		b.handleCatalog(ctx, msg)
 	case "search":
-		b.handleSearch(msg)
+		b.handleSearch(ctx, msg)
 	case "cart":
-		b.handleCart(msg)
+		b.handleCart(ctx, msg)
 	case "orders":
-		b.handleOrders(msg)
+		b.handleOrders(ctx, msg)
 
 	case "mysubs":
-		b.handleMySubs(msg)
+		b.handleMySubs(ctx, msg)
 
 	case "profile":
-		b.handleProfile(msg)
+		b.handleProfile(ctx, msg)
 
 	case "referral":
-		b.handleReferral(msg)
+		b.handleReferral(ctx, msg)
 
 	case "wishlist":
-		b.handleWishlist(msg)
+		b.handleWishlist(ctx, msg)
 
 	case "cancel":
-		b.handleCancel(msg)
+		b.handleCancel(ctx, msg)
 
 	// Admin commands.
 	case "admin":
 		b.handleAdmin(msg)
 	case "addproduct":
-		b.handleAddProduct(msg)
+		b.handleAddProduct(ctx, msg)
 	case "editproduct":
-		b.routeEditProduct(msg)
+		b.routeEditProduct(ctx, msg)
 	case "deleteproduct":
-		b.handleDeleteProduct(msg)
+		b.handleDeleteProduct(ctx, msg)
 	case "orders_all":
-		b.handleOrdersAll(msg)
+		b.handleOrdersAll(ctx, msg)
 	case "order":
-		b.handleOrderCard(msg)
+		b.handleOrderCard(ctx, msg)
 	case "setdelivered":
-		b.handleSetDelivered(msg)
+		b.handleSetDelivered(ctx, msg)
 	case "reviews":
-		b.handleReviewsAdmin(msg)
+		b.handleReviewsAdmin(ctx, msg)
 
 	// Category management.
 	case "addcategory":
-		b.handleAddCategory(msg)
+		b.handleAddCategory(ctx, msg)
 	case "editcategory":
-		b.handleEditCategory(msg)
+		b.handleEditCategory(ctx, msg)
 	case "deletecategory":
-		b.handleDeleteCategory(msg)
+		b.handleDeleteCategory(ctx, msg)
 	case "listcategories":
-		b.handleListCategories(msg)
+		b.handleListCategories(ctx, msg)
 
 	// Promo codes.
 	case "addpromo":
-		b.handleAddPromo(msg)
+		b.handleAddPromo(ctx, msg)
 	case "listpromos":
-		b.handleListPromos(msg)
+		b.handleListPromos(ctx, msg)
 	case "deletepromo":
-		b.handleDeletePromo(msg)
+		b.handleDeletePromo(ctx, msg)
 
 	// Analytics.
 	case "analytics":
-		b.handleAnalytics(msg)
+		b.handleAnalytics(ctx, msg)
 
 	// Payment review queue.
 	case "payreview":
-		b.handlePayReview(msg)
+		b.handlePayReview(ctx, msg)
 
 	// Admin refunds.
 	case "refund":
-		b.handleRefundCommand(msg)
+		b.handleRefundCommand(ctx, msg)
 
 	// Payment provider status.
 	case "paystatus":
@@ -154,15 +152,15 @@ func (b *Bot) routeMessage(msg *tgbotapi.Message) {
 
 	// Balance adjustments.
 	case "setbalance":
-		b.handleSetBalance(msg)
+		b.handleSetBalance(ctx, msg)
 
 	// Export.
 	case "export_orders":
-		b.handleExportOrders(msg)
+		b.handleExportOrders(ctx, msg)
 
 	// Button style customization.
 	case "btnstyle":
-		b.handleBtnStyleAdmin(msg)
+		b.handleBtnStyleAdmin(ctx, msg)
 	}
 }
 
@@ -185,7 +183,7 @@ func (b *Bot) alert(cbID, text string) {
 }
 
 // handleCallback routes callback queries based on their data prefix.
-func (b *Bot) handleCallback(cb *tgbotapi.CallbackQuery) {
+func (b *Bot) handleCallback(ctx context.Context, cb *tgbotapi.CallbackQuery) {
 	// Inline-mode callbacks arrive without an attached message; nothing to render on.
 	if cb.Message == nil {
 		b.ack(cb.ID)
@@ -201,158 +199,158 @@ func (b *Bot) handleCallback(cb *tgbotapi.CallbackQuery) {
 	switch {
 	case strings.HasPrefix(data, "category:"):
 		b.ack(cb.ID)
-		b.onCategorySelected(chatID, userID, b.prepareTextRenderMessageID(chatID, cb.Message), data, lang)
+		b.onCategorySelected(ctx, chatID, userID, b.prepareTextRenderMessageID(chatID, cb.Message), data, lang)
 
 	case strings.HasPrefix(data, "product:"):
 		b.ack(cb.ID)
-		b.onProductSelected(chatID, userID, msgID, data, lang)
+		b.onProductSelected(ctx, chatID, userID, msgID, data, lang)
 
 	case strings.HasPrefix(data, "productqty:plus:"):
-		b.onProductQuantityChange(cb.ID, chatID, userID, msgID, data, "productqty:plus:", 1, lang)
+		b.onProductQuantityChange(ctx, cb.ID, chatID, userID, msgID, data, "productqty:plus:", 1, lang)
 
 	case strings.HasPrefix(data, "productqty:minus:"):
-		b.onProductQuantityChange(cb.ID, chatID, userID, msgID, data, "productqty:minus:", -1, lang)
+		b.onProductQuantityChange(ctx, cb.ID, chatID, userID, msgID, data, "productqty:minus:", -1, lang)
 
 	case strings.HasPrefix(data, "cart:add:"):
-		b.onCartAdd(cb.ID, chatID, userID, msgID, data, lang)
+		b.onCartAdd(ctx, cb.ID, chatID, userID, msgID, data, lang)
 
 	case strings.HasPrefix(data, "cart:plus:"):
 		b.ack(cb.ID)
-		b.onCartPlus(chatID, userID, msgID, data, lang)
+		b.onCartPlus(ctx, chatID, userID, msgID, data, lang)
 
 	case strings.HasPrefix(data, "cart:minus:"):
 		b.ack(cb.ID)
-		b.onCartMinus(chatID, userID, msgID, data, lang)
+		b.onCartMinus(ctx, chatID, userID, msgID, data, lang)
 
 	case strings.HasPrefix(data, "cart:del:"):
 		b.ack(cb.ID)
-		b.onCartDel(chatID, userID, msgID, data, lang)
+		b.onCartDel(ctx, chatID, userID, msgID, data, lang)
 
 	case data == "cart:checkout":
 		b.ack(cb.ID)
-		b.onCartCheckout(chatID, userID, b.prepareTextRenderMessageID(chatID, cb.Message), lang)
+		b.onCartCheckout(ctx, chatID, userID, b.prepareTextRenderMessageID(chatID, cb.Message), lang)
 
 	case data == "promo:enter":
 		b.ack(cb.ID)
-		b.onPromoEnter(chatID, userID, lang)
+		b.onPromoEnter(ctx, chatID, userID, lang)
 
 	case strings.HasPrefix(data, "order:confirm"):
 		b.ack(cb.ID)
-		b.onOrderConfirm(chatID, userID, b.prepareTextRenderMessageID(chatID, cb.Message), data, lang)
+		b.onOrderConfirm(ctx, chatID, userID, b.prepareTextRenderMessageID(chatID, cb.Message), data, lang)
 
 	case strings.HasPrefix(data, "order:cancel:"):
-		b.onOrderCancel(cb.ID, chatID, userID, b.prepareTextRenderMessageID(chatID, cb.Message), data, lang)
+		b.onOrderCancel(ctx, cb.ID, chatID, userID, b.prepareTextRenderMessageID(chatID, cb.Message), data, lang)
 
 	case strings.HasPrefix(data, "pay:stars:"):
-		b.onPayStars(cb.ID, chatID, userID, msgID, data, lang)
+		b.onPayStars(ctx, cb.ID, chatID, userID, msgID, data, lang)
 
 	case strings.HasPrefix(data, "pay:crypto:"):
-		b.onPayCrypto(cb.ID, chatID, userID, msgID, data, lang)
+		b.onPayCrypto(ctx, cb.ID, chatID, userID, msgID, data, lang)
 
 	case strings.HasPrefix(data, "pay:yookassa:"):
-		b.onPayYooKassa(cb.ID, chatID, userID, msgID, data, lang)
+		b.onPayYooKassa(ctx, cb.ID, chatID, userID, msgID, data, lang)
 
 	case strings.HasPrefix(data, "pay:stripe:"):
-		b.onPayStripe(cb.ID, chatID, userID, msgID, data, lang)
+		b.onPayStripe(ctx, cb.ID, chatID, userID, msgID, data, lang)
 
 	case strings.HasPrefix(data, "pay:ton:"):
-		b.onPayTON(cb.ID, chatID, userID, msgID, data, lang)
+		b.onPayTON(ctx, cb.ID, chatID, userID, msgID, data, lang)
 
 	case strings.HasPrefix(data, "pay:nowpayments:"):
-		b.onPayNowpayments(cb.ID, chatID, userID, msgID, data, lang)
+		b.onPayNowpayments(ctx, cb.ID, chatID, userID, msgID, data, lang)
 
 	case strings.HasPrefix(data, "pay:balance:"):
-		b.onPayBalance(cb.ID, chatID, userID, msgID, data, lang)
+		b.onPayBalance(ctx, cb.ID, chatID, userID, msgID, data, lang)
 
 	case strings.HasPrefix(data, "admin:togglestock:"):
 		b.ack(cb.ID)
 		if b.isAdmin(userID) {
-			b.onAdminToggleStock(chatID, data, lang)
+			b.onAdminToggleStock(ctx, chatID, data, lang)
 		}
 
 	case strings.HasPrefix(data, "admin:photos:"):
 		b.ack(cb.ID)
 		if b.isAdmin(userID) {
 			if prodID, err := parseIDFromCallback(data, "admin:photos:"); err == nil {
-				b.sendAdminPhotoList(chatID, msgID, prodID, lang)
+				b.sendAdminPhotoList(ctx, chatID, msgID, prodID, lang)
 			}
 		}
 
 	case strings.HasPrefix(data, "admin:photodel:"):
 		b.ack(cb.ID)
 		if b.isAdmin(userID) {
-			b.onAdminPhotoDelete(chatID, msgID, data, lang)
+			b.onAdminPhotoDelete(ctx, chatID, msgID, data, lang)
 		}
 
 	case strings.HasPrefix(data, "admin:photoadd:"):
 		b.ack(cb.ID)
 		if b.isAdmin(userID) {
-			b.onAdminPhotoAdd(chatID, userID, data, lang)
+			b.onAdminPhotoAdd(ctx, chatID, userID, data, lang)
 		}
 
 	case strings.HasPrefix(data, "admin:payrevdo:"):
 		b.ack(cb.ID)
 		if b.isAdmin(userID) {
-			b.onAdminPayReviewCallback(chatID, msgID, userID, data, lang)
+			b.onAdminPayReviewCallback(ctx, chatID, msgID, userID, data, lang)
 		}
 
 	case strings.HasPrefix(data, "admin:payrev:"):
 		b.ack(cb.ID)
 		if b.isAdmin(userID) {
-			b.onAdminPayReviewCallback(chatID, msgID, userID, data, lang)
+			b.onAdminPayReviewCallback(ctx, chatID, msgID, userID, data, lang)
 		}
 
 	case strings.HasPrefix(data, "admin:refund:"):
 		b.ack(cb.ID)
 		if b.isAdmin(userID) {
-			b.onAdminRefundCallback(chatID, msgID, userID, data, lang)
+			b.onAdminRefundCallback(ctx, chatID, msgID, userID, data, lang)
 		}
 
 	case strings.HasPrefix(data, "analytics:"):
 		b.ack(cb.ID)
 		if b.isAdmin(userID) {
-			b.handleAnalyticsCallback(chatID, msgID, data, cb.From.LanguageCode)
+			b.handleAnalyticsCallback(ctx, chatID, msgID, data, cb.From.LanguageCode)
 		}
 
 	case data == "admin:btnlist":
 		b.ack(cb.ID)
 		if b.isAdmin(userID) {
-			b.sendBtnStyleList(chatID, msgID, lang)
+			b.sendBtnStyleList(ctx, chatID, msgID, lang)
 		}
 
 	case strings.HasPrefix(data, "admin:btnpick:"):
 		b.ack(cb.ID)
 		if b.isAdmin(userID) {
 			key := strings.TrimPrefix(data, "admin:btnpick:")
-			b.sendBtnStylePicker(chatID, msgID, key, lang)
+			b.sendBtnStylePicker(ctx, chatID, msgID, key, lang)
 		}
 
 	case strings.HasPrefix(data, "admin:setstyle:"):
 		b.ack(cb.ID)
 		if b.isAdmin(userID) {
-			b.onAdminSetStyle(chatID, msgID, data, lang)
+			b.onAdminSetStyle(ctx, chatID, msgID, data, lang)
 		}
 
 	case strings.HasPrefix(data, "wish:rm:"):
-		b.onWishlistRemove(cb.ID, chatID, userID, msgID, data, lang)
+		b.onWishlistRemove(ctx, cb.ID, chatID, userID, msgID, data, lang)
 
 	case strings.HasPrefix(data, "wish:"):
-		b.onWishlistToggle(cb.ID, chatID, userID, msgID, data, lang)
+		b.onWishlistToggle(ctx, cb.ID, chatID, userID, msgID, data, lang)
 
 	case data == "profile_view":
 		b.ack(cb.ID)
-		b.sendProfile(chatID, userID, b.prepareTextRenderMessageID(chatID, cb.Message), lang)
+		b.sendProfile(ctx, chatID, userID, b.prepareTextRenderMessageID(chatID, cb.Message), lang)
 
 	case strings.HasPrefix(data, "review:"):
-		b.handleReviewCallback(cb)
+		b.handleReviewCallback(ctx, cb)
 
 	case strings.HasPrefix(data, "sub:cancel:"):
-		b.onSubCancel(cb.ID, chatID, userID, b.prepareTextRenderMessageID(chatID, cb.Message), data, lang)
+		b.onSubCancel(ctx, cb.ID, chatID, userID, b.prepareTextRenderMessageID(chatID, cb.Message), data, lang)
 
 	case strings.HasPrefix(data, "ref:"):
 		b.ack(cb.ID)
 		if data == "ref:open" {
-			b.sendReferralScreen(chatID, userID, b.prepareTextRenderMessageID(chatID, cb.Message), lang)
+			b.sendReferralScreen(ctx, chatID, userID, b.prepareTextRenderMessageID(chatID, cb.Message), lang)
 		}
 
 	case data == "search:hint":
@@ -361,7 +359,7 @@ func (b *Bot) handleCallback(cb *tgbotapi.CallbackQuery) {
 
 	case strings.HasPrefix(data, "back:"):
 		b.ack(cb.ID)
-		b.onBack(chatID, userID, b.prepareTextRenderMessageID(chatID, cb.Message), data, lang)
+		b.onBack(ctx, chatID, userID, b.prepareTextRenderMessageID(chatID, cb.Message), data, lang)
 
 	case data == "support":
 		b.ack(cb.ID)
@@ -380,35 +378,33 @@ func (b *Bot) handleCallback(cb *tgbotapi.CallbackQuery) {
 	}
 }
 
-func (b *Bot) onBack(chatID, userID int64, msgID int, data, lang string) {
+func (b *Bot) onBack(ctx context.Context, chatID, userID int64, msgID int, data, lang string) {
 	target := strings.TrimPrefix(data, "back:")
 
 	switch {
 	case target == "menu":
-		ctx, cancel := b.handlerCtx()
-		defer cancel()
 		b.sendMainMenu(chatID, userID, msgID, lang, ctx)
 
 	case target == "catalog":
-		b.sendCatalog(chatID, msgID, lang)
+		b.sendCatalog(ctx, chatID, msgID, lang)
 
 	case target == "cart":
-		b.sendCart(chatID, userID, msgID, lang)
+		b.sendCart(ctx, chatID, userID, msgID, lang)
 
 	case target == "orders":
-		b.sendOrders(chatID, userID, msgID, lang)
+		b.sendOrders(ctx, chatID, userID, msgID, lang)
 
 	case target == "profile":
-		b.sendProfile(chatID, userID, msgID, lang)
+		b.sendProfile(ctx, chatID, userID, msgID, lang)
 
 	case target == "wishlist":
-		b.sendWishlist(chatID, userID, msgID, lang)
+		b.sendWishlist(ctx, chatID, userID, msgID, lang)
 
 	case target == "search":
 		b.sendSearchHint(chatID, msgID, lang)
 
 	case strings.HasPrefix(target, "category:"):
-		b.onCategorySelected(chatID, userID, msgID, target, lang)
+		b.onCategorySelected(ctx, chatID, userID, msgID, target, lang)
 	}
 }
 

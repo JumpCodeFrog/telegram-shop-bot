@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"strings"
@@ -10,7 +11,7 @@ import (
 	"shop_bot/internal/storage"
 )
 
-func (b *Bot) handleAddCategory(msg *tgbotapi.Message) {
+func (b *Bot) handleAddCategory(ctx context.Context, msg *tgbotapi.Message) {
 	if !b.isAdmin(msg.From.ID) {
 		return
 	}
@@ -25,8 +26,6 @@ func (b *Bot) handleAddCategory(msg *tgbotapi.Message) {
 		Name:     strings.Join(args[1:], " "),
 		IsActive: true,
 	}
-	ctx, cancel := b.handlerCtx()
-	defer cancel()
 	id, err := b.catalog.CreateCategory(ctx, cat)
 	if err != nil {
 		b.logger.Error("create category", "error", err)
@@ -36,7 +35,7 @@ func (b *Bot) handleAddCategory(msg *tgbotapi.Message) {
 	b.send(tgbotapi.NewMessage(msg.Chat.ID, fmt.Sprintf(b.t(lang, "admin_category_created"), id, cat.Emoji, cat.Name)))
 }
 
-func (b *Bot) handleEditCategory(msg *tgbotapi.Message) {
+func (b *Bot) handleEditCategory(ctx context.Context, msg *tgbotapi.Message) {
 	if !b.isAdmin(msg.From.ID) {
 		return
 	}
@@ -53,8 +52,6 @@ func (b *Bot) handleEditCategory(msg *tgbotapi.Message) {
 		return
 	}
 
-	ctx, cancel := b.handlerCtx()
-	defer cancel()
 	category, err := b.catalog.GetCategory(ctx, categoryID)
 	if err != nil {
 		b.send(tgbotapi.NewMessage(msg.Chat.ID, b.t(lang, "admin_category_not_found")))
@@ -81,7 +78,7 @@ func (b *Bot) handleEditCategory(msg *tgbotapi.Message) {
 	b.send(tgbotapi.NewMessage(msg.Chat.ID, b.t(lang, "admin_category_updated")))
 }
 
-func (b *Bot) handleDeleteCategory(msg *tgbotapi.Message) {
+func (b *Bot) handleDeleteCategory(ctx context.Context, msg *tgbotapi.Message) {
 	if !b.isAdmin(msg.From.ID) {
 		return
 	}
@@ -91,8 +88,6 @@ func (b *Bot) handleDeleteCategory(msg *tgbotapi.Message) {
 		b.send(tgbotapi.NewMessage(msg.Chat.ID, b.t(lang, "admin_usage_deletecategory")))
 		return
 	}
-	ctx, cancel := b.handlerCtx()
-	defer cancel()
 	if err := b.catalog.DeleteCategory(ctx, id); err != nil {
 		b.logger.Error("delete category", "category_id", id, "error", err)
 		b.send(tgbotapi.NewMessage(msg.Chat.ID, b.t(lang, "admin_category_delete_failed")))
@@ -101,13 +96,11 @@ func (b *Bot) handleDeleteCategory(msg *tgbotapi.Message) {
 	b.send(tgbotapi.NewMessage(msg.Chat.ID, b.t(lang, "admin_category_deleted")))
 }
 
-func (b *Bot) handleListCategories(msg *tgbotapi.Message) {
+func (b *Bot) handleListCategories(ctx context.Context, msg *tgbotapi.Message) {
 	if !b.isAdmin(msg.From.ID) {
 		return
 	}
 	lang := msg.From.LanguageCode
-	ctx, cancel := b.handlerCtx()
-	defer cancel()
 	categories, err := b.catalog.ListCategories(ctx)
 	if err != nil {
 		b.logger.Error("list categories", "error", err)

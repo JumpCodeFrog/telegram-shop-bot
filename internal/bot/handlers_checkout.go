@@ -14,10 +14,8 @@ import (
 )
 
 // onPromoEnter sets the user into promo-entry mode and asks for the code.
-func (b *Bot) onPromoEnter(chatID, userID int64, lang string) {
-	fsmCtx, cancel := b.handlerCtx()
-	defer cancel()
-	_ = b.fsm.SetPromoState(fsmCtx, userID, time.Now(), 10*time.Hour)
+func (b *Bot) onPromoEnter(ctx context.Context, chatID, userID int64, lang string) {
+	_ = b.fsm.SetPromoState(ctx, userID, time.Now(), 10*time.Hour)
 
 	msg := tgbotapi.NewMessage(chatID, b.t(lang, "promo_enter_prompt"))
 	msg.ReplyMarkup = tgbotapi.ForceReply{
@@ -29,20 +27,16 @@ func (b *Bot) onPromoEnter(chatID, userID int64, lang string) {
 }
 
 // handlePromoInput processes a text message from a user who is in promo-entry mode.
-func (b *Bot) handlePromoInput(msg *tgbotapi.Message) {
+func (b *Bot) handlePromoInput(ctx context.Context, msg *tgbotapi.Message) {
 	userID := msg.From.ID
 	chatID := msg.Chat.ID
 	lang := msg.From.LanguageCode
 
-	fsmCtx, fsmCancel := b.handlerCtx()
 	// Clear promo state immediately regardless of outcome.
-	_ = b.fsm.DelPromoState(fsmCtx, userID)
-	fsmCancel()
+	_ = b.fsm.DelPromoState(ctx, userID)
 
 	code := strings.TrimSpace(strings.ToUpper(msg.Text))
 
-	ctx, cancel := b.handlerCtx()
-	defer cancel()
 	promo, err := b.promos.GetPromoByCode(ctx, code)
 	if err != nil {
 		if err == storage.ErrNotFound {
@@ -121,15 +115,13 @@ func (b *Bot) handlePromoInput(msg *tgbotapi.Message) {
 	b.sendOrEditStyled(chatID, 0, sb.String(), "", keyboard)
 }
 
-func (b *Bot) onOrderConfirm(chatID, userID int64, msgID int, data, lang string) {
+func (b *Bot) onOrderConfirm(ctx context.Context, chatID, userID int64, msgID int, data, lang string) {
 	// Extract optional promo code from callback data.
 	var promoCode string
 	if strings.HasPrefix(data, "order:confirm:promo:") {
 		promoCode = strings.TrimPrefix(data, "order:confirm:promo:")
 	}
 
-	ctx, cancel := b.handlerCtx()
-	defer cancel()
 	view, err := b.cart.Get(ctx, userID)
 	if err != nil {
 		b.logger.Error("get cart for order confirm", "error", err)

@@ -832,6 +832,20 @@ documented backlog item (roadmap 4.15). Operator-driven paths (CLI ingress,
 bot refunds, review resolutions, balance adjustments) all write durable audit
 rows naming the actor.
 
+### Update tracing (roadmap 4.14)
+
+Every Telegram update is processed under a single per-update context derived
+at ingress (30s budget, cancelled with the process root). It carries a
+per-update `trace_id` (16 hex chars, crypto/rand; new id per processing
+attempt — redeliveries of one `update_id` get fresh traces). Operator-facing
+correlation: `LoggingMiddleware` ("incoming update") and `RecoverMiddleware`
+panic logs always include `trace_id` and `update_id`; the Stars
+settle/renewal/quarantine logs and the payment-barrier error logs include
+`trace_id`. To reconstruct one update's path: grep the bot log for the trace
+id (`trace_id=<id>` with the text log handler, `"trace_id":"<id>"` with
+JSON). Provider-webhook and worker settles are not part of the update chain
+— their attribution remains the `actor=` field (§12 above).
+
 ## Exit codes
 
 | Code | Meaning |

@@ -111,40 +111,26 @@ type Bot struct {
 	refundMu sync.Mutex
 
 	// rootCtx is the process-lifetime cancellation root (SetRootContext) that
-	// handlerCtx derives its per-handler timeouts from. Nil until set:
-	// handlerCtx falls back to context.Background(), so direct/test
+	// newUpdateCtx derives per-update contexts from. Nil until set:
+	// newUpdateCtx falls back to context.Background(), so direct/test
 	// constructors keep working unchanged.
 	rootCtx context.Context
 
-	// handler is the fully-chained update handler (used for both polling and webhook).
-	handler func(tgbotapi.Update)
+	// handler is the fully-chained update handler (used for both polling and
+	// webhook); every call passes the per-update ctx.
+	handler func(ctx context.Context, update tgbotapi.Update)
 
 	handlerOnce sync.Once
 }
 
 // SetRootContext installs the process-lifetime cancellation root that
-// handlerCtx derives its per-handler timeouts from. Call ONCE before starting
+// per-update contexts derive from (newUpdateCtx). Call ONCE before starting
 // the bot — main passes its signal.NotifyContext ctx — so shutdown
-// cancellation reaches in-flight handler DB work instead of letting it
-// outlive the process signal by up to the 30s per-handler bound. Nil-safe:
-// an unset (or nil) root leaves handlerCtx on its context.Background()
-// fallback.
+// cancellation reaches in-flight update work instead of letting it outlive
+// the process signal by up to the 30s per-update bound. Nil-safe: an unset
+// (or nil) root leaves newUpdateCtx on its context.Background() fallback.
 func (b *Bot) SetRootContext(ctx context.Context) {
 	b.rootCtx = ctx
-}
-
-// handlerCtx returns a context with a 30-second deadline for use in handler
-// DB/service calls: a per-handler timeout until full update-context
-// propagation exists, derived from the SetRootContext process-lifetime root
-// so shutdown cancellation reaches in-flight handler work (the nil fallback
-// keeps direct/test constructors working without a root). This prevents a
-// single slow query from holding a goroutine indefinitely.
-func (b *Bot) handlerCtx() (context.Context, context.CancelFunc) {
-	root := b.rootCtx
-	if root == nil {
-		root = context.Background()
-	}
-	return context.WithTimeout(root, 30*time.Second)
 }
 
 // New creates a new Bot with all dependencies injected.
@@ -242,7 +228,7 @@ func NewWithAPI(cfg *config.Config, api *tgbotapi.BotAPI, db *storage.DB, metric
 		subs:            storage.NewSQLSubscriptionStore(db),
 	}
 	// One-time setup at construction: no request/update context exists yet, so
-	// context.Background() is the honest root (not a per-handler handlerCtx).
+	// context.Background() is the honest root (not a per-update ctx).
 	b.reloadButtonStyles(context.Background())
 	// handler is built lazily in Run so we have a context.
 	return b, nil
@@ -261,7 +247,7 @@ func (b *Bot) prepareHandler(ctx context.Context) {
 	b.handler = Chain(b.route,
 		LoggingMiddleware(b.logger, b.metrics),
 		RecoverMiddleware(b.logger),
-		middleware.Auth(b.users, b.handlerCtx),
+		middleware.Auth(b.users),
 		RateLimitMiddleware(ctx, rate.Every(10*time.Second/30), 10),
 	)
 }
@@ -269,7 +255,7 @@ func (b *Bot) prepareHandler(ctx context.Context) {
 func (b *Bot) ensureHandler(ctx context.Context) {
 	if ctx == nil {
 		// Long-lived: this ctx controls the rate-limit cleanup goroutine for
-		// the process lifetime; a per-handler handlerCtx (30s) would kill it.
+		// the process lifetime; a per-update ctx (30s) would kill it.
 		ctx = context.Background()
 	}
 
@@ -418,10 +404,12 @@ func (b *Bot) Run(ctx context.Context) error {
 				// A payment is an ordering barrier. Finish older updates first, then
 				// advance getUpdates offset only after settlement/review is durable.
 				wg.Wait()
-				err := b.processSuccessfulPayment(update.Message)
+				uCtx, uCancel := b.newUpdateCtx(ctx, update)
+				err := b.processSuccessfulPayment(uCtx, update.Message)
+				uCancel()
 				cleanup()
 				if err != nil {
-					b.logger.Error("polling Stars payment not durably handled", "update_id", update.UpdateID, "error", err)
+					b.loggerFor(uCtx).Error("polling Stars payment not durably handled", "update_id", update.UpdateID, "error", err)
 					retryBatch = true
 					break
 				}
@@ -444,7 +432,9 @@ func (b *Bot) Run(ctx context.Context) error {
 			go func(upd tgbotapi.Update, done func()) {
 				defer wg.Done()
 				defer done()
-				b.handler(upd)
+				uCtx, uCancel := b.newUpdateCtx(ctx, upd)
+				defer uCancel()
+				b.handler(uCtx, upd)
 			}(update, cleanup)
 		}
 		if retryBatch {
@@ -461,12 +451,16 @@ func (b *Bot) Run(ctx context.Context) error {
 }
 
 // HandleUpdate processes a single Telegram update through the full middleware
-// chain. It is useful for local smoke tooling and webhook-style entry points.
-func (b *Bot) HandleUpdate(update tgbotapi.Update) {
+// chain. root scopes the update's processing (the webhook passes its request
+// ctx); nil falls back to the process root, then Background. Used by the
+// Telegram webhook and local smoke tooling.
+func (b *Bot) HandleUpdate(root context.Context, update tgbotapi.Update) {
 	// ensureHandler keeps this ctx for the handler-chain lifetime (rate-limit
-	// cleanup goroutine), so it must be background, not a 30s handlerCtx.
+	// cleanup goroutine), so it must be background, not a per-update ctx.
 	b.ensureHandler(context.Background())
-	b.handler(update)
+	uCtx, cancel := b.newUpdateCtx(root, update)
+	defer cancel()
+	b.handler(uCtx, update)
 }
 
 // RegisterTelegramWebhook registers the bot's webhook URL with the Telegram API.

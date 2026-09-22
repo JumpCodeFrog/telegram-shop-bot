@@ -210,7 +210,7 @@ type refundPlan struct {
 
 // handleRefundCommand renders the first tap: gate, rail dispatch, amount
 // resolution, ledger dry-run and the confirm card. Non-admins get nothing.
-func (b *Bot) handleRefundCommand(msg *tgbotapi.Message) {
+func (b *Bot) handleRefundCommand(ctx context.Context, msg *tgbotapi.Message) {
 	if !b.isAdmin(msg.From.ID) {
 		return
 	}
@@ -240,8 +240,6 @@ func (b *Bot) handleRefundCommand(msg *tgbotapi.Message) {
 		}
 	}
 
-	ctx, cancel := b.handlerCtx()
-	defer cancel()
 	order, err := b.order.GetOrder(ctx, orderID)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
@@ -307,19 +305,19 @@ func (b *Bot) handleRefundCommand(msg *tgbotapi.Message) {
 }
 
 // onAdminRefundCallback dispatches an already admin-gated admin:refund: tap.
-func (b *Bot) onAdminRefundCallback(chatID int64, msgID int, userID int64, data, lang string) {
+func (b *Bot) onAdminRefundCallback(ctx context.Context, chatID int64, msgID int, userID int64, data, lang string) {
 	orderID, amountMinor, ok := parseRefundCallback(data)
 	if !ok {
 		return
 	}
-	b.onAdminRefundConfirm(chatID, msgID, userID, orderID, amountMinor, lang)
+	b.onAdminRefundConfirm(ctx, chatID, msgID, userID, orderID, amountMinor, lang)
 }
 
 // onAdminRefundConfirm is the second tap: RELOAD the order, REBUILD the
 // refund fact from scratch and RE-PREVIEW it against the ledger (the same
 // TOCTOU discipline as the payreview confirm), then execute provider-first
 // and record second.
-func (b *Bot) onAdminRefundConfirm(chatID int64, msgID int, adminID, orderID, amountMinor int64, lang string) {
+func (b *Bot) onAdminRefundConfirm(ctx context.Context, chatID int64, msgID int, adminID, orderID, amountMinor int64, lang string) {
 	// Serialize confirm executions process-wide. Telegram can deliver a
 	// double-tap as two concurrent updates; the replay check below is only
 	// authoritative when no sibling confirm is mid-flight — critical on the
@@ -327,8 +325,6 @@ func (b *Bot) onAdminRefundConfirm(chatID int64, msgID int, adminID, orderID, am
 	b.refundMu.Lock()
 	defer b.refundMu.Unlock()
 
-	ctx, cancel := b.handlerCtx()
-	defer cancel()
 	render := func(text string) {
 		b.sendOrEditStyled(chatID, msgID, text, "", StyledKeyboard{})
 	}

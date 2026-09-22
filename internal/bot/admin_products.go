@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"strings"
@@ -11,19 +12,15 @@ import (
 	"shop_bot/internal/storage"
 )
 
-func (b *Bot) handleAddProduct(msg *tgbotapi.Message) {
+func (b *Bot) handleAddProduct(ctx context.Context, msg *tgbotapi.Message) {
 	if !b.isAdmin(msg.From.ID) {
 		return
 	}
-	ctx, cancel := b.handlerCtx()
-	defer cancel()
 	_ = b.fsm.SetAddProductState(ctx, msg.From.ID, &storage.AddProductState{Step: storage.StepName, CreatedAt: time.Now()}, 30*time.Minute)
 	b.send(tgbotapi.NewMessage(msg.Chat.ID, b.t(msg.From.LanguageCode, "admin_add_product_name")))
 }
 
-func (b *Bot) handleAddProductStep(msg *tgbotapi.Message) bool {
-	ctx, cancel := b.handlerCtx()
-	defer cancel()
+func (b *Bot) handleAddProductStep(ctx context.Context, msg *tgbotapi.Message) bool {
 	if msg.Text == "/cancel" {
 		state, _ := b.fsm.GetAddProductState(ctx, msg.From.ID)
 		_ = b.fsm.DelAddProductState(ctx, msg.From.ID)
@@ -78,14 +75,12 @@ func (b *Bot) handleAddProductStep(msg *tgbotapi.Message) bool {
 			state.SubPeriodDays = 30
 		}
 		_ = b.fsm.SetAddProductState(ctx, msg.From.ID, state, 30*time.Minute)
-		b.finishAddProduct(chatID, msg.From.ID, state.CategoryID, lang)
+		b.finishAddProduct(ctx, chatID, msg.From.ID, state.CategoryID, lang)
 	}
 	return true
 }
 
-func (b *Bot) finishAddProduct(chatID, userID, categoryID int64, lang string) {
-	ctx, cancel := b.handlerCtx()
-	defer cancel()
+func (b *Bot) finishAddProduct(ctx context.Context, chatID, userID, categoryID int64, lang string) {
 	state, _ := b.fsm.GetAddProductState(ctx, userID)
 	_ = b.fsm.DelAddProductState(ctx, userID)
 	if state == nil {
@@ -136,7 +131,7 @@ func (b *Bot) sendAdminProductDetails(chatID int64, product *storage.Product, la
 	b.send(reply)
 }
 
-func (b *Bot) handleEditProduct(msg *tgbotapi.Message) {
+func (b *Bot) handleEditProduct(ctx context.Context, msg *tgbotapi.Message) {
 	if !b.isAdmin(msg.From.ID) {
 		return
 	}
@@ -147,8 +142,6 @@ func (b *Bot) handleEditProduct(msg *tgbotapi.Message) {
 		return
 	}
 
-	ctx, cancel := b.handlerCtx()
-	defer cancel()
 	product, err := b.products.GetProduct(ctx, id)
 	if err != nil {
 		b.send(tgbotapi.NewMessage(msg.Chat.ID, b.t(lang, "admin_product_not_found")))
@@ -158,7 +151,7 @@ func (b *Bot) handleEditProduct(msg *tgbotapi.Message) {
 	b.sendAdminProductDetails(msg.Chat.ID, product, lang)
 }
 
-func (b *Bot) handleEditProductField(msg *tgbotapi.Message, prodID int64, field, value string) {
+func (b *Bot) handleEditProductField(ctx context.Context, msg *tgbotapi.Message, prodID int64, field, value string) {
 	if !b.isAdmin(msg.From.ID) {
 		return
 	}
@@ -168,8 +161,6 @@ func (b *Bot) handleEditProductField(msg *tgbotapi.Message, prodID int64, field,
 		return
 	}
 
-	ctx, cancel := b.handlerCtx()
-	defer cancel()
 	product, err := b.products.GetProduct(ctx, prodID)
 	if err != nil {
 		b.send(tgbotapi.NewMessage(msg.Chat.ID, b.t(lang, "admin_product_not_found")))
@@ -223,7 +214,7 @@ func (b *Bot) handleEditProductField(msg *tgbotapi.Message, prodID int64, field,
 	b.send(tgbotapi.NewMessage(msg.Chat.ID, b.t(lang, "admin_product_updated")))
 }
 
-func (b *Bot) handleDeleteProduct(msg *tgbotapi.Message) {
+func (b *Bot) handleDeleteProduct(ctx context.Context, msg *tgbotapi.Message) {
 	if !b.isAdmin(msg.From.ID) {
 		return
 	}
@@ -233,8 +224,6 @@ func (b *Bot) handleDeleteProduct(msg *tgbotapi.Message) {
 		b.send(tgbotapi.NewMessage(msg.Chat.ID, b.t(lang, "admin_usage_deleteproduct")))
 		return
 	}
-	ctx, cancel := b.handlerCtx()
-	defer cancel()
 	if err := b.products.DeleteProduct(ctx, id); err != nil {
 		b.logger.Error("delete product", "product_id", id, "error", err)
 		b.send(tgbotapi.NewMessage(msg.Chat.ID, b.t(lang, "admin_product_delete_failed")))
@@ -243,7 +232,7 @@ func (b *Bot) handleDeleteProduct(msg *tgbotapi.Message) {
 	b.send(tgbotapi.NewMessage(msg.Chat.ID, b.t(lang, "admin_product_deleted")))
 }
 
-func (b *Bot) onAdminToggleStock(chatID int64, data, lang string) {
+func (b *Bot) onAdminToggleStock(ctx context.Context, chatID int64, data, lang string) {
 	productID, err := parseIDFromCallback(data, "admin:togglestock:")
 	if err != nil {
 		b.logger.Error("parse admin:togglestock callback", "error", err)
@@ -251,8 +240,6 @@ func (b *Bot) onAdminToggleStock(chatID int64, data, lang string) {
 		return
 	}
 
-	ctx, cancel := b.handlerCtx()
-	defer cancel()
 	product, err := b.products.GetProduct(ctx, productID)
 	if err != nil {
 		b.logger.Error("get product for stock toggle", "product_id", productID, "error", err)
@@ -276,15 +263,15 @@ func (b *Bot) onAdminToggleStock(chatID int64, data, lang string) {
 	b.sendAdminProductDetails(chatID, product, lang)
 }
 
-func (b *Bot) routeEditProduct(msg *tgbotapi.Message) {
+func (b *Bot) routeEditProduct(ctx context.Context, msg *tgbotapi.Message) {
 	args := strings.Fields(msg.CommandArguments())
 	if len(args) == 0 {
 		return
 	}
 	id, _ := strconv.ParseInt(args[0], 10, 64)
 	if len(args) == 1 {
-		b.handleEditProduct(msg)
+		b.handleEditProduct(ctx, msg)
 	} else {
-		b.handleEditProductField(msg, id, args[1], strings.Join(args[2:], " "))
+		b.handleEditProductField(ctx, msg, id, args[1], strings.Join(args[2:], " "))
 	}
 }

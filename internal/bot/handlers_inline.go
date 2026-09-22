@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"context"
 	"fmt"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
@@ -12,10 +13,7 @@ const inlineResultsLimit = 20
 
 // handleInlineQuery handles inline queries by returning matching active products.
 // Usage in Telegram: @bot_name <search query>
-func (b *Bot) handleInlineQuery(iq *tgbotapi.InlineQuery) {
-	ctx, cancel := b.handlerCtx()
-	defer cancel()
-
+func (b *Bot) handleInlineQuery(ctx context.Context, iq *tgbotapi.InlineQuery) {
 	lang := iq.From.LanguageCode
 	if lang == "" {
 		lang = "en"

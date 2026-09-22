@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"strconv"
@@ -12,18 +13,18 @@ import (
 	"shop_bot/internal/storage"
 )
 
-func (b *Bot) handleAnalytics(msg *tgbotapi.Message) {
-	b.sendAnalytics(msg.Chat.ID, 0, analyticsDefaultDays, msg.From.LanguageCode)
+func (b *Bot) handleAnalytics(ctx context.Context, msg *tgbotapi.Message) {
+	b.sendAnalytics(ctx, msg.Chat.ID, 0, analyticsDefaultDays, msg.From.LanguageCode)
 }
 
-func (b *Bot) handleAnalyticsCallback(chatID int64, msgID int, data, lang string) {
+func (b *Bot) handleAnalyticsCallback(ctx context.Context, chatID int64, msgID int, data, lang string) {
 	days := analyticsDefaultDays
 	if strings.HasPrefix(data, "analytics:") {
 		if parsed, err := strconv.Atoi(strings.TrimPrefix(data, "analytics:")); err == nil && parsed > 0 {
 			days = parsed
 		}
 	}
-	b.sendAnalytics(chatID, msgID, days, lang)
+	b.sendAnalytics(ctx, chatID, msgID, days, lang)
 }
 
 const (
@@ -69,9 +70,7 @@ func renderRevenueChart(daily []storage.DailyRevenue, today time.Time, days int)
 	return sb.String()
 }
 
-func (b *Bot) sendAnalytics(chatID int64, msgID int, days int, lang string) {
-	ctx, cancel := b.handlerCtx()
-	defer cancel()
+func (b *Bot) sendAnalytics(ctx context.Context, chatID int64, msgID int, days int, lang string) {
 	fail := func(stage string, err error) {
 		b.logger.Error("analytics "+stage, "error", err)
 		b.send(tgbotapi.NewMessage(chatID, b.t(lang, "admin_analytics_error")))

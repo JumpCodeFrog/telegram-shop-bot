@@ -25,7 +25,7 @@ func (b *Bot) handleWizardPhotoStep(ctx context.Context, msg *tgbotapi.Message, 
 	case "done", "skip":
 		if state.EditProductID != 0 {
 			_ = b.fsm.DelAddProductState(ctx, msg.From.ID)
-			b.sendAdminPhotoList(chatID, 0, state.EditProductID, lang)
+			b.sendAdminPhotoList(ctx, chatID, 0, state.EditProductID, lang)
 			return
 		}
 		state.Step = storage.StepCategory
@@ -106,9 +106,7 @@ func (b *Bot) addProductPhoto(ctx context.Context, chatID, productID int64, file
 
 // sendAdminPhotoList renders the photo management screen for a product:
 // one delete button per photo plus an add button.
-func (b *Bot) sendAdminPhotoList(chatID int64, msgID int, productID int64, lang string) {
-	ctx, cancel := b.handlerCtx()
-	defer cancel()
+func (b *Bot) sendAdminPhotoList(ctx context.Context, chatID int64, msgID int, productID int64, lang string) {
 	photos, err := b.photos.List(ctx, productID)
 	if err != nil {
 		b.logger.Error("list product photos", "product_id", productID, "error", err)
@@ -134,7 +132,7 @@ func (b *Bot) sendAdminPhotoList(chatID int64, msgID int, productID int64, lang 
 // onAdminPhotoDelete handles admin:photodel:<photoID>:<productID>. After
 // deleting it re-syncs the cover for wizard-managed (file_id) covers and
 // re-renders the list.
-func (b *Bot) onAdminPhotoDelete(chatID int64, msgID int, data, lang string) {
+func (b *Bot) onAdminPhotoDelete(ctx context.Context, chatID int64, msgID int, data, lang string) {
 	parts := strings.Split(strings.TrimPrefix(data, "admin:photodel:"), ":")
 	if len(parts) != 2 {
 		return
@@ -145,15 +143,13 @@ func (b *Bot) onAdminPhotoDelete(chatID int64, msgID int, data, lang string) {
 		return
 	}
 
-	ctx, cancel := b.handlerCtx()
-	defer cancel()
 	if err := b.photos.Delete(ctx, photoID); err != nil {
 		b.logger.Error("delete product photo", "photo_id", photoID, "error", err)
 		b.send(tgbotapi.NewMessage(chatID, b.t(lang, "admin_photo_error")))
 		return
 	}
 	b.syncProductCover(ctx, productID)
-	b.sendAdminPhotoList(chatID, msgID, productID, lang)
+	b.sendAdminPhotoList(ctx, chatID, msgID, productID, lang)
 }
 
 // syncProductCover keeps products.photo_url pointing at an existing gallery
@@ -192,14 +188,12 @@ func (b *Bot) syncProductCover(ctx context.Context, productID int64) {
 
 // onAdminPhotoAdd handles admin:photoadd:<productID>: puts the admin into a
 // photo-only wizard state bound to the existing product.
-func (b *Bot) onAdminPhotoAdd(chatID, userID int64, data, lang string) {
+func (b *Bot) onAdminPhotoAdd(ctx context.Context, chatID, userID int64, data, lang string) {
 	productID, err := parseIDFromCallback(data, "admin:photoadd:")
 	if err != nil {
 		b.logger.Error("parse admin:photoadd callback", "error", err)
 		return
 	}
-	ctx, cancel := b.handlerCtx()
-	defer cancel()
 	_ = b.fsm.SetAddProductState(ctx, userID, &storage.AddProductState{Step: storage.StepPhoto, EditProductID: productID, CreatedAt: time.Now()}, 30*time.Minute)
 	b.send(tgbotapi.NewMessage(chatID, b.t(lang, "admin_photo_prompt")))
 }

@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -39,7 +40,7 @@ func (b *Bot) searchResultsKeyboard(lang string, products []storage.Product) Sty
 }
 
 // handleSearch searches for in-stock products matching the query.
-func (b *Bot) handleSearch(msg *tgbotapi.Message) {
+func (b *Bot) handleSearch(ctx context.Context, msg *tgbotapi.Message) {
 	lang := msg.From.LanguageCode
 	chatID := msg.Chat.ID
 	navKB := StyledKeyboard{b.searchNavRow(lang)}
@@ -50,8 +51,6 @@ func (b *Bot) handleSearch(msg *tgbotapi.Message) {
 		return
 	}
 
-	ctx, cancel := b.handlerCtx()
-	defer cancel()
 	products, err := b.products.SearchProducts(ctx, query)
 	if err != nil {
 		b.logger.Error("search products", "error", err)

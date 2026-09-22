@@ -11,12 +11,11 @@ type UserStore interface {
 	Upsert(ctx context.Context, user *storage.User) error
 }
 
-// Auth upserts the Telegram user into storage before the update proceeds.
-// ctxFn supplies a bounded per-update context for the DB call (e.g.
-// Bot.handlerCtx); the middleware chain itself does not carry a context.
-func Auth(userStore UserStore, ctxFn func() (context.Context, context.CancelFunc)) func(next func(update tgbotapi.Update)) func(update tgbotapi.Update) {
-	return func(next func(update tgbotapi.Update)) func(update tgbotapi.Update) {
-		return func(update tgbotapi.Update) {
+// Auth upserts the Telegram user into storage before the update proceeds,
+// using the per-update context carried by the chain (roadmap 4.14).
+func Auth(userStore UserStore) func(next func(ctx context.Context, update tgbotapi.Update)) func(ctx context.Context, update tgbotapi.Update) {
+	return func(next func(ctx context.Context, update tgbotapi.Update)) func(ctx context.Context, update tgbotapi.Update) {
+		return func(ctx context.Context, update tgbotapi.Update) {
 			var tgUser *tgbotapi.User
 
 			if update.Message != nil {
@@ -33,17 +32,11 @@ func Auth(userStore UserStore, ctxFn func() (context.Context, context.CancelFunc
 					LanguageCode: tgUser.LanguageCode,
 				}
 
-				// Synchronize user in background or foreground?
-				// For Auth middleware, usually foreground to have ID available
-				ctx, cancel := ctxFn()
+				// Foreground upsert so the user row exists for later handlers.
 				_ = userStore.Upsert(ctx, user)
-				cancel()
-
-				// We can attach the user object to a custom context if needed
-				// For now, just ensure they exist in DB
 			}
 
-			next(update)
+			next(ctx, update)
 		}
 	}
 }

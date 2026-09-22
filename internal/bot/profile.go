@@ -1,17 +1,16 @@
 package bot
 
 import (
+	"context"
+
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
-func (b *Bot) handleProfile(msg *tgbotapi.Message) {
-	b.sendProfile(msg.Chat.ID, msg.From.ID, 0, msg.From.LanguageCode)
+func (b *Bot) handleProfile(ctx context.Context, msg *tgbotapi.Message) {
+	b.sendProfile(ctx, msg.Chat.ID, msg.From.ID, 0, msg.From.LanguageCode)
 }
 
-func (b *Bot) sendProfile(chatID, userID int64, msgID int, lang string) {
-	ctx, cancel := b.handlerCtx()
-	defer cancel()
-
+func (b *Bot) sendProfile(ctx context.Context, chatID, userID int64, msgID int, lang string) {
 	user, err := b.users.GetByTelegramID(ctx, userID)
 	if err != nil {
 		b.logger.Error("get profile user", "error", err)

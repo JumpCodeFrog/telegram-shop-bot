@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -10,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -136,6 +138,35 @@ func TestTelegramWebhookStarsStorageFailureWithholdsAcknowledgement(t *testing.T
 	e.bot.TelegramWebhookHandler()(recorder, request)
 	if recorder.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want 500", recorder.Code)
+	}
+}
+
+func TestTelegramWebhookStarsQuarantineLogCarriesTraceID(t *testing.T) {
+	e := newE2EEnv(t)
+	e.bot.cfg.TelegramWebhookSecret = testTelegramWebhookSecret
+	var logs bytes.Buffer
+	e.bot.logger = slog.New(slog.NewTextHandler(&logs, nil))
+	body := telegramSuccessfulPaymentBody(11, 6201, "not-an-order", "stars-trace-1", 500)
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/telegram-webhook", strings.NewReader(body))
+	request.Header.Set("X-Telegram-Bot-Api-Secret-Token", testTelegramWebhookSecret)
+	e.bot.TelegramWebhookHandler()(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", recorder.Code, recorder.Body.String())
+	}
+
+	line := ""
+	for _, l := range strings.Split(logs.String(), "\n") {
+		if strings.Contains(l, "Stars payment quarantined: invalid order payload") {
+			line = l
+		}
+	}
+	if line == "" {
+		t.Fatalf("quarantine log missing, got: %s", logs.String())
+	}
+	if !regexp.MustCompile(`trace_id=[0-9a-f]{16}`).MatchString(line) {
+		t.Fatalf("quarantine log lacks 16-hex trace_id: %q", line)
 	}
 }
 
