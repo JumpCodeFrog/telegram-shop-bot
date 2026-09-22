@@ -15,7 +15,7 @@ func (b *Bot) route(ctx context.Context, update tgbotapi.Update) {
 		b.handlePreCheckout(update.PreCheckoutQuery)
 
 	case update.InlineQuery != nil:
-		b.handleInlineQuery(update.InlineQuery)
+		b.handleInlineQuery(ctx, update.InlineQuery)
 
 	case update.Message != nil:
 		b.routeMessage(ctx, update.Message)
@@ -65,7 +65,7 @@ func (b *Bot) routeMessage(ctx context.Context, msg *tgbotapi.Message) {
 
 	switch msg.Command() {
 	case "start":
-		b.handleStart(msg)
+		b.handleStart(ctx, msg)
 	case "help":
 		b.handleHelp(msg)
 	case "support":
@@ -77,26 +77,26 @@ func (b *Bot) routeMessage(ctx context.Context, msg *tgbotapi.Message) {
 	case "catalog":
 		b.handleCatalog(msg)
 	case "search":
-		b.handleSearch(msg)
+		b.handleSearch(ctx, msg)
 	case "cart":
 		b.handleCart(msg)
 	case "orders":
-		b.handleOrders(msg)
+		b.handleOrders(ctx, msg)
 
 	case "mysubs":
 		b.handleMySubs(msg)
 
 	case "profile":
-		b.handleProfile(msg)
+		b.handleProfile(ctx, msg)
 
 	case "referral":
-		b.handleReferral(msg)
+		b.handleReferral(ctx, msg)
 
 	case "wishlist":
 		b.handleWishlist(msg)
 
 	case "cancel":
-		b.handleCancel(msg)
+		b.handleCancel(ctx, msg)
 
 	// Admin commands.
 	case "admin":
@@ -339,7 +339,7 @@ func (b *Bot) handleCallback(ctx context.Context, cb *tgbotapi.CallbackQuery) {
 
 	case data == "profile_view":
 		b.ack(cb.ID)
-		b.sendProfile(chatID, userID, b.prepareTextRenderMessageID(chatID, cb.Message), lang)
+		b.sendProfile(ctx, chatID, userID, b.prepareTextRenderMessageID(chatID, cb.Message), lang)
 
 	case strings.HasPrefix(data, "review:"):
 		b.handleReviewCallback(cb)
@@ -350,7 +350,7 @@ func (b *Bot) handleCallback(ctx context.Context, cb *tgbotapi.CallbackQuery) {
 	case strings.HasPrefix(data, "ref:"):
 		b.ack(cb.ID)
 		if data == "ref:open" {
-			b.sendReferralScreen(chatID, userID, b.prepareTextRenderMessageID(chatID, cb.Message), lang)
+			b.sendReferralScreen(ctx, chatID, userID, b.prepareTextRenderMessageID(chatID, cb.Message), lang)
 		}
 
 	case data == "search:hint":
@@ -359,7 +359,7 @@ func (b *Bot) handleCallback(ctx context.Context, cb *tgbotapi.CallbackQuery) {
 
 	case strings.HasPrefix(data, "back:"):
 		b.ack(cb.ID)
-		b.onBack(chatID, userID, b.prepareTextRenderMessageID(chatID, cb.Message), data, lang)
+		b.onBack(ctx, chatID, userID, b.prepareTextRenderMessageID(chatID, cb.Message), data, lang)
 
 	case data == "support":
 		b.ack(cb.ID)
@@ -378,13 +378,11 @@ func (b *Bot) handleCallback(ctx context.Context, cb *tgbotapi.CallbackQuery) {
 	}
 }
 
-func (b *Bot) onBack(chatID, userID int64, msgID int, data, lang string) {
+func (b *Bot) onBack(ctx context.Context, chatID, userID int64, msgID int, data, lang string) {
 	target := strings.TrimPrefix(data, "back:")
 
 	switch {
 	case target == "menu":
-		ctx, cancel := b.handlerCtx()
-		defer cancel()
 		b.sendMainMenu(chatID, userID, msgID, lang, ctx)
 
 	case target == "catalog":
@@ -394,10 +392,10 @@ func (b *Bot) onBack(chatID, userID int64, msgID int, data, lang string) {
 		b.sendCart(chatID, userID, msgID, lang)
 
 	case target == "orders":
-		b.sendOrders(chatID, userID, msgID, lang)
+		b.sendOrders(ctx, chatID, userID, msgID, lang)
 
 	case target == "profile":
-		b.sendProfile(chatID, userID, msgID, lang)
+		b.sendProfile(ctx, chatID, userID, msgID, lang)
 
 	case target == "wishlist":
 		b.sendWishlist(chatID, userID, msgID, lang)
