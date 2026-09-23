@@ -358,6 +358,57 @@ func TestPayReviewOrphanShapeKeyedSettleFilter(t *testing.T) {
 	}
 }
 
+// TestPayReviewRefundedOrphanActionSets pins HANDOFF §6.22: the orphan-anomaly
+// default branch is kind-keyed, not reason-keyed — a refunded-kind orphan
+// (refund ingress failure) offers ONLY Refund, and only when its row carries
+// the full money tuple storage's accepted_refund gate demands (amount + refund
+// id + parent capture id); a degenerate row offers nothing (CLI-only,
+// fail-closed: with no refunds row recorded, Dismiss is deliberately withheld
+// too). Reasons rot, kinds are schema-checked — an unknown reason on a shaped
+// refunded row still gets Refund. Captured-kind legs keep the §6.17
+// shape-keyed Settle untouched.
+func TestPayReviewRefundedOrphanActionSets(t *testing.T) {
+	orphan := func(kind, reason string, amount int64, external, related string) storage.PaymentReviewCase {
+		return storage.PaymentReviewCase{
+			OrderID: 0, Provider: storage.PaymentMethodStars, PaymentState: "",
+			Targets: []storage.PaymentReviewTarget{{
+				Kind: storage.PaymentReviewTargetAnomaly, ID: 7, ReasonCode: reason,
+				EventKind: kind, AmountMinor: amount, ExternalID: external, RelatedExternalID: related,
+			}},
+		}
+	}
+	for _, tc := range []struct {
+		name string
+		item storage.PaymentReviewCase
+		want []string
+	}{
+		{"fully shaped refunded orphan", orphan(storage.PaymentEventRefunded, "refund_parent_not_found", 100, "rf-1", "cap-1"),
+			[]string{payReviewActionRefund}},
+		{"unknown refunded reason is still kind-keyed", orphan(storage.PaymentEventRefunded, "refund_future_reason", 100, "rf-1", "cap-1"),
+			[]string{payReviewActionRefund}},
+		{"refunded orphan without parent capture id", orphan(storage.PaymentEventRefunded, "refund_parent_not_found", 100, "rf-1", ""),
+			nil},
+		{"refunded orphan without refund id", orphan(storage.PaymentEventRefunded, "refund_parent_not_found", 100, "", "cap-1"),
+			nil},
+		{"refunded orphan without amount", orphan(storage.PaymentEventRefunded, "refund_parent_not_found", 0, "rf-1", "cap-1"),
+			nil},
+		{"captured orphan keeps shape-keyed Settle", orphan(storage.PaymentEventCaptured, "provider_verified_unknown_order", 100, "orphan-a", ""),
+			[]string{payReviewActionSettle}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := payReviewActions(tc.item)
+			if len(got) != len(tc.want) {
+				t.Fatalf("actions = %v, want %v", got, tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Fatalf("actions = %v, want %v", got, tc.want)
+				}
+			}
+		})
+	}
+}
+
 // TestPayReviewCallbackByteBudget documents the 64-byte budget (ruling P6):
 // the realistic attached worst case fits; the theoretical detached worst case
 // (19-digit provider order id + large anomaly id) exceeds it and is degraded
@@ -883,5 +934,55 @@ func TestPayReviewOrphanCardSettleButtonIsShapeKeyed(t *testing.T) {
 	}
 	if !strings.Contains(markup, fmt.Sprintf("admin:payrev:settle:yookassa:0:%d", anomalyID("pay_shaped"))) {
 		t.Fatalf("shaped card lacks Settle: %s", markup)
+	}
+}
+
+// TestPayReviewRefundedOrphanResolvesByRefund pins HANDOFF §6.22 end to end:
+// a fully shaped refunded-kind orphan anomaly (refund ingress failure) offers
+// Refund on its card — the only decision storage accepts there — and the
+// two-tap resolve-apply flow records accepted_refund and clears the anomaly
+// from the review queue.
+func TestPayReviewRefundedOrphanResolvesByRefund(t *testing.T) {
+	e := newE2EEnv(t)
+	store := storage.NewSQLOrderStore(e.db)
+	err := store.RecordPaymentAnomaly(context.Background(), storage.PaymentAnomaly{
+		Provider: storage.PaymentMethodStars, EventKind: storage.PaymentEventRefunded,
+		ExternalID: "rf-1", RelatedExternalID: "cap-1",
+		AmountMinor: 100, Currency: "XTR", Scale: 0,
+		Reason: "refund_parent_not_found",
+	})
+	if !errors.Is(err, storage.ErrPaymentNeedsReview) {
+		t.Fatalf("seed refunded orphan: %v", err)
+	}
+	var anomalyID int64
+	if err := e.db.Conn().QueryRow(`SELECT id FROM payment_anomalies`).Scan(&anomalyID); err != nil {
+		t.Fatal(err)
+	}
+
+	// The card offers Refund and nothing else.
+	calls := e.cb(e2eAdminID, fmt.Sprintf("admin:payrev:stars:0:%d", anomalyID), "en")
+	var markup string
+	for _, c := range calls {
+		if m := c.markup(); m != "" {
+			markup = m
+		}
+	}
+	if !strings.Contains(markup, fmt.Sprintf("admin:payrev:refund:stars:0:%d", anomalyID)) {
+		t.Fatalf("refunded orphan card lacks Refund: %s", markup)
+	}
+	if strings.Contains(markup, "admin:payrev:settle:") || strings.Contains(markup, "admin:payrev:dismiss:") {
+		t.Fatalf("refunded orphan card must offer only Refund: %s", markup)
+	}
+
+	// Two-tap resolve-apply: the accepted_refund decision storage's refunded
+	// gate demands is recorded, and the anomaly leaves ListPaymentReviews.
+	e.cb(e2eAdminID, fmt.Sprintf("admin:payrev:refund:stars:0:%d", anomalyID), "en")
+	calls = e.cb(e2eAdminID, fmt.Sprintf("admin:payrevdo:refund:stars:0:%d", anomalyID), "en")
+	if got := e.qStr(`SELECT decision FROM payment_resolutions WHERE target_kind='payment_anomaly' AND target_id=?`, anomalyID); got != "accepted_refund" {
+		t.Fatalf("refunded orphan decision=%q calls=%+v", got, calls)
+	}
+	calls = e.cmd(e2eAdminID, "/payreview", "en")
+	if got, want := tgText(calls), e.bot.t("en", "admin_payreview_empty"); got != want {
+		t.Fatalf("queue after resolve = %q, want empty %q (calls=%+v)", got, want, calls)
 	}
 }

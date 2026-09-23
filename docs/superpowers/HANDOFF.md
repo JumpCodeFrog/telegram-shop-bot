@@ -170,6 +170,8 @@ Stripe, YooKassa, баланса; crypto/ton/nowpayments — вручную в �
     `explicitNoAttemptAnomalyDecision` принял бы при наличии external+related ids
     (micro-followups финал, observation #4 — pre-existing, shape-фильтр §6.17 только
     сокращает мёртвые кнопки). Reason-aware mapping действий для refunded-orphans.
+     ✅ закрыто 23.09.2026, план
+     docs/superpowers/plans/2026-09-23-payreview-refunded-orphans.md
 
 ## 7. Процесс (как велась работа — воспроизводим)
 

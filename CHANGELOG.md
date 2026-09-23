@@ -86,6 +86,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   CLI-vs-bot reason rendering asymmetry documented; §5 wording tightened for
   digest-only rows.
 
+- `/payreview` refunded-kind orphan cards now offer `[Refund]` only when the
+  anomaly carries the full money tuple (amount + refund id + parent capture
+  id) — the only decision storage accepts there; degenerate rows are CLI-only
+  (HANDOFF §6.22 closed).
+
 ---
 
 ## [3.0.1] — 2026-09-13
