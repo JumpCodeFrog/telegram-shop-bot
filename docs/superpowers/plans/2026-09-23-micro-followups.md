@@ -60,9 +60,12 @@
   - `admin_payreview.go` `payReviewActions`, orphan-anomaly default branch: replace `return []string{payReviewActionSettle}` with:
     ```go
     		default:
-    			// Shape-keyed gate (§6.17): storage rejects a settle without an
-    			// amount and external id — don't offer a dead button. Fail-closed:
-    			// CLI stays available for anything ambiguous.
+    			// Shape-keyed gate (§6.17, R17 CORRECTED): mirrors the in-row
+    			// shape conjuncts of the storage settle precondition
+    			// (explicitNoAttemptAnomalyDecision). Exact on production-reachable
+    			// rows; the unmirrorable attempt-collision conjunct stays
+    			// fail-closed in storage. Fail-closed UX: ambiguous rows lose the
+    			// button, CLI stays available.
     			if item.Targets[0].AmountMinor > 0 && item.Targets[0].ExternalID != "" {
     				return []string{payReviewActionSettle}
     			}
