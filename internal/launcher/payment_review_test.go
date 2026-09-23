@@ -121,6 +121,83 @@ func TestPaymentReviewCLIListsPreviewsAndExplicitlyResolves(t *testing.T) {
 	}
 }
 
+// TestPaymentReviewCLIListSurfacesActor pins the 4.15 CLI surfacing: the list
+// line gains an actors= field carrying the durable ingress identity, with the
+// existing "-" idiom when no target records one.
+func TestPaymentReviewCLIListSurfacesActor(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "actor-list.db")
+	db, err := storage.New(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := db.Conn().Exec(`INSERT INTO orders
+		(user_id,total_usd,total_stars,payment_method,status,order_state,payment_state,fulfillment_state)
+		VALUES (42,5,100,'stars','pending','placed','pending','unfulfilled')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	actorOrderID, _ := res.LastInsertId()
+	res, err = db.Conn().Exec(`INSERT INTO orders
+		(user_id,total_usd,total_stars,payment_method,status,order_state,payment_state,fulfillment_state)
+		VALUES (43,5,100,'stars','pending','placed','pending','unfulfilled')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyOrderID, _ := res.LastInsertId()
+	ctx := context.Background()
+	store := storage.NewSQLOrderStore(db)
+	// Actor-carrying needs_review event (ingress fact path) plus a legacy
+	// NULL-actor one on a second order.
+	if err := store.RecordUnexpectedPaymentFact(ctx, actorOrderID, storage.PaymentFact{
+		Provider: "stars", ExternalID: "capture-actor",
+		AmountMinor: 100, Currency: "XTR", Scale: 0, PayerID: 42,
+		Actor: "webhook:stars",
+	}, "late_capture"); !errors.Is(err, storage.ErrPaymentNeedsReview) {
+		t.Fatal(err)
+	}
+	if err := store.RecordUnexpectedPayment(ctx, legacyOrderID, "stars", "capture-legacy", "late_capture"); !errors.Is(err, storage.ErrPaymentNeedsReview) {
+		t.Fatal(err)
+	}
+	var actorEventID, legacyEventID int64
+	if err := db.Conn().QueryRow(`SELECT id FROM payment_events WHERE external_id='capture-actor'`).Scan(&actorEventID); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Conn().QueryRow(`SELECT id FROM payment_events WHERE external_id='capture-legacy'`).Scan(&legacyEventID); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	envPath := filepath.Join(dir, ".env")
+	if err := os.WriteFile(envPath, []byte(fmt.Sprintf("BOT_TOKEN=%s\nDB_PATH=%s\n", testToken, dbPath)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	baseOpts := func(out *bytes.Buffer) PaymentReviewOptions {
+		return PaymentReviewOptions{
+			EnvPath: envPath, BaseDir: dir, Out: out,
+			LookupEnv: func(string) (string, bool) { return "", false },
+		}
+	}
+
+	var listOut bytes.Buffer
+	if code := RunPaymentReview(ctx, []string{"list", "--provider", "stars"}, baseOpts(&listOut)); code != 1 {
+		t.Fatalf("list code=%d output=%q", code, listOut.String())
+	}
+	out := listOut.String()
+	wantActorLine := fmt.Sprintf("order=%d state=needs_review event_ids=%d anomaly_ids=- order_target=- reasons=event_captured actors=webhook:stars\n",
+		actorOrderID, actorEventID)
+	wantLegacyLine := fmt.Sprintf("order=%d state=needs_review event_ids=%d anomaly_ids=- order_target=- reasons=event_captured actors=-\n",
+		legacyOrderID, legacyEventID)
+	if !strings.Contains(out, wantActorLine) || !strings.Contains(out, wantLegacyLine) {
+		t.Fatalf("list output=%q missing %q or %q", out, wantActorLine, wantLegacyLine)
+	}
+	if strings.Contains(out, "capture-actor") || strings.Contains(out, "capture-legacy") {
+		t.Fatalf("list output is not redacted: %q", out)
+	}
+}
+
 func TestPaymentReviewCLIListsPreviewsAndResolvesYooKassa(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "yookassa.db")

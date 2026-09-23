@@ -256,6 +256,7 @@
   "admin_payreview_card_state": "Payment state: %s\n",
   "admin_payreview_card_targets": "Targets:\n",
   "admin_payreview_card_target_line": "• %s #%d — %s\n",
+  "admin_payreview_card_target_line_actor": "• %s #%d — %s (actor: %s)\n",
   "admin_payreview_card_trap": "⚠️ Refund recording failure card: act only AFTER the recovery re-run completed the ledger record. Before recovery, ↩️ Refund acknowledges money the books have not recorded and closes this card permanently; after recovery, use 🚫 Dismiss. Details: docs/payment-operations.md §11.",
   "admin_payreview_card_cli_only": "🔧 No bot-side action passes on this case — resolve it via the payment-review CLI (docs §4).\n",
   "admin_payreview_action_settle": "✅ Settle",
