@@ -53,7 +53,7 @@ func (b *Bot) handleSearch(ctx context.Context, msg *tgbotapi.Message) {
 
 	products, err := b.products.SearchProducts(ctx, query)
 	if err != nil {
-		b.logger.Error("search products", "error", err)
+		b.loggerFor(ctx).Error("search products", "error", err)
 		b.sendOrEditStyled(chatID, 0, b.t(lang, "error_short"), "", navKB)
 		return
 	}

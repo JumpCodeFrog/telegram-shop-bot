@@ -204,7 +204,7 @@ func (b *Bot) styledBtn(key, text, data string, defaultStyle ButtonStyle) Styled
 func (b *Bot) reloadButtonStyles(ctx context.Context) {
 	styles, err := b.uiSettings.ListButtonStyles(ctx)
 	if err != nil {
-		b.logger.Warn("reloadButtonStyles failed", "error", err)
+		b.loggerFor(ctx).Warn("reloadButtonStyles failed", "error", err)
 		return
 	}
 	for k, v := range styles {

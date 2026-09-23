@@ -257,7 +257,7 @@
   "admin_payreview_card_targets": "Objetivos:\n",
   "admin_payreview_card_target_line": "• %s #%d — %s\n",
   "admin_payreview_card_target_line_actor": "• %s #%d — %s (actor: %s)\n",
-  "admin_payreview_card_trap": "⚠️ Tarjeta de fallo de registro del reembolso: actúa solo DESPUÉS de que la reejecución de recuperación complete el registro contable. Antes de la recuperación, ↩️ Refund reconoce un dinero que los libros no registraron y cierra esta tarjeta permanentemente; después, usa 🚫 Dismiss. Detalles: docs/payment-operations.md §11.",
+  "admin_payreview_card_trap": "⚠️ Tarjeta de fallo de registro del reembolso: actúa solo DESPUÉS de que la reejecución de recuperación complete el registro contable. Antes de la recuperación, ↩️ Refund reconoce un dinero que los libros no registraron y cierra esta tarjeta permanentemente; después, usa 🚫 Dismiss. Detalles: docs/payment-operations.md §11.\n",
   "admin_payreview_card_cli_only": "🔧 Ninguna acción del bot pasa para este caso: resuélvelo con la CLI payment-review (docs §4).\n",
   "admin_payreview_action_settle": "✅ Liquidar",
   "admin_payreview_action_refund": "↩️ Reembolsar",

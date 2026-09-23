@@ -106,7 +106,7 @@ func payReviewReasons(item storage.PaymentReviewCase) string {
 func (b *Bot) sendPayReviewList(ctx context.Context, chatID int64, msgID int, lang string) {
 	cases, err := b.listAllPaymentReviews(ctx)
 	if err != nil {
-		b.logger.Error("list payment reviews", "error", err)
+		b.loggerFor(ctx).Error("list payment reviews", "error", err)
 		b.sendOrEditStyled(chatID, msgID, b.t(lang, "admin_payreview_failed"), "", StyledKeyboard{})
 		return
 	}
@@ -246,7 +246,8 @@ func (b *Bot) findReviewCase(ctx context.Context, ref payReviewRef) (storage.Pay
 // the actions that can actually pass against the storage decision gates
 // (payment_resolutions.go): digest-only facts fail every decision, path-5
 // refund orphans pass Refund pre-recovery and Dismiss post-recovery, other
-// capture orphans pass Settle (compensated). Attached cases keep the three
+// capture orphans pass Settle (compensated) only when fully shaped (§6.17).
+// Attached cases keep the three
 // candidate projections — the preview validates them against ledger evidence.
 // This is a UX filter, never a gate: storage remains the final validator, and
 // a filtered-out action that storage would accept is a bug, not a policy.
@@ -268,7 +269,16 @@ func payReviewActions(item storage.PaymentReviewCase) []string {
 			// digests plus the Stars undecodable-update digest.
 			return nil
 		default:
-			return []string{payReviewActionSettle}
+			// Shape-keyed gate (§6.17, R17 CORRECTED): mirrors the in-row
+			// shape conjuncts of the storage settle precondition
+			// (explicitNoAttemptAnomalyDecision). Exact on production-reachable
+			// rows; the unmirrorable attempt-collision conjunct stays
+			// fail-closed in storage. Fail-closed UX: ambiguous rows lose the
+			// button, CLI stays available.
+			if item.Targets[0].AmountMinor > 0 && item.Targets[0].ExternalID != "" {
+				return []string{payReviewActionSettle}
+			}
+			return nil
 		}
 	}
 	return []string{payReviewActionSettle, payReviewActionRefund, payReviewActionDismiss}
@@ -310,7 +320,7 @@ func (b *Bot) sendPayReviewCard(ctx context.Context, chatID int64, msgID int, re
 			b.sendOrEditStyled(chatID, msgID, b.t(lang, "admin_payrev_case_gone"), "", StyledKeyboard{})
 			return
 		}
-		b.logger.Error("load payment review case", "error", err)
+		b.loggerFor(ctx).Error("load payment review case", "error", err)
 		b.sendOrEditStyled(chatID, msgID, b.t(lang, "admin_payreview_failed"), "", StyledKeyboard{})
 		return
 	}
@@ -383,7 +393,7 @@ func (b *Bot) onAdminPayReviewPreview(ctx context.Context, chatID int64, msgID i
 		case errors.Is(err, storage.ErrPaymentReviewConflict), errors.Is(err, storage.ErrOrderStatusConflict):
 			b.sendOrEditStyled(chatID, msgID, b.t(lang, "admin_payrev_conflict"), "", StyledKeyboard{})
 		default:
-			b.logger.Error("preview payment review", "error", err)
+			b.loggerFor(ctx).Error("preview payment review", "error", err)
 			b.sendOrEditStyled(chatID, msgID, b.t(lang, "admin_payreview_failed"), "", StyledKeyboard{})
 		}
 		return
@@ -437,7 +447,7 @@ func (b *Bot) onAdminPayReviewConfirm(ctx context.Context, chatID int64, msgID i
 	case errors.Is(err, storage.ErrPaymentReviewConflict) || errors.Is(err, storage.ErrOrderStatusConflict):
 		b.sendOrEditStyled(chatID, msgID, b.t(lang, "admin_payrev_conflict"), "", StyledKeyboard{})
 	default:
-		b.logger.Error("resolve payment review", "error", err)
+		b.loggerFor(ctx).Error("resolve payment review", "error", err)
 		b.sendOrEditStyled(chatID, msgID, b.t(lang, "admin_payreview_failed"), "", StyledKeyboard{})
 	}
 }

@@ -722,3 +722,89 @@ func TestListPaymentReviewsTargetsCarryActor(t *testing.T) {
 		t.Fatalf("missing targets=%v", wantActor)
 	}
 }
+
+// TestListPaymentReviewsAnomalyTargetsCarryShape pins the 4.15 §6.17 read-back:
+// anomaly targets surface their row's fact shape (amount, external id) so the
+// bot can mirror the storage settle precondition; event targets keep zero
+// values.
+func TestListPaymentReviewsAnomalyTargetsCarryShape(t *testing.T) {
+	db, err := New(filepath.Join(t.TempDir(), "review-target-shape.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	store, orderID, _ := seedLedgerOrder(t, db, 100)
+
+	// A legacy needs_review event target: no shape to carry.
+	if err := store.RecordUnexpectedPayment(ctx, orderID, "stars", "shape-event", "late_capture"); !errors.Is(err, ErrPaymentNeedsReview) {
+		t.Fatalf("event error=%v", err)
+	}
+	// One attached and one orphan anomaly, both fully shaped.
+	attached := PaymentAnomaly{
+		ProposedOrderID: orderID, Provider: PaymentMethodStars,
+		EventKind: PaymentEventCaptured, ExternalID: "shape-attached",
+		AmountMinor: 250, Currency: "XTR", Scale: 0, Reason: "identity_conflict",
+	}
+	if err := store.RecordPaymentAnomaly(ctx, attached); !errors.Is(err, ErrPaymentNeedsReview) {
+		t.Fatalf("attached anomaly error=%v", err)
+	}
+	orphan := PaymentAnomaly{
+		Provider: PaymentMethodStars, EventKind: PaymentEventCaptured,
+		ExternalID: "shape-orphan", AmountMinor: 100,
+		Currency: "XTR", Scale: 0, Reason: "provider_verified_unknown_order",
+	}
+	if err := store.RecordPaymentAnomaly(ctx, orphan); !errors.Is(err, ErrPaymentNeedsReview) {
+		t.Fatalf("orphan anomaly error=%v", err)
+	}
+
+	rowID := func(table, externalID string) int64 {
+		t.Helper()
+		var id int64
+		if err := db.Conn().QueryRow(
+			fmt.Sprintf(`SELECT id FROM %s WHERE external_id=?`, table), externalID).Scan(&id); err != nil {
+			t.Fatalf("%s %s: %v", table, externalID, err)
+		}
+		return id
+	}
+	wantShape := map[string]struct {
+		amount   int64
+		external string
+	}{
+		fmt.Sprintf("%s:%d", PaymentReviewTargetEvent, rowID("payment_events", "shape-event")):         {amount: 0, external: ""},
+		fmt.Sprintf("%s:%d", PaymentReviewTargetAnomaly, rowID("payment_anomalies", "shape-attached")): {amount: 250, external: "shape-attached"},
+		fmt.Sprintf("%s:%d", PaymentReviewTargetAnomaly, rowID("payment_anomalies", "shape-orphan")):   {amount: 100, external: "shape-orphan"},
+	}
+
+	cases, err := NewSQLPaymentLedgerStore(db).ListPaymentReviews(ctx, PaymentMethodStars)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var attachedTargets, orphanTargets int
+	for _, item := range cases {
+		switch item.OrderID {
+		case orderID:
+			attachedTargets = len(item.Targets)
+		case 0:
+			orphanTargets = len(item.Targets)
+		}
+		for _, target := range item.Targets {
+			key := fmt.Sprintf("%s:%d", target.Kind, target.ID)
+			want, ok := wantShape[key]
+			if !ok {
+				t.Fatalf("unexpected target %s", key)
+			}
+			if target.AmountMinor != want.amount || target.ExternalID != want.external {
+				t.Fatalf("target %s shape=(%d,%q) want (%d,%q)", key,
+					target.AmountMinor, target.ExternalID, want.amount, want.external)
+			}
+			delete(wantShape, key)
+		}
+	}
+	if attachedTargets != 2 || orphanTargets != 1 {
+		t.Fatalf("attached/orphan target counts=%d/%d cases=%+v", attachedTargets, orphanTargets, cases)
+	}
+	if len(wantShape) != 0 {
+		t.Fatalf("missing targets=%v", wantShape)
+	}
+}

@@ -23,7 +23,7 @@ func (b *Bot) handleCatalog(ctx context.Context, msg *tgbotapi.Message) {
 func (b *Bot) sendCatalog(ctx context.Context, chatID int64, msgID int, lang string) {
 	categories, err := b.catalog.ListCategories(ctx)
 	if err != nil {
-		b.logger.Error("list categories", "error", err)
+		b.loggerFor(ctx).Error("list categories", "error", err)
 		b.send(tgbotapi.NewMessage(chatID, b.t(lang, "error_load_catalog")))
 		return
 	}
@@ -50,7 +50,7 @@ func (b *Bot) onCategorySelected(ctx context.Context, chatID, userID int64, msgI
 	parts := strings.SplitN(data, ":", 4)
 	catID, err := strconv.ParseInt(parts[1], 10, 64)
 	if err != nil {
-		b.logger.Error("parse category callback", "error", err)
+		b.loggerFor(ctx).Error("parse category callback", "error", err)
 		return
 	}
 
@@ -63,7 +63,7 @@ func (b *Bot) onCategorySelected(ctx context.Context, chatID, userID int64, msgI
 
 	category, err := b.catalog.GetCategory(ctx, catID)
 	if err != nil {
-		b.logger.Error("get category", "category_id", catID, "error", err)
+		b.loggerFor(ctx).Error("get category", "category_id", catID, "error", err)
 		b.send(tgbotapi.NewMessage(chatID, b.t(lang, "error_load_catalog")))
 		return
 	}
@@ -74,7 +74,7 @@ func (b *Bot) onCategorySelected(ctx context.Context, chatID, userID int64, msgI
 
 	products, total, err := b.catalog.ListProductsPaged(ctx, catID, productsPerPage, page*productsPerPage)
 	if err != nil {
-		b.logger.Error("list products paged", "error", err)
+		b.loggerFor(ctx).Error("list products paged", "error", err)
 		b.send(tgbotapi.NewMessage(chatID, b.t(lang, "error_load_catalog")))
 		return
 	}
@@ -90,7 +90,7 @@ func (b *Bot) onCategorySelected(ctx context.Context, chatID, userID int64, msgI
 	totalPages := (total + productsPerPage - 1) / productsPerPage
 	wishlistIDs, err := b.wishlist.GetUserWishlistIDs(ctx, userID)
 	if err != nil {
-		b.logger.Warn("get wishlist ids for category", "user_id", userID, "error", err)
+		b.loggerFor(ctx).Warn("get wishlist ids for category", "user_id", userID, "error", err)
 		wishlistIDs = map[int64]struct{}{}
 	}
 
@@ -128,13 +128,13 @@ func (b *Bot) onCategorySelected(ctx context.Context, chatID, userID int64, msgI
 func (b *Bot) onProductSelected(ctx context.Context, chatID, userID int64, msgID int, data, lang string) {
 	prodID, err := parseIDFromCallback(data, "product:")
 	if err != nil {
-		b.logger.Error("parse product callback", "error", err)
+		b.loggerFor(ctx).Error("parse product callback", "error", err)
 		return
 	}
 
 	p, err := b.catalog.GetProduct(ctx, prodID)
 	if err != nil {
-		b.logger.Error("get product", "error", err)
+		b.loggerFor(ctx).Error("get product", "error", err)
 		b.send(tgbotapi.NewMessage(chatID, b.t(lang, "error_load_product")))
 		return
 	}
@@ -148,7 +148,7 @@ func (b *Bot) onProductSelected(ctx context.Context, chatID, userID int64, msgID
 	inWishlist, _ := b.wishlist.IsInWishlist(ctx, userID, prodID)
 	quantity, err := b.cartQuantity(ctx, userID, prodID)
 	if err != nil {
-		b.logger.Warn("get cart quantity for product view", "user_id", userID, "product_id", prodID, "error", err)
+		b.loggerFor(ctx).Warn("get cart quantity for product view", "user_id", userID, "product_id", prodID, "error", err)
 	}
 	kb := b.productKeyboard(p, inWishlist, quantity, lang)
 	if reviewCount > 0 {
@@ -159,7 +159,7 @@ func (b *Bot) onProductSelected(ctx context.Context, chatID, userID int64, msgID
 
 	photos, err := b.photos.List(ctx, prodID)
 	if err != nil {
-		b.logger.Warn("list product photos", "product_id", prodID, "error", err)
+		b.loggerFor(ctx).Warn("list product photos", "product_id", prodID, "error", err)
 	}
 	if len(photos) > 1 {
 		// Gallery: album via sendMediaGroup, then the card text with buttons
@@ -282,19 +282,19 @@ func (b *Bot) cartQuantity(ctx context.Context, userID, prodID int64) (int, erro
 func (b *Bot) refreshProductKeyboard(ctx context.Context, chatID, userID int64, msgID int, prodID int64, lang string) {
 	p, err := b.catalog.GetProduct(ctx, prodID)
 	if err != nil {
-		b.logger.Error("get product for keyboard refresh", "product_id", prodID, "error", err)
+		b.loggerFor(ctx).Error("get product for keyboard refresh", "product_id", prodID, "error", err)
 		return
 	}
 
 	inWishlist, err := b.wishlist.IsInWishlist(ctx, userID, prodID)
 	if err != nil {
-		b.logger.Error("check wishlist for keyboard refresh", "product_id", prodID, "error", err)
+		b.loggerFor(ctx).Error("check wishlist for keyboard refresh", "product_id", prodID, "error", err)
 		return
 	}
 
 	quantity, err := b.cartQuantity(ctx, userID, prodID)
 	if err != nil {
-		b.logger.Error("get cart quantity for keyboard refresh", "product_id", prodID, "error", err)
+		b.loggerFor(ctx).Error("get cart quantity for keyboard refresh", "product_id", prodID, "error", err)
 		return
 	}
 
@@ -304,7 +304,7 @@ func (b *Bot) refreshProductKeyboard(ctx context.Context, chatID, userID int64, 
 	}
 	kbJSON, err := json.Marshal(map[string]interface{}{"inline_keyboard": kb})
 	if err != nil {
-		b.logger.Error("marshal product keyboard", "error", err)
+		b.loggerFor(ctx).Error("marshal product keyboard", "error", err)
 		return
 	}
 	if _, err := b.api.MakeRequest("editMessageReplyMarkup", tgbotapi.Params{
@@ -312,6 +312,6 @@ func (b *Bot) refreshProductKeyboard(ctx context.Context, chatID, userID int64, 
 		"message_id":   strconv.Itoa(msgID),
 		"reply_markup": string(kbJSON),
 	}); err != nil {
-		b.logger.Warn("refreshProductKeyboard edit markup", "error", err)
+		b.loggerFor(ctx).Warn("refreshProductKeyboard edit markup", "error", err)
 	}
 }

@@ -28,7 +28,7 @@ func (b *Bot) handleAddCategory(ctx context.Context, msg *tgbotapi.Message) {
 	}
 	id, err := b.catalog.CreateCategory(ctx, cat)
 	if err != nil {
-		b.logger.Error("create category", "error", err)
+		b.loggerFor(ctx).Error("create category", "error", err)
 		b.send(tgbotapi.NewMessage(msg.Chat.ID, b.t(lang, "admin_category_create_failed")))
 		return
 	}
@@ -70,7 +70,7 @@ func (b *Bot) handleEditCategory(ctx context.Context, msg *tgbotapi.Message) {
 	}
 
 	if err := b.catalog.UpdateCategory(ctx, category); err != nil {
-		b.logger.Error("update category", "category_id", categoryID, "error", err)
+		b.loggerFor(ctx).Error("update category", "category_id", categoryID, "error", err)
 		b.send(tgbotapi.NewMessage(msg.Chat.ID, b.t(lang, "admin_category_update_failed")))
 		return
 	}
@@ -89,7 +89,7 @@ func (b *Bot) handleDeleteCategory(ctx context.Context, msg *tgbotapi.Message) {
 		return
 	}
 	if err := b.catalog.DeleteCategory(ctx, id); err != nil {
-		b.logger.Error("delete category", "category_id", id, "error", err)
+		b.loggerFor(ctx).Error("delete category", "category_id", id, "error", err)
 		b.send(tgbotapi.NewMessage(msg.Chat.ID, b.t(lang, "admin_category_delete_failed")))
 		return
 	}
@@ -103,7 +103,7 @@ func (b *Bot) handleListCategories(ctx context.Context, msg *tgbotapi.Message) {
 	lang := msg.From.LanguageCode
 	categories, err := b.catalog.ListCategories(ctx)
 	if err != nil {
-		b.logger.Error("list categories", "error", err)
+		b.loggerFor(ctx).Error("list categories", "error", err)
 		b.send(tgbotapi.NewMessage(msg.Chat.ID, b.t(lang, "admin_categories_load_failed")))
 		return
 	}

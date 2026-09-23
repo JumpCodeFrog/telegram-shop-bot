@@ -266,14 +266,16 @@ func TestBuildReviewResolution_InvalidCombos(t *testing.T) {
 // TestPayReviewOrphanCardActionSets pins ruling P4: orphan cards offer only
 // the actions that can actually pass — digest-only cards none (CLI-only),
 // path-5 refund-ledger-failure cards Refund+Dismiss (with the trap warning),
-// other capture orphans Settle. Attached and unknown-provider cases keep
+// other capture orphans Settle when their row shape mirrors the storage
+// settle precondition (§6.17). Attached and unknown-provider cases keep
 // their existing sets.
 func TestPayReviewOrphanCardActionSets(t *testing.T) {
-	orphan := func(provider, reason string) storage.PaymentReviewCase {
+	orphan := func(provider, reason string, amount int64, external string) storage.PaymentReviewCase {
 		return storage.PaymentReviewCase{
 			OrderID: 0, Provider: provider, PaymentState: "",
 			Targets: []storage.PaymentReviewTarget{{
 				Kind: storage.PaymentReviewTargetAnomaly, ID: 7, ReasonCode: reason,
+				AmountMinor: amount, ExternalID: external,
 			}},
 		}
 	}
@@ -282,12 +284,12 @@ func TestPayReviewOrphanCardActionSets(t *testing.T) {
 		item storage.PaymentReviewCase
 		want []string
 	}{
-		{"path-5 refund orphan", orphan(storage.PaymentMethodBalance, "refund_ledger_failure:order=7"),
+		{"path-5 refund orphan", orphan(storage.PaymentMethodBalance, "refund_ledger_failure:order=7", 525, "balance-refund:7"),
 			[]string{payReviewActionRefund, payReviewActionDismiss}},
-		{"digest parse failure", orphan(storage.PaymentMethodYooKassa, "webhook_parse_failure"), nil},
-		{"digest missing payment id", orphan(storage.PaymentMethodYooKassa, "webhook_missing_payment_id"), nil},
-		{"stars decode-failure digest orphan", orphan(storage.PaymentMethodStars, "stars_update_decode_failure"), nil},
-		{"capture orphan", orphan(storage.PaymentMethodStars, "provider_verified_unknown_order"),
+		{"digest parse failure", orphan(storage.PaymentMethodYooKassa, "webhook_parse_failure", 0, ""), nil},
+		{"digest missing payment id", orphan(storage.PaymentMethodYooKassa, "webhook_missing_payment_id", 0, ""), nil},
+		{"stars decode-failure digest orphan", orphan(storage.PaymentMethodStars, "stars_update_decode_failure", 0, ""), nil},
+		{"capture orphan", orphan(storage.PaymentMethodStars, "provider_verified_unknown_order", 100, "orphan-a"),
 			[]string{payReviewActionSettle}},
 		{"attached case keeps the triple", storage.PaymentReviewCase{
 			OrderID: 3, Provider: storage.PaymentMethodStars, PaymentState: storage.PaymentStateNeedsReview,
@@ -301,6 +303,46 @@ func TestPayReviewOrphanCardActionSets(t *testing.T) {
 				Kind: storage.PaymentReviewTargetOrder, ID: 3, ReasonCode: "order_needs_review",
 			}},
 		}, []string{payReviewActionDismiss}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := payReviewActions(tc.item)
+			if len(got) != len(tc.want) {
+				t.Fatalf("actions = %v, want %v", got, tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Fatalf("actions = %v, want %v", got, tc.want)
+				}
+			}
+		})
+	}
+}
+
+// TestPayReviewOrphanShapeKeyedSettleFilter pins HANDOFF §6.17 (R17
+// CORRECTED): the orphan-anomaly default branch mirrors the in-row shape
+// conjuncts of the storage settle precondition
+// (explicitNoAttemptAnomalyDecision) — a non-digest orphan missing the amount
+// or the external id loses Settle (CLI stays available); a fully shaped one
+// keeps it.
+func TestPayReviewOrphanShapeKeyedSettleFilter(t *testing.T) {
+	orphan := func(amount int64, external string) storage.PaymentReviewCase {
+		return storage.PaymentReviewCase{
+			OrderID: 0, Provider: storage.PaymentMethodYooKassa, PaymentState: "",
+			Targets: []storage.PaymentReviewTarget{{
+				Kind: storage.PaymentReviewTargetAnomaly, ID: 7,
+				ReasonCode:  "webhook_invalid_receipt",
+				AmountMinor: amount, ExternalID: external,
+			}},
+		}
+	}
+	for _, tc := range []struct {
+		name string
+		item storage.PaymentReviewCase
+		want []string
+	}{
+		{"non-digest orphan without amount", orphan(0, "pay_x"), nil},
+		{"non-digest orphan without external id", orphan(100, ""), nil},
+		{"fully shaped non-digest orphan", orphan(100, "pay_x"), []string{payReviewActionSettle}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := payReviewActions(tc.item)
@@ -771,5 +813,75 @@ func TestPayReviewDigestOrphanCardIsCLIOnly(t *testing.T) {
 	}
 	if !strings.Contains(markup, "admin:payrev:list") {
 		t.Fatalf("digest-only card lost its Back button: %s", markup)
+	}
+}
+
+// TestPayReviewOrphanCardSettleButtonIsShapeKeyed pins HANDOFF §6.17 on the
+// real card: a non-digest orphan whose anomaly row lacks the in-row shape
+// conjuncts of the storage settle precondition (amount, external id) loses the
+// Settle button and renders the CLI-only hint; a fully shaped sibling keeps it.
+func TestPayReviewOrphanCardSettleButtonIsShapeKeyed(t *testing.T) {
+	e := newE2EEnv(t)
+	store := storage.NewSQLOrderStore(e.db)
+	// Invalid-receipt quarantine shape: the external id survives, the money
+	// tuple does not — storage can never settle this row.
+	shapeless := storage.PaymentAnomaly{
+		Provider:   storage.PaymentMethodYooKassa,
+		EventKind:  storage.PaymentEventCaptured,
+		ExternalID: "pay_shapeless",
+		RawPayload: `{"id":"pay_shapeless","receipt":"malformed"}`,
+		Reason:     "webhook_invalid_receipt",
+	}
+	if err := store.RecordPaymentAnomaly(context.Background(), shapeless); !errors.Is(err, storage.ErrPaymentNeedsReview) {
+		t.Fatalf("seed shapeless orphan: %v", err)
+	}
+	shaped := storage.PaymentAnomaly{
+		Provider:    storage.PaymentMethodYooKassa,
+		EventKind:   storage.PaymentEventCaptured,
+		ExternalID:  "pay_shaped",
+		AmountMinor: 100, Currency: "RUB", Scale: 2,
+		Reason: "webhook_invalid_receipt",
+	}
+	if err := store.RecordPaymentAnomaly(context.Background(), shaped); !errors.Is(err, storage.ErrPaymentNeedsReview) {
+		t.Fatalf("seed shaped orphan: %v", err)
+	}
+	anomalyID := func(externalID string) int64 {
+		t.Helper()
+		var id int64
+		if err := e.db.Conn().QueryRow(`SELECT id FROM payment_anomalies WHERE external_id=?`, externalID).Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+
+	// Shapeless card: CLI-only hint, no action buttons at all.
+	calls := e.cb(e2eAdminID, fmt.Sprintf("admin:payrev:yookassa:0:%d", anomalyID("pay_shapeless")), "en")
+	if got := tgText(calls); !strings.Contains(got, e.bot.t("en", "admin_payreview_card_cli_only")) {
+		t.Fatalf("shapeless card lacks the CLI-only hint:\n%s", got)
+	}
+	var markup string
+	for _, c := range calls {
+		if m := c.markup(); m != "" {
+			markup = m
+		}
+	}
+	if strings.Contains(markup, "admin:payrev:settle:") || strings.Contains(markup, "admin:payrev:refund:") ||
+		strings.Contains(markup, "admin:payrev:dismiss:") {
+		t.Fatalf("shapeless card must not offer actions: %s", markup)
+	}
+	if !strings.Contains(markup, "admin:payrev:list") {
+		t.Fatalf("shapeless card lost its Back button: %s", markup)
+	}
+
+	// Fully shaped sibling: Settle is offered.
+	calls = e.cb(e2eAdminID, fmt.Sprintf("admin:payrev:yookassa:0:%d", anomalyID("pay_shaped")), "en")
+	markup = ""
+	for _, c := range calls {
+		if m := c.markup(); m != "" {
+			markup = m
+		}
+	}
+	if !strings.Contains(markup, fmt.Sprintf("admin:payrev:settle:yookassa:0:%d", anomalyID("pay_shaped"))) {
+		t.Fatalf("shaped card lacks Settle: %s", markup)
 	}
 }

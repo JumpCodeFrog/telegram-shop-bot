@@ -17,7 +17,7 @@ func (b *Bot) handleCart(ctx context.Context, msg *tgbotapi.Message) {
 func (b *Bot) sendCart(ctx context.Context, chatID, userID int64, msgID int, lang string) {
 	view, err := b.cart.Get(ctx, userID)
 	if err != nil {
-		b.logger.Error("get cart", "error", err)
+		b.loggerFor(ctx).Error("get cart", "error", err)
 		b.sendOrEditStyled(chatID, msgID, b.t(lang, "error_load_cart"), "", nil)
 		return
 	}
@@ -54,13 +54,13 @@ func (b *Bot) sendCart(ctx context.Context, chatID, userID int64, msgID int, lan
 func (b *Bot) onCartAdd(ctx context.Context, cbID string, chatID, userID int64, msgID int, data, lang string) {
 	prodID, err := parseIDFromCallback(data, "cart:add:")
 	if err != nil {
-		b.logger.Error("parse cart:add callback", "error", err)
+		b.loggerFor(ctx).Error("parse cart:add callback", "error", err)
 		b.ack(cbID)
 		return
 	}
 
 	if err := b.cart.Add(ctx, userID, prodID); err != nil {
-		b.logger.Error("add to cart", "error", err)
+		b.loggerFor(ctx).Error("add to cart", "error", err)
 		b.alert(cbID, b.t(lang, "error_add_cart"))
 		return
 	}
@@ -72,13 +72,13 @@ func (b *Bot) onCartAdd(ctx context.Context, cbID string, chatID, userID int64, 
 func (b *Bot) onProductQuantityChange(ctx context.Context, cbID string, chatID, userID int64, msgID int, data, prefix string, delta int, lang string) {
 	prodID, err := parseIDFromCallback(data, prefix)
 	if err != nil {
-		b.logger.Error("parse product quantity callback", "prefix", prefix, "error", err)
+		b.loggerFor(ctx).Error("parse product quantity callback", "prefix", prefix, "error", err)
 		b.ack(cbID)
 		return
 	}
 
 	if err := b.cart.ChangeQuantity(ctx, userID, prodID, delta); err != nil {
-		b.logger.Error("change quantity from product card", "product_id", prodID, "delta", delta, "error", err)
+		b.loggerFor(ctx).Error("change quantity from product card", "product_id", prodID, "delta", delta, "error", err)
 		b.alert(cbID, b.t(lang, "error_short"))
 		return
 	}
@@ -90,12 +90,12 @@ func (b *Bot) onProductQuantityChange(ctx context.Context, cbID string, chatID, 
 func (b *Bot) onCartPlus(ctx context.Context, chatID, userID int64, msgID int, data, lang string) {
 	prodID, err := parseIDFromCallback(data, "cart:plus:")
 	if err != nil {
-		b.logger.Error("parse cart:plus callback", "error", err)
+		b.loggerFor(ctx).Error("parse cart:plus callback", "error", err)
 		return
 	}
 
 	if err := b.cart.ChangeQuantity(ctx, userID, prodID, 1); err != nil {
-		b.logger.Error("cart plus", "error", err)
+		b.loggerFor(ctx).Error("cart plus", "error", err)
 		b.sendOrEditStyled(chatID, 0, b.t(lang, "error_short"), "", nil)
 		return
 	}
@@ -105,13 +105,13 @@ func (b *Bot) onCartPlus(ctx context.Context, chatID, userID int64, msgID int, d
 func (b *Bot) onCartMinus(ctx context.Context, chatID, userID int64, msgID int, data, lang string) {
 	prodID, err := parseIDFromCallback(data, "cart:minus:")
 	if err != nil {
-		b.logger.Error("parse cart:minus callback", "error", err)
+		b.loggerFor(ctx).Error("parse cart:minus callback", "error", err)
 		return
 	}
 
 	view, err := b.cart.Get(ctx, userID)
 	if err != nil {
-		b.logger.Error("get cart for minus", "error", err)
+		b.loggerFor(ctx).Error("get cart for minus", "error", err)
 		b.sendOrEditStyled(chatID, 0, b.t(lang, "error_short"), "", nil)
 		return
 	}
@@ -120,13 +120,13 @@ func (b *Bot) onCartMinus(ctx context.Context, chatID, userID int64, msgID int, 
 		if item.Product.ID == prodID {
 			if item.Quantity <= 1 {
 				if err := b.cart.Remove(ctx, userID, prodID); err != nil {
-					b.logger.Error("cart remove on minus", "error", err)
+					b.loggerFor(ctx).Error("cart remove on minus", "error", err)
 					b.sendOrEditStyled(chatID, 0, b.t(lang, "error_short"), "", nil)
 					return
 				}
 			} else {
 				if err := b.cart.ChangeQuantity(ctx, userID, prodID, -1); err != nil {
-					b.logger.Error("cart minus", "error", err)
+					b.loggerFor(ctx).Error("cart minus", "error", err)
 					b.sendOrEditStyled(chatID, 0, b.t(lang, "error_short"), "", nil)
 					return
 				}
@@ -140,12 +140,12 @@ func (b *Bot) onCartMinus(ctx context.Context, chatID, userID int64, msgID int, 
 func (b *Bot) onCartDel(ctx context.Context, chatID, userID int64, msgID int, data, lang string) {
 	prodID, err := parseIDFromCallback(data, "cart:del:")
 	if err != nil {
-		b.logger.Error("parse cart:del callback", "error", err)
+		b.loggerFor(ctx).Error("parse cart:del callback", "error", err)
 		return
 	}
 
 	if err := b.cart.Remove(ctx, userID, prodID); err != nil {
-		b.logger.Error("cart del", "error", err)
+		b.loggerFor(ctx).Error("cart del", "error", err)
 		b.sendOrEditStyled(chatID, 0, b.t(lang, "error_remove_cart"), "", nil)
 		return
 	}
@@ -155,7 +155,7 @@ func (b *Bot) onCartDel(ctx context.Context, chatID, userID int64, msgID int, da
 func (b *Bot) onCartCheckout(ctx context.Context, chatID, userID int64, msgID int, lang string) {
 	view, err := b.cart.Get(ctx, userID)
 	if err != nil {
-		b.logger.Error("get cart for checkout", "error", err)
+		b.loggerFor(ctx).Error("get cart for checkout", "error", err)
 		return
 	}
 

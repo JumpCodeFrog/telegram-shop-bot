@@ -93,13 +93,13 @@ func (b *Bot) finishAddProduct(ctx context.Context, chatID, userID, categoryID i
 	p := &storage.Product{CategoryID: categoryID, Name: state.Name, Description: state.Description, PriceUSD: state.PriceUSD, Stock: state.Stock, PhotoURL: cover, IsActive: true, SubPeriodDays: state.SubPeriodDays}
 	id, err := b.products.CreateProduct(ctx, p)
 	if err != nil {
-		b.logger.Error("create product", "error", err)
+		b.loggerFor(ctx).Error("create product", "error", err)
 		b.send(tgbotapi.NewMessage(chatID, b.t(lang, "admin_product_create_failed")))
 		return
 	}
 	for _, fileID := range state.Photos {
 		if err := b.photos.Add(ctx, id, fileID); err != nil {
-			b.logger.Error("add product photo", "product_id", id, "error", err)
+			b.loggerFor(ctx).Error("add product photo", "product_id", id, "error", err)
 		}
 	}
 	b.send(tgbotapi.NewMessage(chatID, b.t(lang, "admin_product_created")))
@@ -206,7 +206,7 @@ func (b *Bot) handleEditProductField(ctx context.Context, msg *tgbotapi.Message,
 	}
 
 	if err := b.products.UpdateProduct(ctx, product); err != nil {
-		b.logger.Error("update product", "product_id", prodID, "error", err)
+		b.loggerFor(ctx).Error("update product", "product_id", prodID, "error", err)
 		b.send(tgbotapi.NewMessage(msg.Chat.ID, b.t(lang, "admin_product_update_failed")))
 		return
 	}
@@ -225,7 +225,7 @@ func (b *Bot) handleDeleteProduct(ctx context.Context, msg *tgbotapi.Message) {
 		return
 	}
 	if err := b.products.DeleteProduct(ctx, id); err != nil {
-		b.logger.Error("delete product", "product_id", id, "error", err)
+		b.loggerFor(ctx).Error("delete product", "product_id", id, "error", err)
 		b.send(tgbotapi.NewMessage(msg.Chat.ID, b.t(lang, "admin_product_delete_failed")))
 		return
 	}
@@ -235,14 +235,14 @@ func (b *Bot) handleDeleteProduct(ctx context.Context, msg *tgbotapi.Message) {
 func (b *Bot) onAdminToggleStock(ctx context.Context, chatID int64, data, lang string) {
 	productID, err := parseIDFromCallback(data, "admin:togglestock:")
 	if err != nil {
-		b.logger.Error("parse admin:togglestock callback", "error", err)
+		b.loggerFor(ctx).Error("parse admin:togglestock callback", "error", err)
 		b.send(tgbotapi.NewMessage(chatID, b.t(lang, "admin_product_parse_failed")))
 		return
 	}
 
 	product, err := b.products.GetProduct(ctx, productID)
 	if err != nil {
-		b.logger.Error("get product for stock toggle", "product_id", productID, "error", err)
+		b.loggerFor(ctx).Error("get product for stock toggle", "product_id", productID, "error", err)
 		b.send(tgbotapi.NewMessage(chatID, b.t(lang, "admin_product_not_found")))
 		return
 	}
@@ -255,7 +255,7 @@ func (b *Bot) onAdminToggleStock(ctx context.Context, chatID int64, data, lang s
 	}
 
 	if err := b.products.UpdateProduct(ctx, product); err != nil {
-		b.logger.Error("toggle product stock", "product_id", productID, "error", err)
+		b.loggerFor(ctx).Error("toggle product stock", "product_id", productID, "error", err)
 		b.send(tgbotapi.NewMessage(chatID, b.t(lang, "admin_product_update_failed")))
 		return
 	}

@@ -132,25 +132,37 @@ Stripe, YooKassa, баланса; crypto/ton/nowpayments — вручную в �
     бот `/payreview` печатает raw reason — косметическое расхождение для карточек
     `refund_ledger_failure:order=<id>` (park из финального ревью money-followups;
     рассматривать вместе с §6.9).
+    ✅ закрыто 23.09.2026 (documented as designed — CLI-санитизация сознательна
+    ради парсимого key=value вывода, кода не меняли; note в
+    docs/payment-operations.md), план
+    docs/superpowers/plans/2026-09-23-micro-followups.md
 17. `/payreview` action-фильтр key'уется по reason, не по форме факта: degenerate
     non-digest формы (amount≤0 при не-digest reason — `webhook_invalid_receipt` с
     непредставимой суммой и т.п.) оставляют мёртвый, но fail-closed `[Settle]`
     (polish-followups финал M-2; безопасно — storage отвергает). Радикальное решение:
     exposes amount/external-id presence в целях `ListPaymentReviews` → shape-keyed
     фильтр. Только если станет операторской annoyance.
+    ✅ закрыто 23.09.2026 (shape-keyed фильтр в orphan-карточках; R17 CORRECTED:
+    предикат зеркалит in-row shape conjuncts, attempt-collision остаётся
+    fail-closed в storage), план
+    docs/superpowers/plans/2026-09-23-micro-followups.md
 18. Test-hardening batch (parked minors polish-followups): renewal E2E-leg не пинит
     settled `payment_events`-строку (T6(1)); `called`-флаг в GetPayment-тестах
     cross-goroutine — atomic/channel для `-race`-строгости (T1(1)); trap-ключ без
     trailing `\n` при cli_only с `\n` (T8(2), косметика, практически недостижимая ветка).
+    ✅ закрыто 23.09.2026, план docs/superpowers/plans/2026-09-23-micro-followups.md
 19. docs §5/§7: intro-формулировка «order in `needs_review`» loose для digest-only
     строк (нет order identity) — pre-existing nit (polish-followups T5(4)); чинить
     вместе с любым будущим docs-проходом по карантин-таблицам.
+    ✅ закрыто 23.09.2026, план docs/superpowers/plans/2026-09-23-micro-followups.md
 20. Fleet-wide `loggerFor(ctx)` sweep (4.14 follow-up, spec §8): перевести остальные
     ~200 handler-логов на trace_id-bound логгер (сейчас — только Logging/Recover +
     13 payment-critical); в том же заходе добавить Warn-строку на `middleware/auth.go`
     Upsert-swallow (финал-ревью 4.14, triage #1). Поверхностно, логи только.
+    ✅ закрыто 23.09.2026, план docs/superpowers/plans/2026-09-23-micro-followups.md
 21. Upgrade-пин для миграций: 022→023 (и будущих) — есть только fresh-DB schema-тест;
     harness-прецедент в `migration_020_test.go` (4.15 финал, M-3). Косметика надёжности.
+    ✅ закрыто 23.09.2026, план docs/superpowers/plans/2026-09-23-micro-followups.md
 
 ## 7. Процесс (как велась работа — воспроизводим)
 

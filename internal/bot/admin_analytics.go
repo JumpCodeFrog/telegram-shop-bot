@@ -72,7 +72,7 @@ func renderRevenueChart(daily []storage.DailyRevenue, today time.Time, days int)
 
 func (b *Bot) sendAnalytics(ctx context.Context, chatID int64, msgID int, days int, lang string) {
 	fail := func(stage string, err error) {
-		b.logger.Error("analytics "+stage, "error", err)
+		b.loggerFor(ctx).Error("analytics "+stage, "error", err)
 		b.send(tgbotapi.NewMessage(chatID, b.t(lang, "admin_analytics_error")))
 	}
 

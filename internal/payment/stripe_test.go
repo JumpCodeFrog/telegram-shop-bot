@@ -12,6 +12,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -155,9 +156,9 @@ func TestStripeCreateCheckoutSessionAPIError(t *testing.T) {
 }
 
 func TestStripeCreateCheckoutSessionRejectsInvalidInput(t *testing.T) {
-	called := false
+	var called atomic.Bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		called = true
+		called.Store(true)
 	}))
 	defer srv.Close()
 
@@ -180,7 +181,7 @@ func TestStripeCreateCheckoutSessionRejectsInvalidInput(t *testing.T) {
 			}
 		})
 	}
-	if called {
+	if called.Load() {
 		t.Fatal("CreateCheckoutSession made an HTTP call for invalid input")
 	}
 }
@@ -493,9 +494,9 @@ func TestStripeCreateRefundAPIError(t *testing.T) {
 }
 
 func TestStripeCreateRefundRejectsEmptyPaymentIntent(t *testing.T) {
-	called := false
+	var called atomic.Bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		called = true
+		called.Store(true)
 	}))
 	defer srv.Close()
 
@@ -510,7 +511,7 @@ func TestStripeCreateRefundRejectsEmptyPaymentIntent(t *testing.T) {
 			t.Fatalf("intent %q: expected a clear payment-intent error, got %q", intent, err.Error())
 		}
 	}
-	if called {
+	if called.Load() {
 		t.Fatal("CreateRefund made an HTTP call for an empty payment intent")
 	}
 }

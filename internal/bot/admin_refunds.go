@@ -245,7 +245,7 @@ func (b *Bot) handleRefundCommand(ctx context.Context, msg *tgbotapi.Message) {
 		if errors.Is(err, storage.ErrNotFound) {
 			send(b.i18n.Tf(lang, "admin_order_not_found", orderID))
 		} else {
-			b.logger.Error("refund: load order", "order_id", orderID, "error", err)
+			b.loggerFor(ctx).Error("refund: load order", "order_id", orderID, "error", err)
 			send(b.t(lang, "error_short"))
 		}
 		return
@@ -332,7 +332,7 @@ func (b *Bot) onAdminRefundConfirm(ctx context.Context, chatID int64, msgID int,
 	order, err := b.order.GetOrder(ctx, orderID)
 	if err != nil {
 		if !errors.Is(err, storage.ErrNotFound) {
-			b.logger.Error("refund confirm: load order", "order_id", orderID, "error", err)
+			b.loggerFor(ctx).Error("refund confirm: load order", "order_id", orderID, "error", err)
 		}
 		render(b.t(lang, "admin_refund_conflict"))
 		return
@@ -388,7 +388,7 @@ func (b *Bot) onAdminRefundConfirm(ctx context.Context, chatID int64, msgID int,
 	// leaves the ledger untouched and the order unchanged.
 	refundID, err := b.executeRefund(ctx, plan, order, adminID)
 	if err != nil {
-		b.logger.Error("refund: provider execution failed",
+		b.loggerFor(ctx).Error("refund: provider execution failed",
 			"order_id", orderID, "rail", rail, "amount_minor", amountMinor, "error", err)
 		render(b.i18n.Tf(lang, "admin_refund_provider_failed", orderID, err.Error()))
 		return
@@ -419,7 +419,7 @@ func (b *Bot) onAdminRefundConfirm(ctx context.Context, chatID int64, msgID int,
 		// while the money is out. The stars recovery is the ingest-stars
 		// CLI, which records the refund with Telegram's authoritative
 		// OccurredAt.
-		b.logger.Error("refund: LEDGER RECORDING FAILED AFTER PROVIDER SUCCESS",
+		b.loggerFor(ctx).Error("refund: LEDGER RECORDING FAILED AFTER PROVIDER SUCCESS",
 			"order_id", orderID, "rail", rail, "refund_id", refundID, "error", err)
 		// Durable path-5 trace (best-effort, ruling R1): the money moved but
 		// the books did not record it. An ORPHAN anomaly row keeps the order
@@ -449,7 +449,7 @@ func (b *Bot) onAdminRefundConfirm(ctx context.Context, chatID int64, msgID int,
 			RawPayload:        string(anomalyPayload),
 			Actor:             audit.Actor,
 		}); recordErr != nil && !errors.Is(recordErr, storage.ErrPaymentNeedsReview) {
-			b.logger.Error("refund: path-5 anomaly was not recorded",
+			b.loggerFor(ctx).Error("refund: path-5 anomaly was not recorded",
 				"order_id", orderID, "rail", rail, "refund_id", refundID, "error", recordErr)
 		}
 		if rail == storage.PaymentMethodStars {
@@ -462,7 +462,7 @@ func (b *Bot) onAdminRefundConfirm(ctx context.Context, chatID int64, msgID int,
 	}
 	// Settlement attribution (docs/payment-operations.md §12): the log actor
 	// matches the durable payment_ingress_audits row written above.
-	b.logger.Info("refund recorded",
+	b.loggerFor(ctx).Info("refund recorded",
 		"order_id", orderID, "rail", rail, "refund_id", refundID, "actor", audit.Actor)
 	// ErrPaymentNeedsReview from the ingest means the refund row committed but
 	// a fully refunded subscription entitlement lacks provenance: recorded,
@@ -471,7 +471,7 @@ func (b *Bot) onAdminRefundConfirm(ctx context.Context, chatID int64, msgID int,
 	if fresh, ferr := b.order.GetOrder(ctx, orderID); ferr == nil {
 		state = fresh.PaymentState
 	} else {
-		b.logger.Error("refund: reload state after ingest", "order_id", orderID, "error", ferr)
+		b.loggerFor(ctx).Error("refund: reload state after ingest", "order_id", orderID, "error", ferr)
 	}
 	if state == "" {
 		state = "-"
@@ -556,7 +556,7 @@ func (b *Bot) findRecordedRefund(ctx context.Context, order *storage.Order, rail
 		// database, and its identity/cap checks stop the deterministic-id
 		// rails (stars/balance) before execution; the card rails are covered
 		// by the deterministic provider key.
-		b.logger.Error("refund: list recorded refunds", "order_id", order.ID, "error", err)
+		b.loggerFor(ctx).Error("refund: list recorded refunds", "order_id", order.ID, "error", err)
 		return nil, false
 	}
 	for i := range refunds {

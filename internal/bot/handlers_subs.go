@@ -146,7 +146,7 @@ func (b *Bot) handleMySubs(ctx context.Context, msg *tgbotapi.Message) {
 func (b *Bot) sendMySubs(ctx context.Context, chatID, userID int64, msgID int, lang string) {
 	subs, err := b.subs.ListActiveByUser(ctx, userID)
 	if err != nil {
-		b.logger.Error("list subscriptions", "user_id", userID, "error", err)
+		b.loggerFor(ctx).Error("list subscriptions", "user_id", userID, "error", err)
 		b.sendOrEditStyled(chatID, msgID, b.t(lang, "error_short"), "", nil)
 		return
 	}
@@ -179,7 +179,7 @@ func (b *Bot) sendMySubs(ctx context.Context, chatID, userID int64, msgID int, l
 func (b *Bot) onSubCancel(ctx context.Context, cbID string, chatID, userID int64, msgID int, data, lang string) {
 	subID, err := parseIDFromCallback(data, "sub:cancel:")
 	if err != nil {
-		b.logger.Error("parse sub:cancel callback", "error", err)
+		b.loggerFor(ctx).Error("parse sub:cancel callback", "error", err)
 		b.ack(cbID)
 		return
 	}
@@ -188,7 +188,7 @@ func (b *Bot) onSubCancel(ctx context.Context, cbID string, chatID, userID int64
 	// finds the charge ID and guarantees the caller owns the subscription.
 	subs, err := b.subs.ListActiveByUser(ctx, userID)
 	if err != nil {
-		b.logger.Error("list subscriptions for cancel", "user_id", userID, "error", err)
+		b.loggerFor(ctx).Error("list subscriptions for cancel", "user_id", userID, "error", err)
 		b.alert(cbID, b.t(lang, "error_short"))
 		return
 	}
@@ -205,14 +205,14 @@ func (b *Bot) onSubCancel(ctx context.Context, cbID string, chatID, userID int64
 	}
 
 	if err := b.cancelStarSubscription(userID, target.ChargeID); err != nil {
-		b.logger.Error("editUserStarSubscription", "subscription_id", subID, "error", err)
+		b.loggerFor(ctx).Error("editUserStarSubscription", "subscription_id", subID, "error", err)
 		b.alert(cbID, b.t(lang, "sub_cancel_error"))
 		return
 	}
 	if err := b.subs.SetStatusByCharge(ctx, target.ChargeID, storage.SubStatusCanceled); err != nil {
 		// Telegram side is already canceled; log and keep going so the user
 		// still sees the confirmation.
-		b.logger.Error("set subscription status canceled", "subscription_id", subID, "error", err)
+		b.loggerFor(ctx).Error("set subscription status canceled", "subscription_id", subID, "error", err)
 	}
 
 	b.toast(cbID, b.t(lang, "sub_canceled"))

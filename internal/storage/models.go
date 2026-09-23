@@ -278,6 +278,10 @@ type PaymentReviewTarget struct {
 	ReasonCode string
 	// Actor is the row's ingress identity ("" when not recorded).
 	Actor string
+	// AmountMinor and ExternalID carry the anomaly row's fact shape (4.15 batch
+	// §6.17) — populated for anomaly targets only; zero for event/order targets.
+	AmountMinor int64
+	ExternalID  string
 }
 
 type PaymentReviewCase struct {

@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -159,9 +160,9 @@ func TestYooKassaCreatePaymentAPIError(t *testing.T) {
 }
 
 func TestYooKassaCreatePaymentRejectsInvalidInput(t *testing.T) {
-	called := false
+	var called atomic.Bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		called = true
+		called.Store(true)
 	}))
 	defer srv.Close()
 
@@ -184,7 +185,7 @@ func TestYooKassaCreatePaymentRejectsInvalidInput(t *testing.T) {
 			}
 		})
 	}
-	if called {
+	if called.Load() {
 		t.Fatal("CreatePayment made an HTTP call for invalid input")
 	}
 }
@@ -248,9 +249,9 @@ func TestYooKassaGetPaymentFallsBackToCreatedAt(t *testing.T) {
 }
 
 func TestYooKassaGetPaymentRejectsInvalidID(t *testing.T) {
-	called := false
+	var called atomic.Bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		called = true
+		called.Store(true)
 	}))
 	defer srv.Close()
 
@@ -271,7 +272,7 @@ func TestYooKassaGetPaymentRejectsInvalidID(t *testing.T) {
 			}
 		})
 	}
-	if called {
+	if called.Load() {
 		t.Fatal("GetPayment made an HTTP call for an invalid id")
 	}
 }
@@ -520,9 +521,9 @@ func TestYooKassaCreateRefundStatusPassthrough(t *testing.T) {
 }
 
 func TestYooKassaCreateRefundRejectsInvalidInput(t *testing.T) {
-	called := false
+	var called atomic.Bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		called = true
+		called.Store(true)
 	}))
 	defer srv.Close()
 
@@ -548,7 +549,7 @@ func TestYooKassaCreateRefundRejectsInvalidInput(t *testing.T) {
 			}
 		})
 	}
-	if called {
+	if called.Load() {
 		t.Fatal("CreateRefund made an HTTP call for invalid input")
 	}
 }

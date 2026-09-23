@@ -257,7 +257,7 @@
   "admin_payreview_card_targets": "Ziele:\n",
   "admin_payreview_card_target_line": "• %s #%d — %s\n",
   "admin_payreview_card_target_line_actor": "• %s #%d — %s (actor: %s)\n",
-  "admin_payreview_card_trap": "⚠️ Karte für fehlgeschlagene Rückerstattungsbuchung: Erst handeln, NACHDEM der Wiederholungslauf die Ledger-Buchung abgeschlossen hat. Vor der Wiederherstellung bestätigt ↩️ Refund Geld, das die Bücher nicht erfasst haben, und schließt diese Karte dauerhaft; danach 🚫 Dismiss verwenden. Details: docs/payment-operations.md §11.",
+  "admin_payreview_card_trap": "⚠️ Karte für fehlgeschlagene Rückerstattungsbuchung: Erst handeln, NACHDEM der Wiederholungslauf die Ledger-Buchung abgeschlossen hat. Vor der Wiederherstellung bestätigt ↩️ Refund Geld, das die Bücher nicht erfasst haben, und schließt diese Karte dauerhaft; danach 🚫 Dismiss verwenden. Details: docs/payment-operations.md §11.\n",
   "admin_payreview_card_cli_only": "🔧 Keine Bot-Aktion besteht für diesen Fall — Lösung über die payment-review-CLI (Doku §4).\n",
   "admin_payreview_action_settle": "✅ Begleichen",
   "admin_payreview_action_refund": "↩️ Erstatten",

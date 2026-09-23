@@ -91,14 +91,14 @@ func (b *Bot) addProductPhoto(ctx context.Context, chatID, productID int64, file
 			b.send(tgbotapi.NewMessage(chatID, b.t(lang, "admin_photo_limit")))
 			return
 		}
-		b.logger.Error("add product photo", "product_id", productID, "error", err)
+		b.loggerFor(ctx).Error("add product photo", "product_id", productID, "error", err)
 		b.send(tgbotapi.NewMessage(chatID, b.t(lang, "admin_photo_error")))
 		return
 	}
 	if p, err := b.products.GetProduct(ctx, productID); err == nil && p.PhotoURL == "" {
 		p.PhotoURL = fileID
 		if err := b.products.UpdateProduct(ctx, p); err != nil {
-			b.logger.Warn("update product cover", "product_id", productID, "error", err)
+			b.loggerFor(ctx).Warn("update product cover", "product_id", productID, "error", err)
 		}
 	}
 	b.send(tgbotapi.NewMessage(chatID, b.t(lang, "admin_photo_added")))
@@ -109,7 +109,7 @@ func (b *Bot) addProductPhoto(ctx context.Context, chatID, productID int64, file
 func (b *Bot) sendAdminPhotoList(ctx context.Context, chatID int64, msgID int, productID int64, lang string) {
 	photos, err := b.photos.List(ctx, productID)
 	if err != nil {
-		b.logger.Error("list product photos", "product_id", productID, "error", err)
+		b.loggerFor(ctx).Error("list product photos", "product_id", productID, "error", err)
 		b.send(tgbotapi.NewMessage(chatID, b.t(lang, "admin_photo_error")))
 		return
 	}
@@ -144,7 +144,7 @@ func (b *Bot) onAdminPhotoDelete(ctx context.Context, chatID int64, msgID int, d
 	}
 
 	if err := b.photos.Delete(ctx, photoID); err != nil {
-		b.logger.Error("delete product photo", "photo_id", photoID, "error", err)
+		b.loggerFor(ctx).Error("delete product photo", "photo_id", photoID, "error", err)
 		b.send(tgbotapi.NewMessage(chatID, b.t(lang, "admin_photo_error")))
 		return
 	}
@@ -157,7 +157,7 @@ func (b *Bot) onAdminPhotoDelete(ctx context.Context, chatID int64, msgID int, d
 func (b *Bot) syncProductCover(ctx context.Context, productID int64) {
 	p, err := b.products.GetProduct(ctx, productID)
 	if err != nil {
-		b.logger.Warn("get product for cover sync", "product_id", productID, "error", err)
+		b.loggerFor(ctx).Warn("get product for cover sync", "product_id", productID, "error", err)
 		return
 	}
 	if strings.HasPrefix(p.PhotoURL, "http://") || strings.HasPrefix(p.PhotoURL, "https://") {
@@ -165,7 +165,7 @@ func (b *Bot) syncProductCover(ctx context.Context, productID int64) {
 	}
 	photos, err := b.photos.List(ctx, productID)
 	if err != nil {
-		b.logger.Warn("list photos for cover sync", "product_id", productID, "error", err)
+		b.loggerFor(ctx).Warn("list photos for cover sync", "product_id", productID, "error", err)
 		return
 	}
 	for _, ph := range photos {
@@ -182,7 +182,7 @@ func (b *Bot) syncProductCover(ctx context.Context, productID int64) {
 	}
 	p.PhotoURL = cover
 	if err := b.products.UpdateProduct(ctx, p); err != nil {
-		b.logger.Warn("update product cover", "product_id", productID, "error", err)
+		b.loggerFor(ctx).Warn("update product cover", "product_id", productID, "error", err)
 	}
 }
 
@@ -191,7 +191,7 @@ func (b *Bot) syncProductCover(ctx context.Context, productID int64) {
 func (b *Bot) onAdminPhotoAdd(ctx context.Context, chatID, userID int64, data, lang string) {
 	productID, err := parseIDFromCallback(data, "admin:photoadd:")
 	if err != nil {
-		b.logger.Error("parse admin:photoadd callback", "error", err)
+		b.loggerFor(ctx).Error("parse admin:photoadd callback", "error", err)
 		return
 	}
 	_ = b.fsm.SetAddProductState(ctx, userID, &storage.AddProductState{Step: storage.StepPhoto, EditProductID: productID, CreatedAt: time.Now()}, 30*time.Minute)

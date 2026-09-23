@@ -19,7 +19,7 @@ func (b *Bot) handleReferral(ctx context.Context, msg *tgbotapi.Message) {
 func (b *Bot) sendReferralScreen(ctx context.Context, chatID, userID int64, msgID int, lang string) {
 	user, err := b.users.GetByTelegramID(ctx, userID)
 	if err != nil {
-		b.logger.Error("referral screen: load user", "error", err)
+		b.loggerFor(ctx).Error("referral screen: load user", "error", err)
 		b.sendOrEditStyled(chatID, msgID, b.t(lang, "error_load_referral"), "", nil)
 		return
 	}
@@ -28,7 +28,7 @@ func (b *Bot) sendReferralScreen(ctx context.Context, chatID, userID int64, msgI
 	if code == "" {
 		rc := b.referralService.GenerateCode()
 		if err := b.referrals.UpdateReferralCode(ctx, user.ID, rc.Code, rc.ExpiresAt); err != nil {
-			b.logger.Error("referral screen: save code", "error", err)
+			b.loggerFor(ctx).Error("referral screen: save code", "error", err)
 			b.sendOrEditStyled(chatID, msgID, b.t(lang, "error_load_referral"), "", nil)
 			return
 		}
@@ -37,7 +37,7 @@ func (b *Bot) sendReferralScreen(ctx context.Context, chatID, userID int64, msgI
 
 	stats, err := b.referrals.GetStats(ctx, user.ID)
 	if err != nil {
-		b.logger.Error("referral screen: load stats", "error", err)
+		b.loggerFor(ctx).Error("referral screen: load stats", "error", err)
 		b.sendOrEditStyled(chatID, msgID, b.t(lang, "error_load_referral"), "", nil)
 		return
 	}
