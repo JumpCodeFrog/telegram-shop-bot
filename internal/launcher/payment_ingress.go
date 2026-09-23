@@ -27,8 +27,13 @@ func runPaymentReviewIngestStars(ctx context.Context, args []string, opts Paymen
 	confirmOrder := fs.Int64("confirm-order", -1, "must exactly equal --order when applying")
 	maxRows := fs.Int("max-rows", choosePositive(opts.MaxRows, defaults.MaxRows), "maximum provider rows")
 	pageSize := fs.Int("page-size", choosePositive(opts.PageSize, defaults.PageSize), "provider page size")
-	if err := fs.Parse(args); err != nil || fs.NArg() != 0 || (*kind != "capture" && *kind != "refund") ||
-		strings.TrimSpace(*transactionID) == "" || *orderID <= 0 || strings.TrimSpace(*actor) == "" || len(strings.TrimSpace(*actor)) > 128 ||
+	parseErr := fs.Parse(args)
+	// One trimmed actor local (4.15 T4 fix): the fact/refund rows and the
+	// audit rows must store the identical operator identity — the audit
+	// INSERT trims, so the fact rows trim at the source too.
+	actorName := strings.TrimSpace(*actor)
+	if parseErr != nil || fs.NArg() != 0 || (*kind != "capture" && *kind != "refund") ||
+		strings.TrimSpace(*transactionID) == "" || *orderID <= 0 || actorName == "" || len(actorName) > 128 ||
 		strings.TrimSpace(*reason) == "" || len(strings.TrimSpace(*reason)) > 512 || *maxRows < 1 || *maxRows > 100000 || *pageSize < 1 || *pageSize > 100 {
 		fmt.Fprintln(paymentReviewOut(opts), "Provider ingress: invalid arguments")
 		return 2
@@ -57,13 +62,14 @@ func runPaymentReviewIngestStars(ctx context.Context, args []string, opts Paymen
 		outcome, err = storage.NewSQLOrderStore(previewDB).PreviewProviderCaptureIngress(ctx, *orderID, storage.PaymentFact{
 			Provider: storage.PaymentMethodStars, ExternalID: providerRow.ExternalID,
 			PayerID: providerRow.PayerID, AmountMinor: providerRow.AmountMinor, Currency: "XTR", Scale: 0,
-			OccurredAt: providerRow.OccurredAt,
+			OccurredAt: providerRow.OccurredAt, Actor: actorName,
 		})
 	} else {
 		outcome, err = storage.NewSQLPaymentLedgerStore(previewDB).PreviewProviderRefundIngress(ctx, storage.Refund{
 			OrderID: *orderID, Provider: storage.PaymentMethodStars, ExternalID: providerRow.ExternalID,
 			PaymentExternalID: providerRow.ExternalID, PayerID: providerRow.PayerID,
 			AmountMinor: providerRow.AmountMinor, Currency: "XTR", Scale: 0, OccurredAt: providerRow.OccurredAt,
+			Actor: actorName,
 		})
 	}
 	_ = previewDB.Close()
@@ -91,14 +97,15 @@ func runPaymentReviewIngestStars(ctx context.Context, args []string, opts Paymen
 		err = storage.NewSQLOrderStore(writeDB).IngestProviderCapture(ctx, *orderID, storage.PaymentFact{
 			Provider: storage.PaymentMethodStars, ExternalID: providerRow.ExternalID,
 			PayerID: providerRow.PayerID, AmountMinor: providerRow.AmountMinor, Currency: "XTR", Scale: 0,
-			OccurredAt: providerRow.OccurredAt,
-		}, storage.PaymentIngressAudit{Actor: *actor, Reason: *reason})
+			OccurredAt: providerRow.OccurredAt, Actor: actorName,
+		}, storage.PaymentIngressAudit{Actor: actorName, Reason: *reason})
 	} else {
 		err = storage.NewSQLPaymentLedgerStore(writeDB).IngestProviderRefund(ctx, storage.Refund{
 			OrderID: *orderID, Provider: storage.PaymentMethodStars, ExternalID: providerRow.ExternalID,
 			PaymentExternalID: providerRow.ExternalID, PayerID: providerRow.PayerID,
 			AmountMinor: providerRow.AmountMinor, Currency: "XTR", Scale: 0, OccurredAt: providerRow.OccurredAt,
-		}, storage.PaymentIngressAudit{Actor: *actor, Reason: *reason})
+			Actor: actorName,
+		}, storage.PaymentIngressAudit{Actor: actorName, Reason: *reason})
 	}
 	if err == nil {
 		fmt.Fprintf(paymentReviewOut(opts), "Provider ingress applied: kind=%s order=%d outcome=%s\n",
@@ -182,8 +189,11 @@ func runPaymentReviewIngestProvider(ctx context.Context, args []string, opts Pay
 		fmt.Fprintln(paymentReviewOut(opts), "Provider ingress: invalid occurred-at (want RFC3339 or unix seconds)")
 		return 2
 	}
+	// One trimmed actor local (4.15 T4 fix): the fact rows and the audit rows
+	// must store the identical operator identity.
+	actorName := strings.TrimSpace(*actor)
 	if *orderID <= 0 || *amountMinor <= 0 || strings.TrimSpace(*externalID) == "" || len(*externalID) > 256 ||
-		strings.TrimSpace(*actor) == "" || len(strings.TrimSpace(*actor)) > 128 ||
+		actorName == "" || len(actorName) > 128 ||
 		strings.TrimSpace(*reason) == "" || len(strings.TrimSpace(*reason)) > 512 {
 		fmt.Fprintln(paymentReviewOut(opts), "Provider ingress: invalid arguments")
 		return 2
@@ -194,6 +204,10 @@ func runPaymentReviewIngestProvider(ctx context.Context, args []string, opts Pay
 		// PayerID 0 — exactly what the payer predicate accepts for them.
 		PayerID: 0, AmountMinor: *amountMinor, Currency: rail.currency, Scale: rail.scale,
 		OccurredAt: occurredAt,
+		// Durable actor (4.15): the operator-supplied --actor rides the fact
+		// through both apply legs — settlement (UpdateOrderStatusWithPaymentFact)
+		// and quarantine (IngestProviderCapture) — matching the audit row.
+		Actor: actorName,
 	}
 	_, dbPath, ok := loadPaymentReviewConfig(opts)
 	if !ok {
@@ -287,7 +301,7 @@ func runPaymentReviewIngestProvider(ctx context.Context, args []string, opts Pay
 		return 1
 	}
 	err = storage.NewSQLOrderStore(writeDB).IngestProviderCapture(ctx, *orderID, fact,
-		storage.PaymentIngressAudit{Actor: *actor, Reason: *reason})
+		storage.PaymentIngressAudit{Actor: actorName, Reason: *reason})
 	if err == nil {
 		// An exact replay of a settled (or already resolved) fact is a no-op.
 		fmt.Fprintf(paymentReviewOut(opts), "Provider ingress applied: kind=capture provider=%s order=%d outcome=%s\n",

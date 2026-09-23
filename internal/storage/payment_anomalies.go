@@ -89,11 +89,11 @@ func (s *SQLOrderStore) recordPaymentAnomaly(ctx context.Context, anomaly Paymen
 	result, err := tx.ExecContext(ctx, `
 		INSERT OR IGNORE INTO payment_anomalies
 			(fingerprint, proposed_order_id, provider, event_kind, external_id, related_external_id, payer_id,
-			 amount_minor, currency, scale, raw_amount, raw_payload, reason, occurred_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP))`,
+			 amount_minor, currency, scale, raw_amount, raw_payload, reason, actor, occurred_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''), COALESCE(?, CURRENT_TIMESTAMP))`,
 		anomaly.Fingerprint, anomaly.ProposedOrderID, anomaly.Provider, anomaly.EventKind,
 		anomaly.ExternalID, anomaly.RelatedExternalID, anomaly.PayerID,
-		anomaly.AmountMinor, anomaly.Currency, anomaly.Scale, anomaly.RawAmount, anomaly.RawPayload, anomaly.Reason, occurredAt)
+		anomaly.AmountMinor, anomaly.Currency, anomaly.Scale, anomaly.RawAmount, anomaly.RawPayload, anomaly.Reason, anomaly.Actor, occurredAt)
 	if err != nil {
 		return fmt.Errorf("payment anomaly: insert: %w", err)
 	}

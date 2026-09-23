@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"testing"
 )
@@ -638,5 +639,86 @@ func TestProviderNeutralLegacyOrderHasTerminalNonRevenueResolution(t *testing.T)
 	cases, err := ledger.ListPaymentReviews(context.Background(), PaymentReviewProviderUnknown)
 	if err != nil || len(cases) != 0 {
 		t.Fatalf("neutral cases after terminal resolution=%+v err=%v", cases, err)
+	}
+}
+
+// TestListPaymentReviewsTargetsCarryActor pins the 4.15 read-back: event and
+// anomaly targets surface their durable ingress actor, while NULL-actor rows
+// (the legacy paths) read back as "".
+func TestListPaymentReviewsTargetsCarryActor(t *testing.T) {
+	db, err := New(filepath.Join(t.TempDir(), "review-target-actor.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	store, orderID, _ := seedLedgerOrder(t, db, 100)
+
+	// Two needs_review event rows: one from an actor-carrying fact, one from
+	// the legacy fact-less path (NULL actor).
+	fact := PaymentFact{
+		Provider: PaymentMethodStars, ExternalID: "actor-event",
+		AmountMinor: 100, Currency: "XTR", Scale: 0, PayerID: 42,
+		Actor: "webhook:stars",
+	}
+	if err := store.RecordUnexpectedPaymentFact(ctx, orderID, fact, "late_capture"); !errors.Is(err, ErrPaymentNeedsReview) {
+		t.Fatalf("actor event error=%v", err)
+	}
+	if err := store.RecordUnexpectedPayment(ctx, orderID, "stars", "legacy-event", "late_capture"); !errors.Is(err, ErrPaymentNeedsReview) {
+		t.Fatalf("legacy event error=%v", err)
+	}
+	// Two anomaly rows: one with a durable actor, one legacy NULL.
+	anomaly := PaymentAnomaly{
+		ProposedOrderID: orderID, Provider: PaymentMethodStars,
+		EventKind: PaymentEventCaptured, ExternalID: "actor-anomaly",
+		AmountMinor: 100, Currency: "XTR", Scale: 0, Reason: "identity_conflict",
+		Actor: "webhook:stars",
+	}
+	if err := store.RecordPaymentAnomaly(ctx, anomaly); !errors.Is(err, ErrPaymentNeedsReview) {
+		t.Fatalf("actor anomaly error=%v", err)
+	}
+	legacy := anomaly
+	legacy.ExternalID = "legacy-anomaly"
+	legacy.Actor = ""
+	if err := store.RecordPaymentAnomaly(ctx, legacy); !errors.Is(err, ErrPaymentNeedsReview) {
+		t.Fatalf("legacy anomaly error=%v", err)
+	}
+
+	rowID := func(table, externalID string) int64 {
+		t.Helper()
+		var id int64
+		if err := db.Conn().QueryRow(
+			fmt.Sprintf(`SELECT id FROM %s WHERE external_id=?`, table), externalID).Scan(&id); err != nil {
+			t.Fatalf("%s %s: %v", table, externalID, err)
+		}
+		return id
+	}
+	wantActor := map[string]string{
+		fmt.Sprintf("%s:%d", PaymentReviewTargetEvent, rowID("payment_events", "actor-event")):         "webhook:stars",
+		fmt.Sprintf("%s:%d", PaymentReviewTargetEvent, rowID("payment_events", "legacy-event")):        "",
+		fmt.Sprintf("%s:%d", PaymentReviewTargetAnomaly, rowID("payment_anomalies", "actor-anomaly")):  "webhook:stars",
+		fmt.Sprintf("%s:%d", PaymentReviewTargetAnomaly, rowID("payment_anomalies", "legacy-anomaly")): "",
+	}
+
+	cases, err := NewSQLPaymentLedgerStore(db).ListPaymentReviews(ctx, PaymentMethodStars)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cases) != 1 || cases[0].OrderID != orderID || len(cases[0].Targets) != len(wantActor) {
+		t.Fatalf("review cases=%+v", cases)
+	}
+	for _, target := range cases[0].Targets {
+		key := fmt.Sprintf("%s:%d", target.Kind, target.ID)
+		want, ok := wantActor[key]
+		if !ok {
+			t.Fatalf("unexpected target %s", key)
+		}
+		if target.Actor != want {
+			t.Fatalf("target %s actor=%q want %q", key, target.Actor, want)
+		}
+		delete(wantActor, key)
+	}
+	if len(wantActor) != 0 {
+		t.Fatalf("missing targets=%v", wantActor)
 	}
 }

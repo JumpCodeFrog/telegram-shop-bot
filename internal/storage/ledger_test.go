@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -835,5 +836,58 @@ func TestReconcileCannotGreenWithIdentityConflict(t *testing.T) {
 	}
 	if report.Matched != 1 || report.NeedsReview == 0 {
 		t.Fatalf("report = %+v", report)
+	}
+}
+
+// TestRecordRefundActorRoundTrip pins the refund write path (4.15 T4): the
+// actor a refund producer sets on the Refund rides the immutable refunded
+// payment event, and an empty actor stores NULL. The bot /refund flow and the
+// payment-review ingest CLI both pin their sides against this contract.
+func TestRecordRefundActorRoundTrip(t *testing.T) {
+	db, err := New(filepath.Join(t.TempDir(), "refund-actor-roundtrip.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	store, orderID, _ := seedLedgerOrder(t, db, 100)
+	at := time.Now().UTC().Truncate(time.Second)
+	if err := store.UpdateOrderStatusWithPaymentFact(ctx, orderID, OrderStatusPending, OrderStatusPaid,
+		PaymentFact{Provider: PaymentMethodStars, ExternalID: "refund-actor-capture",
+			AmountMinor: 100, Currency: "XTR", Scale: 0, OccurredAt: at}); err != nil {
+		t.Fatal(err)
+	}
+	ledger := NewSQLPaymentLedgerStore(db)
+	if err := ledger.RecordRefund(ctx, Refund{
+		OrderID: orderID, Provider: PaymentMethodStars, ExternalID: "refund-actor-1",
+		PaymentExternalID: "refund-actor-capture", AmountMinor: 40, Currency: "XTR", Scale: 0,
+		OccurredAt: at.Add(time.Minute), Actor: "admin:42",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var actor sql.NullString
+	if err := db.Conn().QueryRowContext(ctx, `SELECT actor FROM payment_events
+		WHERE order_id = ? AND event_kind = ? AND external_id = 'refund-actor-1'`,
+		orderID, PaymentEventRefunded).Scan(&actor); err != nil {
+		t.Fatal(err)
+	}
+	if !actor.Valid || actor.String != "admin:42" {
+		t.Fatalf("refund event actor = %+v, want admin:42", actor)
+	}
+	if err := ledger.RecordRefund(ctx, Refund{
+		OrderID: orderID, Provider: PaymentMethodStars, ExternalID: "refund-actor-2",
+		PaymentExternalID: "refund-actor-capture", AmountMinor: 60, Currency: "XTR", Scale: 0,
+		OccurredAt: at.Add(2 * time.Minute),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var unset sql.NullString
+	if err := db.Conn().QueryRowContext(ctx, `SELECT actor FROM payment_events
+		WHERE order_id = ? AND event_kind = ? AND external_id = 'refund-actor-2'`,
+		orderID, PaymentEventRefunded).Scan(&unset); err != nil {
+		t.Fatal(err)
+	}
+	if unset.Valid {
+		t.Fatalf("empty-actor refund event actor = %q, want NULL", unset.String)
 	}
 }

@@ -108,10 +108,11 @@ func runPaymentReviewList(ctx context.Context, args []string, opts PaymentReview
 	}
 	fmt.Fprintf(paymentReviewOut(opts), "Payment reviews: provider=%s cases=%d targets=%d\n", *provider, len(cases), targetCount)
 	for _, item := range cases {
-		events, anomalies, orderTarget, reasons := reviewTargetFields(item.Targets)
-		fmt.Fprintf(paymentReviewOut(opts), "order=%d state=%s event_ids=%s anomaly_ids=%s order_target=%s reasons=%s\n",
+		events, anomalies, orderTarget, reasons, actors := reviewTargetFields(item.Targets)
+		fmt.Fprintf(paymentReviewOut(opts), "order=%d state=%s event_ids=%s anomaly_ids=%s order_target=%s reasons=%s actors=%s\n",
 			item.OrderID, safeReviewCode(item.PaymentState), joinReviewIDs(events),
-			joinReviewIDs(anomalies), joinReviewIDs(orderTarget), strings.Join(reasons, ","))
+			joinReviewIDs(anomalies), joinReviewIDs(orderTarget), strings.Join(reasons, ","),
+			joinReviewStrings(actors))
 	}
 	if targetCount > 0 {
 		return 1
@@ -257,7 +258,10 @@ func (ids *reviewIDList) Set(raw string) error {
 	return nil
 }
 
-func reviewTargetFields(targets []storage.PaymentReviewTarget) (events, anomalies, orderTarget []int64, reasons []string) {
+// reviewTargetFields splits the case's opaque targets into the CLI's
+// operator-facing buckets. Actors collects only non-empty durable ingress
+// identities (NULL stays absent, rendered as "-" by joinReviewStrings).
+func reviewTargetFields(targets []storage.PaymentReviewTarget) (events, anomalies, orderTarget []int64, reasons, actors []string) {
 	for _, target := range targets {
 		switch target.Kind {
 		case storage.PaymentReviewTargetEvent:
@@ -268,8 +272,11 @@ func reviewTargetFields(targets []storage.PaymentReviewTarget) (events, anomalie
 			orderTarget = append(orderTarget, target.ID)
 		}
 		reasons = append(reasons, safeReviewCode(target.ReasonCode))
+		if target.Actor != "" {
+			actors = append(actors, safeReviewCode(target.Actor))
+		}
 	}
-	return events, anomalies, orderTarget, reasons
+	return events, anomalies, orderTarget, reasons, actors
 }
 
 func joinReviewIDs(ids []int64) string {
@@ -279,6 +286,15 @@ func joinReviewIDs(ids []int64) string {
 	values := make([]string, 0, len(ids))
 	for _, id := range ids {
 		values = append(values, strconv.FormatInt(id, 10))
+	}
+	return strings.Join(values, ",")
+}
+
+// joinReviewStrings renders the actors field with the same "-" empty idiom
+// as the ID buckets.
+func joinReviewStrings(values []string) string {
+	if len(values) == 0 {
+		return "-"
 	}
 	return strings.Join(values, ",")
 }

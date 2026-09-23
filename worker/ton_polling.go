@@ -93,6 +93,10 @@ func (w *TONPollingWorker) poll(ctx context.Context) {
 				"lt", tx.LT, "hash", tx.Hash)
 			continue
 		}
+		// Durable actor (4.15): the poller is the settle transport for this
+		// receipt — the same TONTransaction.PaymentReceipt() builder is
+		// transport-neutral, so the actor is assigned here.
+		receipt.Actor = "worker:ton"
 		outcome, err := w.orders.ConfirmPaymentReceipt(ctx, receipt)
 		if err != nil {
 			// One transfer must never panic the ticker or abort the batch.
@@ -119,7 +123,7 @@ func (w *TONPollingWorker) poll(ctx context.Context) {
 			continue
 		}
 		// Settlement attribution (docs/payment-operations.md §12): the poller
-		// is TON's only settlement path — log-level actor, no durable actor row.
+		// is TON's only settlement path — mirrored durably in payment_events.actor (4.15).
 		slog.Info("TON polling: order marked paid",
 			"order_id", receipt.OrderID, "external_id", receipt.ExternalID, "actor", "worker:ton")
 		if w.notify != nil {

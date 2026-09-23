@@ -211,6 +211,8 @@ func (w *CryptoBotPollingWorker) processPaidInvoices(ctx context.Context, invoic
 		if receiptErr != nil {
 			anomaly, anomalyErr := inv.PaymentAnomaly("polling_invalid_paid_invoice")
 			if anomalyErr == nil {
+				// Durable actor (4.15): the poller is the transport.
+				anomaly.Actor = "worker:crypto"
 				quarantineErr := w.orders.RecordPaymentAnomaly(ctx, anomaly)
 				if quarantineErr == nil || errors.Is(quarantineErr, storage.ErrPaymentNeedsReview) {
 					slog.Warn("CryptoBot polling: quarantined invalid paid invoice", "order_id", inv.OrderID, "invoice_id", inv.InvoiceID)
@@ -221,6 +223,11 @@ func (w *CryptoBotPollingWorker) processPaidInvoices(ctx context.Context, invoic
 			slog.Error("CryptoBot polling: invalid paid invoice receipt was not quarantined", "order_id", inv.OrderID, "invoice_id", inv.InvoiceID)
 			continue
 		}
+		// Durable actor (4.15): the poller is the settle transport for this
+		// receipt — the worker stamps the actor after the shared
+		// PendingInvoice.PaymentReceipt() builder; the crypto webhook builds
+		// its receipt inline and stamps `webhook:crypto` itself.
+		receipt.Actor = "worker:crypto"
 		outcome, err := w.orders.ConfirmPaymentReceipt(ctx, receipt)
 		if err != nil {
 			if errors.Is(err, storage.ErrProductOutOfStock) {
@@ -237,7 +244,7 @@ func (w *CryptoBotPollingWorker) processPaidInvoices(ctx context.Context, invoic
 			continue
 		}
 		// Settlement attribution (docs/payment-operations.md §12): the poller
-		// is the acting settler — log-level actor, no durable actor row.
+		// is the acting settler — mirrored durably in payment_events.actor (4.15).
 		slog.Info("CryptoBot polling: order marked paid",
 			"order_id", inv.OrderID, "invoice_id", inv.InvoiceID, "actor", "worker:crypto")
 		if w.notify != nil {

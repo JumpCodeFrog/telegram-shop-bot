@@ -49,8 +49,10 @@ func (b *Bot) CryptoBotWebhookHandler() http.HandlerFunc {
 		payload, err := b.crypto.ParseWebhook(body)
 		if err != nil {
 			digest := sha256.Sum256(body)
+			// Durable actor (4.15): the signed crypto webhook is the transport.
 			recordErr := b.order.RecordPaymentAnomaly(r.Context(), storage.PaymentAnomaly{
 				Provider: storage.PaymentMethodCrypto, RawPayload: fmt.Sprintf("sha256:%x", digest), Reason: "webhook_parse_failure",
+				Actor: "webhook:crypto",
 			})
 			if recordErr == nil || errors.Is(recordErr, storage.ErrPaymentNeedsReview) {
 				w.WriteHeader(http.StatusOK)
@@ -76,6 +78,8 @@ func (b *Bot) CryptoBotWebhookHandler() http.HandlerFunc {
 				Payload: payload.Payload, Asset: payload.Asset, Amount: payload.Amount,
 				PaidAt: payload.PaidAt, OccurredAt: payload.OccurredAt,
 			}).PaymentAnomaly("webhook_invalid_paid_invoice")
+			// Durable actor (4.15): the signed crypto webhook is the transport.
+			anomaly.Actor = "webhook:crypto"
 			recordErr := b.order.RecordPaymentAnomaly(ctx, anomaly)
 			if recordErr == nil || errors.Is(recordErr, storage.ErrPaymentNeedsReview) {
 				w.WriteHeader(http.StatusOK)
@@ -85,10 +89,12 @@ func (b *Bot) CryptoBotWebhookHandler() http.HandlerFunc {
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
+		// Durable actor (4.15): the signed webhook is the settle authority.
 		outcome, err := b.order.ConfirmPaymentReceipt(ctx, shop.PaymentReceipt{
 			OrderID: payload.OrderID, Provider: storage.PaymentMethodCrypto,
 			ExternalID: payload.InvoiceID, Currency: payload.Asset,
 			AmountMinor: payload.AmountMinor, Scale: 2, OccurredAt: payload.OccurredAt,
+			Actor: "webhook:crypto",
 		})
 		if err != nil {
 			if errors.Is(err, storage.ErrProductOutOfStock) {
@@ -96,6 +102,7 @@ func (b *Bot) CryptoBotWebhookHandler() http.HandlerFunc {
 					OrderID: payload.OrderID, Provider: storage.PaymentMethodCrypto,
 					ExternalID: payload.InvoiceID, Currency: payload.Asset,
 					AmountMinor: payload.AmountMinor, Scale: 2, OccurredAt: payload.OccurredAt,
+					Actor: "webhook:crypto",
 				}, "out_of_stock_after_charge")
 				if recordErr == nil || errors.Is(recordErr, storage.ErrPaymentNeedsReview) {
 					w.WriteHeader(http.StatusOK)
@@ -120,8 +127,8 @@ func (b *Bot) CryptoBotWebhookHandler() http.HandlerFunc {
 			b.metrics.SuccessfulPayments.WithLabelValues("crypto").Inc()
 		}
 		// Settlement attribution (docs/payment-operations.md §12): the signed
-		// provider callback is the authority for this settle — log-level actor
-		// only, no durable actor row exists for webhook settles.
+		// provider callback is the authority for this settle — the log-level
+		// actor is mirrored durably in payment_events.actor (4.15).
 		b.logger.Info("cryptobot webhook settled",
 			"order_id", payload.OrderID, "payment_id", payload.InvoiceID, "actor", "webhook:crypto")
 
@@ -183,9 +190,11 @@ func (b *Bot) YooKassaWebhookHandler() http.HandlerFunc {
 				reason = "webhook_missing_payment_id"
 			}
 			digest := sha256.Sum256(body)
+			// Durable actor (4.15): the yookassa notification is the trigger.
 			recordErr := b.order.RecordPaymentAnomaly(r.Context(), storage.PaymentAnomaly{
 				Provider: storage.PaymentMethodYooKassa, RawPayload: fmt.Sprintf("sha256:%x", digest),
 				Reason: reason,
+				Actor:  "webhook:yookassa",
 			})
 			if err == nil && notification != nil && notification.PaymentID == "" {
 				w.WriteHeader(http.StatusOK) // valid envelope, no payment id: nothing to do
@@ -223,6 +232,9 @@ func (b *Bot) YooKassaWebhookHandler() http.HandlerFunc {
 		receipt, receiptErr := p.PaymentReceipt()
 		if receiptErr != nil {
 			anomaly, _ := p.PaymentAnomaly("webhook_invalid_receipt")
+			// Durable actor (4.15): the webhook-triggered refetch is the
+			// transport for this quarantined fact.
+			anomaly.Actor = "webhook:yookassa"
 			recordErr := b.order.RecordPaymentAnomaly(ctx, anomaly)
 			if recordErr == nil || errors.Is(recordErr, storage.ErrPaymentNeedsReview) {
 				w.WriteHeader(http.StatusOK)
@@ -232,6 +244,10 @@ func (b *Bot) YooKassaWebhookHandler() http.HandlerFunc {
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
+
+		// Durable actor (4.15): the signed notification + authoritative refetch
+		// is the settle transport for this receipt.
+		receipt.Actor = "webhook:yookassa"
 
 		outcome, err := b.order.ConfirmPaymentReceipt(ctx, receipt)
 		if err != nil {
@@ -245,6 +261,8 @@ func (b *Bot) YooKassaWebhookHandler() http.HandlerFunc {
 			}
 			if errors.Is(err, storage.ErrProductOutOfStock) {
 				anomaly, _ := p.PaymentAnomaly("out_of_stock_after_charge")
+				// Durable actor (4.15): same yookassa webhook transport.
+				anomaly.Actor = "webhook:yookassa"
 				if recordErr := b.order.RecordPaymentAnomaly(ctx, anomaly); recordErr == nil ||
 					errors.Is(recordErr, storage.ErrPaymentNeedsReview) {
 					w.WriteHeader(http.StatusOK)
@@ -315,8 +333,10 @@ func (b *Bot) StripeWebhookHandler() http.HandlerFunc {
 			// The signature was valid, so a body that still fails to parse is
 			// a real anomaly: quarantine a digest, ACK once it is durable.
 			digest := sha256.Sum256(body)
+			// Durable actor (4.15): the signed stripe webhook is the transport.
 			recordErr := b.order.RecordPaymentAnomaly(ctx, storage.PaymentAnomaly{
 				Provider: storage.PaymentMethodStripe, RawPayload: fmt.Sprintf("sha256:%x", digest), Reason: "webhook_parse_failure",
+				Actor: "webhook:stripe",
 			})
 			if recordErr == nil || errors.Is(recordErr, storage.ErrPaymentNeedsReview) {
 				w.WriteHeader(http.StatusOK)
@@ -336,6 +356,9 @@ func (b *Bot) StripeWebhookHandler() http.HandlerFunc {
 		receipt, receiptErr := session.PaymentReceipt()
 		if receiptErr != nil {
 			anomaly, _ := session.PaymentAnomaly("webhook_invalid_receipt")
+			// Durable actor (4.15): the signed stripe webhook is the
+			// transport for this quarantined fact.
+			anomaly.Actor = "webhook:stripe"
 			recordErr := b.order.RecordPaymentAnomaly(ctx, anomaly)
 			if recordErr == nil || errors.Is(recordErr, storage.ErrPaymentNeedsReview) {
 				w.WriteHeader(http.StatusOK)
@@ -345,6 +368,10 @@ func (b *Bot) StripeWebhookHandler() http.HandlerFunc {
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
+
+		// Durable actor (4.15): the signed session body is the settle
+		// transport for this receipt.
+		receipt.Actor = "webhook:stripe"
 
 		outcome, err := b.order.ConfirmPaymentReceipt(ctx, receipt)
 		if err != nil {
@@ -358,6 +385,8 @@ func (b *Bot) StripeWebhookHandler() http.HandlerFunc {
 			}
 			if errors.Is(err, storage.ErrProductOutOfStock) {
 				anomaly, _ := session.PaymentAnomaly("out_of_stock_after_charge")
+				// Durable actor (4.15): same stripe webhook transport.
+				anomaly.Actor = "webhook:stripe"
 				if recordErr := b.order.RecordPaymentAnomaly(ctx, anomaly); recordErr == nil ||
 					errors.Is(recordErr, storage.ErrPaymentNeedsReview) {
 					w.WriteHeader(http.StatusOK)
@@ -429,8 +458,10 @@ func (b *Bot) NowpaymentsWebhookHandler() http.HandlerFunc {
 			// The signature was valid, so a body that still fails to parse is
 			// a real anomaly: quarantine a digest, ACK once it is durable.
 			digest := sha256.Sum256(body)
+			// Durable actor (4.15): the signed IPN is the transport.
 			recordErr := b.order.RecordPaymentAnomaly(ctx, storage.PaymentAnomaly{
 				Provider: storage.PaymentMethodNowpayments, RawPayload: fmt.Sprintf("sha256:%x", digest), Reason: "webhook_parse_failure",
+				Actor: "webhook:nowpayments",
 			})
 			if recordErr == nil || errors.Is(recordErr, storage.ErrPaymentNeedsReview) {
 				w.WriteHeader(http.StatusOK)
@@ -451,6 +482,9 @@ func (b *Bot) NowpaymentsWebhookHandler() http.HandlerFunc {
 		receipt, receiptErr := ipn.PaymentReceipt()
 		if receiptErr != nil {
 			anomaly, _ := ipn.PaymentAnomaly("webhook_invalid_receipt")
+			// Durable actor (4.15): the signed IPN is the transport for
+			// this quarantined fact.
+			anomaly.Actor = "webhook:nowpayments"
 			recordErr := b.order.RecordPaymentAnomaly(ctx, anomaly)
 			if recordErr == nil || errors.Is(recordErr, storage.ErrPaymentNeedsReview) {
 				w.WriteHeader(http.StatusOK)
@@ -460,6 +494,10 @@ func (b *Bot) NowpaymentsWebhookHandler() http.HandlerFunc {
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
+
+		// Durable actor (4.15): the signed IPN is the settle transport for
+		// this receipt.
+		receipt.Actor = "webhook:nowpayments"
 
 		outcome, err := b.order.ConfirmPaymentReceipt(ctx, receipt)
 		if err != nil {
@@ -473,6 +511,8 @@ func (b *Bot) NowpaymentsWebhookHandler() http.HandlerFunc {
 			}
 			if errors.Is(err, storage.ErrProductOutOfStock) {
 				anomaly, _ := ipn.PaymentAnomaly("out_of_stock_after_charge")
+				// Durable actor (4.15): same nowpayments IPN transport.
+				anomaly.Actor = "webhook:nowpayments"
 				if recordErr := b.order.RecordPaymentAnomaly(ctx, anomaly); recordErr == nil ||
 					errors.Is(recordErr, storage.ErrPaymentNeedsReview) {
 					w.WriteHeader(http.StatusOK)
@@ -588,11 +628,14 @@ func (b *Bot) quarantineUndecodableStarsUpdate(ctx context.Context, raw []byte) 
 		return false, 0, nil
 	}
 	digest := sha256.Sum256(raw)
+	// Durable actor (4.15): the Telegram webhook ingress carrying the
+	// undecodable update — actor is not part of the canonical fingerprint.
 	err := b.order.RecordPaymentAnomaly(ctx, storage.PaymentAnomaly{
 		Provider:   storage.PaymentMethodStars,
 		EventKind:  storage.PaymentEventCaptured,
 		RawPayload: fmt.Sprintf("telegram_update_sha256:%x", digest),
 		Reason:     "stars_update_decode_failure",
+		Actor:      "webhook:stars",
 	})
 	if err == nil || errors.Is(err, storage.ErrPaymentNeedsReview) {
 		return true, envelope.UpdateID, nil

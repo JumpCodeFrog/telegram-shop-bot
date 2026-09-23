@@ -112,6 +112,12 @@ func TestPollingSkipsUnpaidInvoices(t *testing.T) {
 	if len(conf.receipts) != 2 || conf.receipts[0].AmountMinor != 200 || conf.receipts[1].AmountMinor != 400 {
 		t.Fatalf("receipts = %+v", conf.receipts)
 	}
+	// 4.15 durable actor: the poller stamps its transport identity on every
+	// receipt it forwards (persisted as payment_events.actor downstream).
+	if conf.receipts[0].Actor != "worker:crypto" || conf.receipts[1].Actor != "worker:crypto" {
+		t.Fatalf("receipt actors = %q/%q, want worker:crypto twice",
+			conf.receipts[0].Actor, conf.receipts[1].Actor)
+	}
 }
 
 // TestPollingConfirmConflictDoesNotNotify verifies that an already-confirmed
@@ -152,6 +158,15 @@ func TestPollingRejectsWrongAssetAndAmount(t *testing.T) {
 		conf.anomalies[3].ExternalID != "204" || conf.anomalies[3].ProposedOrderID != 0 ||
 		conf.anomalies[4].ExternalID != "205" || conf.anomalies[4].AmountMinor != 0 || conf.anomalies[4].RawAmount != "not-a-number" {
 		t.Fatalf("durable anomalies = %+v", conf.anomalies)
+	}
+	// 4.15 durable actor: every polling_invalid_paid_invoice quarantine row
+	// the poller forwards carries its transport identity (persisted as
+	// payment_anomalies.actor downstream).
+	for i, anomaly := range conf.anomalies {
+		if anomaly.Actor != "worker:crypto" {
+			t.Fatalf("anomaly[%d].Actor = %q, want worker:crypto (all %+v)",
+				i, anomaly.Actor, conf.anomalies)
+		}
 	}
 }
 

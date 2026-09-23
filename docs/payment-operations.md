@@ -814,21 +814,22 @@ depends on the path:
 
 | Path | Actor | Durable record |
 |---|---|---|
-| Provider webhooks (crypto, yookassa, stripe, nowpayments) | `webhook:<provider>` | settlement-success log line only (structured `actor` field next to `order_id` and the provider payment id) |
-| Stars `successful_payment` settlement (Telegram is the provider; the update arrives via webhook or long polling) | `webhook:stars` | settlement-success log line only |
-| Stars subscription renewal (recurring `successful_payment`, `is_recurring && !is_first_recurring`) | `webhook:stars` | settlement-success log line only |
-| Polling workers (crypto, ton, yookassa) | `worker:<provider>` | settle-success log line only |
+| Provider webhooks (crypto, yookassa, stripe, nowpayments) | `webhook:<provider>` | settlement-success log line only (structured `actor` field next to `order_id` and the provider payment id) — superseded for new rows by «Durable actor (4.15)» below |
+| Stars `successful_payment` settlement (Telegram is the provider; the update arrives via webhook or long polling) | `webhook:stars` | settlement-success log line only — superseded for new rows by «Durable actor (4.15)» below |
+| Stars subscription renewal (recurring `successful_payment`, `is_recurring && !is_first_recurring`) | `webhook:stars` | settlement-success log line only — superseded for new rows by «Durable actor (4.15)» below |
+| Polling workers (crypto, ton, yookassa) | `worker:<provider>` | settle-success log line only — superseded for new rows by «Durable actor (4.15)» below |
 | CLI ingress (`payment-review ingest-stars` / `ingest-provider` / `resolve`) | the `--actor` flag value | durable `payment_ingress_audits` row |
 | Bot `/refund` executions and `/payreview` resolutions | `admin:<telegram_id>` | durable `payment_ingress_audits` row (refunds additionally log the same actor) |
 | Balance adjustments (`/setbalance`) | the acting admin's Telegram id | durable `balance_txs` row (`admin_adjust[: reason]` type, admin id in `ref_id`) |
 
 For webhook and worker settlements the provider fact itself is the authority —
 a verified/refetched provider statement (or an on-chain transfer) caused the
-settle, not a person — so attribution is log-level: the settlement-success
-line carries a structured `actor` field. These paths have **no durable actor
-row**: the immutable ledger tables carry no actor column, and adding one was
-assessed as disproportionate for the low operator impact — it remains a
-documented backlog item (roadmap 4.15). Operator-driven paths (CLI ingress,
+settle, not a person — so attribution was log-level: the settlement-success
+line carries a structured `actor` field. These paths **had no durable actor
+row**: the immutable ledger tables carried no actor column, and adding one
+was assessed as disproportionate for the low operator impact — it was a
+documented backlog item (roadmap 4.15) — superseded for new rows by
+«Durable actor (4.15)» below. Operator-driven paths (CLI ingress,
 bot refunds, review resolutions, balance adjustments) all write durable audit
 rows naming the actor.
 
@@ -844,7 +845,26 @@ settle/renewal/quarantine logs and the payment-barrier error logs include
 `trace_id`. To reconstruct one update's path: grep the bot log for the trace
 id (`trace_id=<id>` with the text log handler, `"trace_id":"<id>"` with
 JSON). Provider-webhook and worker settles are not part of the update chain
-— their attribution remains the `actor=` field (§12 above).
+— their attribution remains the `actor=` field (§12 above) and, for new
+rows, the durable `actor` column («Durable actor (4.15)» below).
+
+### Durable actor (4.15)
+
+Since migration 023, every new `payment_events` and `payment_anomalies` row
+carries the ingress identity in a nullable `actor` column
+(`CHECK length 1..128`): `webhook:<provider>` (incl. `webhook:stars` for the
+Telegram Stars barrier in both transports), `worker:<provider>` (poller
+settles), `admin:<tgID>` (bot refunds — same value as the refund's
+ingress-audit actor), or the CLI `--actor` text. `NULL` means "not recorded"
+(all pre-4.15 rows; balance-rail captures, whose attribution is self-evident
+from the order's buyer — balance refunds carry `admin:<tgID>` like other
+rails). Actor is never part of an idempotency fingerprint and an
+empty value never blocks a write. Surfaces: `/payreview` cards show
+`actor:` on target lines when present; `payment-review list` prints an
+`actors=` field. Relationship to `payment_ingress_audits`: audits record
+OPERATOR actions (CLI/refund), while `events.actor` records which INGRESS
+wrote the provider fact; for operator-driven writes the two carry the same
+identity.
 
 ## Exit codes
 

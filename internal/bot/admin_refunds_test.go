@@ -316,6 +316,14 @@ func assertRefundAudit(t *testing.T, e *e2eEnv, orderID int64, want int) {
 		WHERE order_id=? AND event_kind='refunded' AND actor='admin:9001' AND reason='admin /refund'`, orderID); got != int64(want) {
 		t.Fatalf("refund audits = %d, want %d", got, want)
 	}
+	// 4.15 T4: the refunded event row carries the SAME admin identity as the
+	// ingress audit (audit.Actor reused — one formatting, never two).
+	if want > 0 {
+		if got := e.qStr(`SELECT COALESCE(actor, '') FROM payment_events
+			WHERE order_id=? AND event_kind='refunded'`, orderID); got != "admin:9001" {
+			t.Fatalf("refund event actor = %q, want admin:9001 (the audit actor)", got)
+		}
+	}
 }
 
 // tgCountMethod counts recorded calls of one Bot API method.
@@ -1075,18 +1083,23 @@ func TestAdminRefundLedgerFailureRecordsDurableAnomaly(t *testing.T) {
 		t.Fatalf("loud text = %q, want %q", got, want)
 	}
 	// Durable orphan anomaly with the full money tuple and the order link.
-	var provider, kind, extID, relID, currency, reason, payload string
+	var provider, kind, extID, relID, currency, reason, payload, actor string
 	var proposed, payer, amount int64
 	var scale int
 	if err := e.db.Conn().QueryRow(`
 		SELECT provider, event_kind, external_id, related_external_id, proposed_order_id,
-		       payer_id, amount_minor, currency, scale, reason, raw_payload
+		       payer_id, amount_minor, currency, scale, reason, raw_payload, COALESCE(actor, '')
 		FROM payment_anomalies`).Scan(&provider, &kind, &extID, &relID, &proposed,
-		&payer, &amount, &currency, &scale, &reason, &payload); err != nil {
+		&payer, &amount, &currency, &scale, &reason, &payload, &actor); err != nil {
 		t.Fatalf("path-5 anomaly row: %v", err)
 	}
 	if provider != "balance" || kind != storage.PaymentEventRefunded {
 		t.Fatalf("anomaly provider/kind = %s/%s, want balance/refunded", provider, kind)
+	}
+	// 4.15 T4: the orphan anomaly carries the SAME admin identity as the
+	// ingress audit would have (audit.Actor reused).
+	if actor != "admin:9001" {
+		t.Fatalf("anomaly actor = %q, want admin:9001 (the audit actor)", actor)
 	}
 	if extID != fmt.Sprintf("balance-refund:%d", orderID) || relID != fmt.Sprintf("balance:%d", orderID) {
 		t.Fatalf("anomaly ids = %q/%q", extID, relID)

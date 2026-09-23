@@ -85,6 +85,7 @@ func TestProviderConfirmedOverRefundIsDurablyQuarantined(t *testing.T) {
 	over := Refund{
 		OrderID: orderID, Provider: "stars", ExternalID: "refund-over",
 		PaymentExternalID: "capture", AmountMinor: 101, Currency: "XTR", Scale: 0,
+		Actor: "admin:42",
 	}
 	for attempt := 0; attempt < 2; attempt++ {
 		if err := ledger.RecordRefund(ctx, over); !errors.Is(err, ErrRefundExceedsPayment) {
@@ -96,9 +97,11 @@ func TestProviderConfirmedOverRefundIsDurablyQuarantined(t *testing.T) {
 	var state string
 	_ = db.Conn().QueryRow(`SELECT COUNT(*) FROM refunds WHERE external_id='refund-over'`).Scan(&refunds)
 	_ = db.Conn().QueryRow(`SELECT COUNT(*) FROM payment_events WHERE event_kind='refunded' AND external_id='refund-over'`).Scan(&events)
+	// 4.15 T4 fix: the quarantined over-refund anomaly carries the refund
+	// fact's actor (no audit on the RecordRefund path).
 	_ = db.Conn().QueryRow(`SELECT COUNT(*) FROM payment_anomalies
 		WHERE proposed_order_id=? AND event_kind='refunded' AND external_id='refund-over'
-		  AND related_external_id='capture' AND reason='refund_exceeds_payment'`, orderID).Scan(&anomalies)
+		  AND related_external_id='capture' AND reason='refund_exceeds_payment' AND actor='admin:42'`, orderID).Scan(&anomalies)
 	_ = db.Conn().QueryRow(`SELECT payment_state FROM orders WHERE id=?`, orderID).Scan(&state)
 	if refunds != 0 || events != 0 || anomalies != 1 || state != PaymentStateNeedsReview {
 		t.Fatalf("refunds=%d events=%d anomalies=%d state=%s", refunds, events, anomalies, state)

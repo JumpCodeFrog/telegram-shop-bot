@@ -60,6 +60,8 @@ type PaymentReceipt struct {
 	Scale                 int
 	OccurredAt            time.Time
 	SubscriptionExpiresAt time.Time
+	// Actor is the durable ingress identity (4.15): webhook:<provider> / worker:<provider>; "" stores NULL.
+	Actor string
 }
 
 // ValidateSubscriptionCart enforces Telegram's recurring-invoice contract:
@@ -303,6 +305,7 @@ func paymentFactFromReceipt(receipt PaymentReceipt) storage.PaymentFact {
 		PayerID: receipt.PayerID, AmountMinor: receipt.AmountMinor, Currency: receipt.Currency, Scale: receipt.Scale,
 		OccurredAt:           receipt.OccurredAt,
 		EntitlementExpiresAt: receipt.SubscriptionExpiresAt,
+		Actor:                receipt.Actor,
 	}
 }
 
@@ -445,6 +448,8 @@ func (s *OrderService) quarantineReceipt(ctx context.Context, receipt PaymentRec
 	if !receipt.SubscriptionExpiresAt.IsZero() {
 		rawPayload = "subscription_expires_at:" + receipt.SubscriptionExpiresAt.UTC().Format(time.RFC3339Nano)
 	}
+	// Durable actor (4.15): the receipt's ingress identity survives the
+	// quarantine (actor is NOT part of the canonical fingerprint).
 	err := recorder.RecordPaymentAnomaly(ctx, storage.PaymentAnomaly{
 		ProposedOrderID: receipt.OrderID,
 		Provider:        receipt.Provider,
@@ -456,6 +461,7 @@ func (s *OrderService) quarantineReceipt(ctx context.Context, receipt PaymentRec
 		RawPayload:      rawPayload,
 		Reason:          reason,
 		OccurredAt:      receipt.OccurredAt,
+		Actor:           receipt.Actor,
 	})
 	if err == nil {
 		return storage.ErrPaymentNeedsReview

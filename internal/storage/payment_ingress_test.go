@@ -193,7 +193,8 @@ func TestProviderRefundIngressAuditsDurableAnomalyAtomically(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := db.Conn().QueryRow(`SELECT COUNT(*) FROM payment_anomalies
-		WHERE proposed_order_id=? AND event_kind='refunded' AND reason='refund_parent_not_found'`, orderID).Scan(&anomalies); err != nil {
+		WHERE proposed_order_id=? AND event_kind='refunded' AND reason='refund_parent_not_found'
+		  AND actor='operator:test'`, orderID).Scan(&anomalies); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Conn().QueryRow(`SELECT COUNT(*) FROM payment_ingress_audits a

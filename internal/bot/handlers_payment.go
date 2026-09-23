@@ -588,10 +588,15 @@ func (b *Bot) processSuccessfulPayment(ctx context.Context, msg *tgbotapi.Messag
 	if msg.From != nil {
 		payerID = msg.From.ID
 	}
+	// The barrier receipt is transport-shared (polling route and Telegram
+	// webhook both land here), so the 4.13/4.15 attribution convention keeps
+	// one literal for both: webhook:stars. Renewal and out-of-stock legs flow
+	// through this same receipt, inheriting the durable actor.
 	receipt := shop.PaymentReceipt{
 		OrderID: orderID, Provider: storage.PaymentMethodStars,
 		ExternalID: sp.TelegramPaymentChargeID, PayerID: payerID,
 		Currency: sp.Currency, AmountMinor: int64(sp.TotalAmount), Scale: 0,
+		Actor: "webhook:stars",
 	}
 	if msg.Date > 0 {
 		receipt.OccurredAt = time.Unix(int64(msg.Date), 0).UTC()
@@ -619,7 +624,7 @@ func (b *Bot) processSuccessfulPayment(ctx context.Context, msg *tgbotapi.Messag
 		}
 		// Settlement attribution (docs/payment-operations.md §12): the renewal
 		// arrives through the same Telegram successful_payment ingress as the
-		// one-time settle — log-level actor, no durable actor row.
+		// one-time settle — mirrored durably in payment_events.actor (4.15).
 		b.loggerFor(ctx).Info("stars subscription renewal settled",
 			"order_id", orderID, "payment_id", sp.TelegramPaymentChargeID, "actor", "webhook:stars")
 		return nil
@@ -660,8 +665,8 @@ func (b *Bot) processSuccessfulPayment(ctx context.Context, msg *tgbotapi.Messag
 		b.metrics.SuccessfulPayments.WithLabelValues("stars").Inc()
 	}
 	// Settlement attribution (docs/payment-operations.md §12): the Telegram
-	// successful_payment update is the authority for this settle — log-level
-	// actor only, no durable actor row exists for webhook settles.
+	// successful_payment update is the authority for this settle — the
+	// log-level actor is mirrored durably in payment_events.actor (4.15).
 	b.loggerFor(ctx).Info("stars payment settled",
 		"order_id", orderID, "payment_id", sp.TelegramPaymentChargeID, "actor", "webhook:stars")
 
@@ -715,6 +720,8 @@ func (b *Bot) recordStarsPaymentAnomaly(ctx context.Context, msg *tgbotapi.Messa
 		amountMinor = 0
 	}
 	payloadDigest := sha256.Sum256([]byte(sp.InvoicePayload))
+	// Durable actor (4.15): the successful_payment ingress that handed us
+	// this message is the transport, mirroring the settle receipt's literal.
 	err := b.order.RecordPaymentAnomaly(ctx, storage.PaymentAnomaly{
 		ProposedOrderID: orderID,
 		Provider:        storage.PaymentMethodStars,
@@ -728,6 +735,7 @@ func (b *Bot) recordStarsPaymentAnomaly(ctx context.Context, msg *tgbotapi.Messa
 		RawPayload:      fmt.Sprintf("invoice_payload_sha256:%x", payloadDigest),
 		Reason:          reason,
 		OccurredAt:      occurredAt,
+		Actor:           "webhook:stars",
 	})
 	if err == nil || errors.Is(err, storage.ErrPaymentNeedsReview) {
 		return nil

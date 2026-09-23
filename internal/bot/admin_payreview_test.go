@@ -409,6 +409,23 @@ func TestPayReviewCardShowsTargetsAndActions(t *testing.T) {
 		!strings.Contains(text, "event_refunded") {
 		t.Fatalf("card text=%q", text)
 	}
+	// NULL-actor targets (the pre-4.15 fixture) render byte-identical to the
+	// actor-less format: every target line matches the plain key exactly and
+	// no actor fragment leaks into the card.
+	relisted, err := e.bot.payLedger.ListPaymentReviews(context.Background(), "stars")
+	if err != nil || len(relisted) != 1 || len(relisted[0].Targets) != 2 {
+		t.Fatalf("relisted=%+v err=%v", relisted, err)
+	}
+	for _, target := range relisted[0].Targets {
+		want := e.bot.i18n.Tf("en", "admin_payreview_card_target_line",
+			target.Kind, target.ID, target.ReasonCode)
+		if !strings.Contains(text, want) {
+			t.Fatalf("card text=%q missing byte-identical target line %q", text, want)
+		}
+	}
+	if strings.Contains(text, "(actor:") {
+		t.Fatalf("NULL-actor card leaked an actor line: %q", text)
+	}
 	var markup string
 	for _, c := range calls {
 		if m := c.markup(); m != "" {
@@ -423,6 +440,52 @@ func TestPayReviewCardShowsTargetsAndActions(t *testing.T) {
 		if !strings.Contains(markup, want) {
 			t.Fatalf("card markup %s missing %s", markup, want)
 		}
+	}
+}
+
+// TestPayReviewCardShowsActorLineWhenRecorded pins the 4.15 card surfacing:
+// a target whose durable row records the ingress actor renders the actor
+// line, while its NULL-actor neighbor keeps the plain format.
+func TestPayReviewCardShowsActorLineWhenRecorded(t *testing.T) {
+	e := newE2EEnv(t)
+	ctx := context.Background()
+	store, orderID := seedPayReviewOrder(t, e, e2eAdminID, 100)
+	anomaly := storage.PaymentAnomaly{
+		ProposedOrderID: orderID, Provider: storage.PaymentMethodStars,
+		EventKind: storage.PaymentEventCaptured, ExternalID: "actor-card-anomaly",
+		AmountMinor: 100, Currency: "XTR", Scale: 0, Reason: "late_capture",
+		Actor: "webhook:stars",
+	}
+	if err := store.RecordPaymentAnomaly(ctx, anomaly); !errors.Is(err, storage.ErrPaymentNeedsReview) {
+		t.Fatalf("seed actor anomaly: %v", err)
+	}
+	legacy := anomaly
+	legacy.ExternalID = "legacy-card-anomaly"
+	legacy.Actor = ""
+	if err := store.RecordPaymentAnomaly(ctx, legacy); !errors.Is(err, storage.ErrPaymentNeedsReview) {
+		t.Fatalf("seed legacy anomaly: %v", err)
+	}
+	rowID := func(externalID string) int64 {
+		t.Helper()
+		var id int64
+		if err := e.db.Conn().QueryRow(
+			`SELECT id FROM payment_anomalies WHERE external_id=?`, externalID).Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+
+	calls := e.cb(e2eAdminID, fmt.Sprintf("admin:payrev:stars:%d", orderID), "en")
+	text := tgText(calls)
+	wantActor := e.bot.i18n.Tf("en", "admin_payreview_card_target_line_actor",
+		storage.PaymentReviewTargetAnomaly, rowID("actor-card-anomaly"), "late_capture", "webhook:stars")
+	if !strings.Contains(text, wantActor) {
+		t.Fatalf("card text=%q missing actor line %q", text, wantActor)
+	}
+	wantPlain := e.bot.i18n.Tf("en", "admin_payreview_card_target_line",
+		storage.PaymentReviewTargetAnomaly, rowID("legacy-card-anomaly"), "late_capture")
+	if !strings.Contains(text, wantPlain) {
+		t.Fatalf("card text=%q missing plain line %q", text, wantPlain)
 	}
 }
 

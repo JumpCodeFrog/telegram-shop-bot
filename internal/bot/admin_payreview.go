@@ -326,7 +326,11 @@ func (b *Bot) sendPayReviewCard(ctx context.Context, chatID int64, msgID int, re
 	sb.WriteString(b.i18n.Tf(lang, "admin_payreview_card_state", payReviewStateLabel(item.PaymentState)))
 	sb.WriteString(b.t(lang, "admin_payreview_card_targets"))
 	for _, target := range item.Targets {
-		sb.WriteString(b.i18n.Tf(lang, "admin_payreview_card_target_line", target.Kind, target.ID, target.ReasonCode))
+		if target.Actor != "" {
+			sb.WriteString(b.i18n.Tf(lang, "admin_payreview_card_target_line_actor", target.Kind, target.ID, target.ReasonCode, target.Actor))
+		} else {
+			sb.WriteString(b.i18n.Tf(lang, "admin_payreview_card_target_line", target.Kind, target.ID, target.ReasonCode))
+		}
 	}
 
 	actions := payReviewActions(item)
