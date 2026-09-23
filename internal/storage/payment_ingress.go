@@ -181,6 +181,10 @@ func (s *SQLOrderStore) IngestProviderCapture(ctx context.Context, orderID int64
 			ExternalID: fact.ExternalID, PayerID: fact.PayerID, AmountMinor: fact.AmountMinor,
 			Currency: fact.Currency, Scale: fact.Scale, Reason: "operator_ingest_identity_conflict",
 			OccurredAt: fact.OccurredAt,
+			// Durable actor (4.15): this CLI-only branch (IngestProviderCapture
+			// has no non-launcher caller) keeps the operator identity next to
+			// the ingress audit row written for the same ingest attempt.
+			Actor: audit.Actor,
 		}, &audit)
 		if anomalyErr != nil && !errors.Is(anomalyErr, ErrPaymentNeedsReview) {
 			return errors.Join(ErrPaymentIdentityConflict, anomalyErr)

@@ -399,6 +399,9 @@ func (b *Bot) onAdminRefundConfirm(ctx context.Context, chatID int64, msgID int,
 		Actor:  fmt.Sprintf("admin:%d", adminID),
 		Reason: "admin /refund",
 	}
+	// Durable actor (4.15): the refund fact carries the SAME admin identity as
+	// the ingress audit — one formatting of the identity, never two.
+	plan.fact.Actor = audit.Actor
 	if err := b.payLedger.IngestProviderRefund(ctx, plan.fact, audit); err != nil &&
 		!errors.Is(err, storage.ErrPaymentNeedsReview) {
 		// The money has LEFT. Never silent — and the remedy is RAIL-AWARE:
@@ -427,7 +430,9 @@ func (b *Bot) onAdminRefundConfirm(ctx context.Context, chatID int64, msgID int,
 		// operator resolves it there (docs §11). RawPayload is deterministic
 		// (no error text) so repeated failures reuse ONE row (ruling R6).
 		// RecordPaymentAnomaly signals a successful write with
-		// ErrPaymentNeedsReview — the webhook convention.
+		// ErrPaymentNeedsReview — the webhook convention. The actor is the
+		// SAME audit identity (4.15): the orphan row must answer "who moved
+		// the money" exactly like the ingress audit the flow tried to write.
 		anomalyPayload, _ := json.Marshal(map[string]any{
 			"order_id": orderID, "rail": rail, "refund_id": refundID,
 		})
@@ -442,6 +447,7 @@ func (b *Bot) onAdminRefundConfirm(ctx context.Context, chatID int64, msgID int,
 			Scale:             plan.fact.Scale,
 			Reason:            fmt.Sprintf("refund_ledger_failure:order=%d", orderID),
 			RawPayload:        string(anomalyPayload),
+			Actor:             audit.Actor,
 		}); recordErr != nil && !errors.Is(recordErr, storage.ErrPaymentNeedsReview) {
 			b.logger.Error("refund: path-5 anomaly was not recorded",
 				"order_id", orderID, "rail", rail, "refund_id", refundID, "error", recordErr)

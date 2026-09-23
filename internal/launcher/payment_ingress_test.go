@@ -32,6 +32,59 @@ func (f *ingressStarsClient) ListStarTransactions(_ context.Context, token strin
 	return append([]StarTransaction(nil), f.rows[:limit]...), nil
 }
 
+// TestPaymentReviewIngestStarsActorTrimmed pins the CLI actor normalization
+// (4.15 T4 fix round 1): a padded --actor is stored trimmed on every row the
+// ingest writes — the fact's event row AND the ingress audit — so the two
+// rows can never disagree about the operator identity.
+func TestPaymentReviewIngestStarsActorTrimmed(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "actor-trim.db")
+	db, _, orderID, _ := seedIngressCLIOrder(t, dbPath, 100)
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	transactionID := "provider-capture-actor-trim"
+	client := &ingressStarsClient{rows: []StarTransaction{{
+		ID: transactionID, Date: ingressProviderUnix, Amount: 100,
+		Source: invoiceParty(strconv.FormatInt(orderID, 10), 42),
+	}}}
+	envPath := writeIngressCLIEnv(t, dir, dbPath)
+	args := []string{
+		"ingest-stars", "--kind", "capture", "--transaction", transactionID,
+		"--order", strconv.FormatInt(orderID, 10), "--actor", " operator ", "--reason", "provider-only capture",
+		"--apply", "--confirm-order", strconv.FormatInt(orderID, 10),
+	}
+	out, code := runIngressCLI(t, envPath, dir, client, args)
+	if code != 1 || !strings.Contains(out, "Provider ingress quarantined") {
+		t.Fatalf("apply code=%d output=%q", code, out)
+	}
+	assertIngressCLISecretsRedacted(t, out, transactionID, testToken)
+
+	checkDB, err := storage.OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var eventActor, auditActor string
+	if err := checkDB.Conn().QueryRow(`SELECT COALESCE(actor, '') FROM payment_events
+		WHERE order_id=? AND event_kind='captured'`, orderID).Scan(&eventActor); err != nil {
+		checkDB.Close()
+		t.Fatal(err)
+	}
+	if err := checkDB.Conn().QueryRow(`SELECT COALESCE(actor, '') FROM payment_ingress_audits
+		WHERE order_id=? AND event_kind='captured'`, orderID).Scan(&auditActor); err != nil {
+		checkDB.Close()
+		t.Fatal(err)
+	}
+	_ = checkDB.Close()
+	if eventActor != "operator" {
+		t.Fatalf("captured event actor = %q, want trimmed operator", eventActor)
+	}
+	if auditActor != "operator" {
+		t.Fatalf("ingress audit actor = %q, want trimmed operator", auditActor)
+	}
+}
+
 func TestPaymentReviewIngestStarsCapturePreviewApplyGateAndExactReplay(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "capture.db")
@@ -167,10 +220,21 @@ func TestPaymentReviewIngestStarsRefundPreviewConfirmationApplyAndGreenReconcile
 		checkDB.Close()
 		t.Fatal(err)
 	}
+	// 4.15 T4: the CLI-built Refund carries --actor, so the refunded event row
+	// records the operator identity next to the --actor-named ingress audit.
+	var refundEventActor string
+	if err := checkDB.Conn().QueryRow(`SELECT COALESCE(actor, '') FROM payment_events
+		WHERE order_id=? AND event_kind='refunded'`, orderID).Scan(&refundEventActor); err != nil {
+		checkDB.Close()
+		t.Fatal(err)
+	}
 	_ = checkDB.Close()
 	wantRefundTime := time.Unix(ingressProviderUnix+60, 0).UTC()
 	if refundPayer != 42 || !refundOccurred.Equal(wantRefundTime) {
 		t.Fatalf("refund payer_id=%d occurred_at=%s", refundPayer, refundOccurred)
+	}
+	if refundEventActor != "operator:test" {
+		t.Fatalf("refund event actor = %q, want operator:test (--actor)", refundEventActor)
 	}
 
 	var reconcileOut bytes.Buffer
@@ -201,6 +265,16 @@ func verifyIngressCaptureEvidence(t *testing.T, dbPath string, orderID, payerID 
 	}
 	if storedPayer != payerID || !storedOccurred.Equal(occurredAt) {
 		t.Fatalf("payer_id=%d occurred_at=%s", storedPayer, storedOccurred)
+	}
+	// 4.15 T4: the CLI-built PaymentFact carries --actor, so the quarantined
+	// captured event row records the operator identity.
+	var eventActor string
+	if err := db.Conn().QueryRow(`SELECT COALESCE(actor, '') FROM payment_events
+		WHERE order_id=? AND event_kind='captured'`, orderID).Scan(&eventActor); err != nil {
+		t.Fatal(err)
+	}
+	if eventActor != "operator:test" {
+		t.Fatalf("captured event actor = %q, want operator:test (--actor)", eventActor)
 	}
 }
 

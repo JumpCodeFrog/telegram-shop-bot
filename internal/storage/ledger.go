@@ -213,6 +213,14 @@ func (s *SQLPaymentLedgerStore) recordRefundAnomaly(ctx context.Context, refund 
 	if strings.TrimSpace(refund.PaymentExternalID) == "" {
 		rawPayload += ";missing_payment_external_id"
 	}
+	// Durable actor (4.15 T4 fix): the quarantined refund keeps its ingress
+	// identity — the fact's actor first, the audit's as the fallback for
+	// unaudited RecordRefund callers. Actor is not part of the canonical
+	// fingerprint, so retry identity and validation are unchanged.
+	actor := refund.Actor
+	if actor == "" && audit != nil {
+		actor = audit.Actor
+	}
 	return (&SQLOrderStore{db: s.db}).recordPaymentAnomaly(ctx, PaymentAnomaly{
 		ProposedOrderID:   refund.OrderID,
 		Provider:          provider,
@@ -227,6 +235,7 @@ func (s *SQLPaymentLedgerStore) recordRefundAnomaly(ctx context.Context, refund 
 		RawPayload:        strings.TrimPrefix(rawPayload, ";"),
 		Reason:            reason,
 		OccurredAt:        refund.OccurredAt,
+		Actor:             actor,
 	}, audit)
 }
 

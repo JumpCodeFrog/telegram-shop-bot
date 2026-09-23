@@ -390,6 +390,17 @@ func assertProviderIngressSettledFact(t *testing.T, dbPath string, orderID, prod
 	if wantAttempts == 0 {
 		return
 	}
+	// 4.15 T4: the CLI-built fact carries --actor, so the settled captured
+	// event row records the operator identity even though this settle leg
+	// (UpdateOrderStatusWithPaymentFact) writes no ingress audit row.
+	var eventActor string
+	if err := db.Conn().QueryRow(`SELECT COALESCE(actor, '') FROM payment_events
+		WHERE order_id=? AND event_kind='captured'`, orderID).Scan(&eventActor); err != nil {
+		t.Fatal(err)
+	}
+	if eventActor != "operator:test" {
+		t.Fatalf("captured event actor = %q, want operator:test (--actor)", eventActor)
+	}
 	var payerID, amount int64
 	var status, currency, paymentID string
 	var scale int
