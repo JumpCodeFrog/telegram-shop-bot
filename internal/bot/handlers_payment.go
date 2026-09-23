@@ -624,7 +624,7 @@ func (b *Bot) processSuccessfulPayment(ctx context.Context, msg *tgbotapi.Messag
 		}
 		// Settlement attribution (docs/payment-operations.md §12): the renewal
 		// arrives through the same Telegram successful_payment ingress as the
-		// one-time settle — log-level actor, no durable actor row.
+		// one-time settle — mirrored durably in payment_events.actor (4.15).
 		b.loggerFor(ctx).Info("stars subscription renewal settled",
 			"order_id", orderID, "payment_id", sp.TelegramPaymentChargeID, "actor", "webhook:stars")
 		return nil
@@ -665,8 +665,8 @@ func (b *Bot) processSuccessfulPayment(ctx context.Context, msg *tgbotapi.Messag
 		b.metrics.SuccessfulPayments.WithLabelValues("stars").Inc()
 	}
 	// Settlement attribution (docs/payment-operations.md §12): the Telegram
-	// successful_payment update is the authority for this settle — log-level
-	// actor only, no durable actor row exists for webhook settles.
+	// successful_payment update is the authority for this settle — the
+	// log-level actor is mirrored durably in payment_events.actor (4.15).
 	b.loggerFor(ctx).Info("stars payment settled",
 		"order_id", orderID, "payment_id", sp.TelegramPaymentChargeID, "actor", "webhook:stars")
 

@@ -222,8 +222,9 @@ func (w *CryptoBotPollingWorker) processPaidInvoices(ctx context.Context, invoic
 			continue
 		}
 		// Durable actor (4.15): the poller is the settle transport for this
-		// receipt — the same PendingInvoice.PaymentReceipt() builder serves the
-		// crypto webhook too, so the actor is assigned per transport here.
+		// receipt — the worker stamps the actor after the shared
+		// PendingInvoice.PaymentReceipt() builder; the crypto webhook builds
+		// its receipt inline and stamps `webhook:crypto` itself.
 		receipt.Actor = "worker:crypto"
 		outcome, err := w.orders.ConfirmPaymentReceipt(ctx, receipt)
 		if err != nil {
@@ -241,7 +242,7 @@ func (w *CryptoBotPollingWorker) processPaidInvoices(ctx context.Context, invoic
 			continue
 		}
 		// Settlement attribution (docs/payment-operations.md §12): the poller
-		// is the acting settler — log-level actor, no durable actor row.
+		// is the acting settler — mirrored durably in payment_events.actor (4.15).
 		slog.Info("CryptoBot polling: order marked paid",
 			"order_id", inv.OrderID, "invoice_id", inv.InvoiceID, "actor", "worker:crypto")
 		if w.notify != nil {

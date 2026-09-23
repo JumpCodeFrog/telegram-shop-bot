@@ -127,8 +127,8 @@ func (b *Bot) CryptoBotWebhookHandler() http.HandlerFunc {
 			b.metrics.SuccessfulPayments.WithLabelValues("crypto").Inc()
 		}
 		// Settlement attribution (docs/payment-operations.md §12): the signed
-		// provider callback is the authority for this settle — log-level actor
-		// only, no durable actor row exists for webhook settles.
+		// provider callback is the authority for this settle — the log-level
+		// actor is mirrored durably in payment_events.actor (4.15).
 		b.logger.Info("cryptobot webhook settled",
 			"order_id", payload.OrderID, "payment_id", payload.InvoiceID, "actor", "webhook:crypto")
 
