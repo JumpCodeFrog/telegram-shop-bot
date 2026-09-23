@@ -54,6 +54,12 @@ or crypto. Either attach an authenticated provider fact before resolving the
 provider-specific case, or explicitly cancel the unprovable import as shown
 below. Neither path can manufacture settled revenue.
 
+Rendering note: `payment-review list` sanitizes reason codes for parseable
+key=value output (`=` becomes `_` via `safeReviewCode`); the bot's `/payreview`
+card shows the raw reason (e.g. `refund_ledger_failure:order=123`). Same fact,
+two renderings — when correlating a bot card with CLI output, read `_` in the
+CLI as `=`.
+
 ## 3. Recover a provider-only Stars row
 
 Use the exact transaction ID from the trusted Telegram operator interface. The
@@ -288,7 +294,8 @@ anomaly, no event, no order change.
 ### What quarantined Stripe facts look like
 
 Quarantined facts are `payment_anomalies` rows with provider `stripe` and the
-order in `needs_review`:
+order in `needs_review` (the digest-only reason carries no order identity — see
+its sha256 note):
 
 | Reason | Meaning |
 |---|---|
@@ -499,7 +506,8 @@ them and settles and records nothing.
 ### What quarantined NOWPayments facts look like
 
 Quarantined facts are `payment_anomalies` rows with provider `nowpayments`
-and the order in `needs_review`:
+and the order in `needs_review` (the digest-only reason carries no order
+identity — see its sha256 note):
 
 | Reason | Meaning |
 |---|---|
