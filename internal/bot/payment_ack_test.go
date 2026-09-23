@@ -426,13 +426,20 @@ func TestCryptoWebhookSignedGarbageBodyQuarantineWritesDurableActor(t *testing.T
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("garbage status = %d, want 200 so CryptoBot stops retrying (%s)", recorder.Code, recorder.Body.String())
 	}
-	var reason, actor string
-	if err := e.db.Conn().QueryRow(`SELECT reason, COALESCE(actor, '') FROM payment_anomalies
-		WHERE provider='crypto'`).Scan(&reason, &actor); err != nil {
+	var count int
+	var reason, rawPayload, externalID, actor string
+	if err := e.db.Conn().QueryRow(`SELECT COUNT(*), reason, raw_payload, external_id, COALESCE(actor, '')
+		FROM payment_anomalies WHERE provider='crypto'`).Scan(&count, &reason, &rawPayload, &externalID, &actor); err != nil {
 		t.Fatal(err)
 	}
-	if reason != "webhook_parse_failure" {
-		t.Fatalf("reason = %q, want webhook_parse_failure", reason)
+	if count != 1 || reason != "webhook_parse_failure" {
+		t.Fatalf("anomaly count=%d reason=%q, want 1 / webhook_parse_failure", count, reason)
+	}
+	if !strings.HasPrefix(rawPayload, "sha256:") || strings.Contains(rawPayload, "not json") {
+		t.Fatalf("raw_payload was not safely digested: %q", rawPayload)
+	}
+	if externalID != "" {
+		t.Fatalf("external_id = %q, want empty for an unparsable body", externalID)
 	}
 	if actor != "webhook:crypto" {
 		t.Fatalf("actor = %q, want webhook:crypto", actor)

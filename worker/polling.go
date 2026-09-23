@@ -211,6 +211,8 @@ func (w *CryptoBotPollingWorker) processPaidInvoices(ctx context.Context, invoic
 		if receiptErr != nil {
 			anomaly, anomalyErr := inv.PaymentAnomaly("polling_invalid_paid_invoice")
 			if anomalyErr == nil {
+				// Durable actor (4.15): the poller is the transport.
+				anomaly.Actor = "worker:crypto"
 				quarantineErr := w.orders.RecordPaymentAnomaly(ctx, anomaly)
 				if quarantineErr == nil || errors.Is(quarantineErr, storage.ErrPaymentNeedsReview) {
 					slog.Warn("CryptoBot polling: quarantined invalid paid invoice", "order_id", inv.OrderID, "invoice_id", inv.InvoiceID)

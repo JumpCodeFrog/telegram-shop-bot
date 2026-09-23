@@ -159,6 +159,15 @@ func TestPollingRejectsWrongAssetAndAmount(t *testing.T) {
 		conf.anomalies[4].ExternalID != "205" || conf.anomalies[4].AmountMinor != 0 || conf.anomalies[4].RawAmount != "not-a-number" {
 		t.Fatalf("durable anomalies = %+v", conf.anomalies)
 	}
+	// 4.15 durable actor: every polling_invalid_paid_invoice quarantine row
+	// the poller forwards carries its transport identity (persisted as
+	// payment_anomalies.actor downstream).
+	for i, anomaly := range conf.anomalies {
+		if anomaly.Actor != "worker:crypto" {
+			t.Fatalf("anomaly[%d].Actor = %q, want worker:crypto (all %+v)",
+				i, anomaly.Actor, conf.anomalies)
+		}
+	}
 }
 
 func TestPollingAcknowledgesResolvedMalformedInvoiceReplay(t *testing.T) {

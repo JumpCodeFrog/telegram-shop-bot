@@ -824,7 +824,7 @@ depends on the path:
 
 For webhook and worker settlements the provider fact itself is the authority —
 a verified/refetched provider statement (or an on-chain transfer) caused the
-settle, not a person — so attribution is log-level: the settlement-success
+settle, not a person — so attribution was log-level: the settlement-success
 line carries a structured `actor` field. These paths **had no durable actor
 row**: the immutable ledger tables carried no actor column, and adding one
 was assessed as disproportionate for the low operator impact — it was a
