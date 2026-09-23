@@ -859,14 +859,24 @@ func TestE2E_SubscriptionLifecycle(t *testing.T) {
 	if got := e.qInt(`SELECT COUNT(*) FROM payment_attempts WHERE external_id='ch-sub-2' AND status='succeeded'`); got != 1 {
 		t.Fatalf("renewal attempt rows = %d, want 1 succeeded ch-sub-2", got)
 	}
-	// 4.15 durable actor: the renewal capture row (captured/settled, ch-sub-2)
-	// carries the same webhook:stars ingress identity the settle log has — the
-	// receipt → paymentFactFromReceipt → recordSubscriptionRenewalOnce flow
-	// preserves it.
-	if got := e.qStr(`SELECT COALESCE(actor, '') FROM payment_events
-		WHERE provider = 'stars' AND external_id = 'ch-sub-2'
-		  AND event_kind = 'captured' AND disposition = 'settled'`); got != "webhook:stars" {
-		t.Fatalf("renewal capture actor = %q, want webhook:stars", got)
+	// 4.15 durable actor + full row shape: the renewal capture row
+	// (captured/settled, XTR, the order's stars price, ch-sub-2) carries the
+	// same webhook:stars ingress identity the settle log has — the receipt →
+	// paymentFactFromReceipt → recordSubscriptionRenewalOnce flow preserves
+	// it (payment_recording.go:382-388 writes every column pinned here).
+	starsPrice := e.qInt(`SELECT total_stars FROM orders WHERE id = ?`, orderID)
+	var renewActor, renewKind, renewDisposition, renewCurrency, renewExternalID string
+	var renewAmount int64
+	if err := e.db.Conn().QueryRow(`SELECT COALESCE(actor, ''), event_kind, disposition, currency, external_id, amount_minor
+		FROM payment_events
+		WHERE provider = 'stars' AND external_id = 'ch-sub-2' AND event_kind = 'captured'`).Scan(
+		&renewActor, &renewKind, &renewDisposition, &renewCurrency, &renewExternalID, &renewAmount); err != nil {
+		t.Fatalf("renewal capture row: %v", err)
+	}
+	if renewActor != "webhook:stars" || renewKind != "captured" || renewDisposition != "settled" ||
+		renewCurrency != "XTR" || renewExternalID != "ch-sub-2" || renewAmount != starsPrice {
+		t.Fatalf("renewal capture row = actor %q, kind %q, disposition %q, currency %q, external %q, amount %d; want webhook:stars, captured, settled, XTR, ch-sub-2, %d",
+			renewActor, renewKind, renewDisposition, renewCurrency, renewExternalID, renewAmount, starsPrice)
 	}
 	subsAfter, err := e.bot.subs.ListActiveByUser(t.Context(), buyer)
 	if err != nil || len(subsAfter) != 1 || !subsAfter[0].ExpiresAt.After(subs[0].ExpiresAt) {

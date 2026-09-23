@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"shop_bot/internal/storage"
@@ -137,9 +138,9 @@ func TestNowpaymentsCreateInvoiceAPIError(t *testing.T) {
 }
 
 func TestNowpaymentsCreateInvoiceRejectsInvalidInput(t *testing.T) {
-	called := false
+	var called atomic.Bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		called = true
+		called.Store(true)
 	}))
 	defer srv.Close()
 
@@ -162,7 +163,7 @@ func TestNowpaymentsCreateInvoiceRejectsInvalidInput(t *testing.T) {
 			}
 		})
 	}
-	if called {
+	if called.Load() {
 		t.Fatal("CreateInvoice made an HTTP call for invalid input")
 	}
 }
