@@ -46,7 +46,8 @@ func (s *SQLPaymentLedgerStore) ListPaymentReviews(ctx context.Context, provider
 	}
 
 	rows, err = s.db.QueryContext(ctx, `
-		SELECT a.id, a.proposed_order_id, COALESCE(o.payment_state, ''), a.reason, COALESCE(a.actor, '')
+		SELECT a.id, a.proposed_order_id, COALESCE(o.payment_state, ''), a.reason, COALESCE(a.actor, ''),
+		       a.amount_minor, a.external_id
 		FROM payment_anomalies a
 		LEFT JOIN orders o ON o.id = a.proposed_order_id
 		LEFT JOIN payment_resolutions r
@@ -57,14 +58,15 @@ func (s *SQLPaymentLedgerStore) ListPaymentReviews(ctx context.Context, provider
 		return nil, fmt.Errorf("ledger: list review anomalies: %w", err)
 	}
 	for rows.Next() {
-		var id, orderID int64
-		var state, reason, actor string
-		if err := rows.Scan(&id, &orderID, &state, &reason, &actor); err != nil {
+		var id, orderID, amount int64
+		var state, reason, actor, externalID string
+		if err := rows.Scan(&id, &orderID, &state, &reason, &actor, &amount, &externalID); err != nil {
 			rows.Close()
 			return nil, fmt.Errorf("ledger: scan review anomaly: %w", err)
 		}
 		target := PaymentReviewTarget{
 			Kind: PaymentReviewTargetAnomaly, ID: id, ReasonCode: reason, Actor: actor,
+			AmountMinor: amount, ExternalID: externalID,
 		}
 		if state == "" {
 			// Detached facts have no real order identity by which they can safely be

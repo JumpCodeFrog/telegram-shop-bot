@@ -246,7 +246,8 @@ func (b *Bot) findReviewCase(ctx context.Context, ref payReviewRef) (storage.Pay
 // the actions that can actually pass against the storage decision gates
 // (payment_resolutions.go): digest-only facts fail every decision, path-5
 // refund orphans pass Refund pre-recovery and Dismiss post-recovery, other
-// capture orphans pass Settle (compensated). Attached cases keep the three
+// capture orphans pass Settle (compensated) only when fully shaped (§6.17).
+// Attached cases keep the three
 // candidate projections — the preview validates them against ledger evidence.
 // This is a UX filter, never a gate: storage remains the final validator, and
 // a filtered-out action that storage would accept is a bug, not a policy.
@@ -268,7 +269,16 @@ func payReviewActions(item storage.PaymentReviewCase) []string {
 			// digests plus the Stars undecodable-update digest.
 			return nil
 		default:
-			return []string{payReviewActionSettle}
+			// Shape-keyed gate (§6.17, R17 CORRECTED): mirrors the in-row
+			// shape conjuncts of the storage settle precondition
+			// (explicitNoAttemptAnomalyDecision). Exact on production-reachable
+			// rows; the unmirrorable attempt-collision conjunct stays
+			// fail-closed in storage. Fail-closed UX: ambiguous rows lose the
+			// button, CLI stays available.
+			if item.Targets[0].AmountMinor > 0 && item.Targets[0].ExternalID != "" {
+				return []string{payReviewActionSettle}
+			}
+			return nil
 		}
 	}
 	return []string{payReviewActionSettle, payReviewActionRefund, payReviewActionDismiss}
