@@ -4,7 +4,7 @@
 
 Ты — инженер-исполнитель в репозитории `/home/thom/telegram-shop-bot` (Go, module
 `shop_bot`, Telegram-магазин). Проект в отличном состоянии: main локально опережает
-origin на ~134 коммита, **push НЕ выполнен — не пушь и не мержь во внешние remote без
+origin на ~145 коммитов, **push НЕ выполнен — не пушь и не мержь во внешние remote без
 моего явного согласия** (локальные merge --no-ff в main — можно после зелёных финальных
 ревью, это сложившаяся конвенция).
 
@@ -15,12 +15,10 @@ origin на ~134 коммита, **push НЕ выполнен — не пушь 
    **открытый бэклог (§6)**, описание SDD-процесса (§7) с уроками, реестр поставок (§8)
    и **rulings digest закрытых планов (§9)** — ledger'ы двух последних планов удалены,
    §9 служит их durable-рекордом.
-2. `docs/superpowers/specs/2026-09-22-update-ctx-trace-design.md` — design-spec 4.14
-   (IMPLEMENTED 22.09.2026). Для 4.15 важна его §9 (sketch + open questions).
-3. `roadmap.md` — §4 бэклог (4.3 отложен решением; 4.14 ✅; 4.15 — следующее, свой
-   brainstorm), §5 инварианты (нарушать нельзя).
-4. `CHANGELOG.md` `[Unreleased]` — что уже сделано (последние батчи: Money-followups,
-   Polish follow-ups, Update ctx + trace 4.14).
+2. `roadmap.md` — §4 бэклог: **ПОЛНОСТЬЮ ЗАКРЫТ** (4.14/4.15 ✅ 22–23.09; 4.3 отложен
+   решением), §5 инварианты (нарушать нельзя).
+3. `CHANGELOG.md` `[Unreleased]` — что уже сделано (последние батчи: Money-followups,
+   Polish follow-ups, Update ctx + trace 4.14, Durable actor 4.15).
 5. `.superpowers/sdd/*/progress.md` — ledger'ы СТАРЫХ планов (git-ignored, на диске;
    money-/polish-followups удалены после мержа — их рекорд в git-истории и HANDOFF §9).
 
@@ -67,12 +65,11 @@ origin на ~134 коммита, **push НЕ выполнен — не пушь 
 
 ## Задачи
 
-1. **Roadmap 4.15** (durable actor column в ledger) — начни с brainstorming (spec §9
-   sketch + open questions: какая таблица, explicit-param vs ctx-extraction, surfaces
-   /payreview+CLI, NULL-vs-backfill). 4.14 ✅ даёт ctx/trace на всех settle-сайтах.
-2. Мелочи HANDOFF §6: 12 (отложен), 16, 17, 18, 19, **20 (fleet-wide `loggerFor`-sweep +
-   auth-upsert Warn — естественный next-after-4.14, поверхностный)** — батчем
-   «micro-followups» в паузах или по запросу. 4.3 — только если явно попрошу.
+1. **Micro-followups батч** (HANDOFF §6: 16, 17, 18, 19, 20, 21; 12 отложен до роста
+   объёмов): §6.20 (fleet-wide `loggerFor`-sweep + auth-upsert Warn) — самый
+   содержательный; 16–19 косметика/тест-харденинг; 21 — migration upgrade-пин.
+   Один план «micro-followups», SDD.
+2. 4.3 — только если явно попрошу. Иначе — предложи свой порядок с обоснованием.
 
 Перед push (когда разрешю): `make doctor` + один live-test платёж NOWPayments (обязателен —
 канонизация IPN-подписи) + регистрация вебхуков в кабинетах провайдеров (HANDOFF §5).

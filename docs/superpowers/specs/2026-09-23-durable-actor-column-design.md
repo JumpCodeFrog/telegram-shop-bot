@@ -1,8 +1,8 @@
 # Design Spec — Roadmap 4.15: durable actor column in payment ledger tables
 
-> **Status:** design COMPLETE 23.09.2026 (autonomous session; owner's standing
-> directive «фулл автономно, rulings-not-stalls» covers the review gates —
-> all decisions recorded as rulings D1–D5). Next step: `superpowers:writing-plans`.
+> **Status:** IMPLEMENTED 23.09.2026 — merge `dcbbdf6` (branch `feat/durable-actor-column`,
+> 6 tasks + final-review fix wave; rulings digest — HANDOFF §9). Autonomous session
+> (owner's standing directive covered the review gates).
 > **Author:** controller session 23.09.2026 (after 4.14 merge `c67e66e`).
 > **Depends on:** 4.14 ✅ (ctx/trace plumbing — NOT consumed directly; actor flows
 > explicitly, see D2-rationale). Branch name suggestion: `feat/durable-actor-column`.

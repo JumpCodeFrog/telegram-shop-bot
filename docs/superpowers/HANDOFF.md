@@ -5,12 +5,11 @@
 
 ## 1. Состояние
 
-- **main = `c67e66e`**, на 133 коммита впереди `origin/main` (мерж 4.14 update-ctx-trace).
+- **main = `dcbbdf6`**, на 144 коммита впереди `origin/main` (мерж 4.15 durable-actor-column).
   **НЕ запушено** — push только с явного согласия владельца. Все фичевые ветки сохранены.
-- **Roadmap 4.14 ЗАКРЫТ 22.09.2026** (merge `c67e66e`): per-update ctx + trace через весь
-  chain — spec `docs/superpowers/specs/2026-09-22-update-ctx-trace-design.md` (IMPLEMENTED),
-  план `docs/superpowers/plans/2026-09-22-update-ctx-trace.md`. Следующее большое дело:
-  **roadmap 4.15** (durable actor column — sketch в spec §9, свой brainstorm).
+- **Roadmap 4.15 ЗАКРЫТ 23.09.2026** (merge `dcbbdf6`): durable actor в `payment_events`/
+  `payment_anomalies` (миграция 023), spec IMPLEMENTED. **Roadmap §4 полностью закрыт**
+  (4.3 отложен решением). Остаток работы: §6 micro-followups (12, 16–20 + 21).
 - Ворота на HEAD: `go build` + `go vet` + `gofmt -l internal/ cmd/ worker/` (пусто) +
   `go test ./...` — зелёные; `-race` на money-пакетах зелёный.
 - Роадмап (§4) закрыт полностью, кроме отложенного решением 4.3 и остатков 4.14/4.15.
@@ -76,10 +75,8 @@ Stripe, YooKassa, баланса; crypto/ton/nowpayments — вручную в �
 ## 6. Открытый бэклог (консолидация из всех ledger'ов)
 
 **Roadmap §4:** 4.3 Coinbase/BTCPay (отложено решением — NOWPayments покрывает спрос);
-4.14 ✅ ЗАКРЫТ 22.09.2026 (merge `c67e66e` — per-update ctx + trace, spec IMPLEMENTED);
-4.15 durable actor column в ledger (сейчас webhook/worker settles атрибутированы
-только в логах — §12 payment-operations; sketch — spec §9, зависит от 4.14 ✅, свой
-brainstorm перед планом).
+4.14 ✅ (`c67e66e`), 4.15 ✅ (`dcbbdf6`, durable actor, миграция 023) — **§4 закрыт
+полностью, кроме отложенного решением 4.3**.
 
 **Мелкие FOLLOW-UP (без дома, все — polish/покрытие):**
 1. NOWPayments-каноникаizer: пин свойства no-HTML-escape (тест с `<>&` в теле) —
@@ -152,6 +149,8 @@ brainstorm перед планом).
     ~200 handler-логов на trace_id-bound логгер (сейчас — только Logging/Recover +
     13 payment-critical); в том же заходе добавить Warn-строку на `middleware/auth.go`
     Upsert-swallow (финал-ревью 4.14, triage #1). Поверхностно, логи только.
+21. Upgrade-пин для миграций: 022→023 (и будущих) — есть только fresh-DB schema-тест;
+    harness-прецедент в `migration_020_test.go` (4.15 финал, M-3). Косметика надёжности.
 
 ## 7. Процесс (как велась работа — воспроизводим)
 
@@ -203,7 +202,7 @@ scoped re-review и низко-рисковые ревью — `alibaba-cn/qwen3
 - Ревьюер-модель: «docs-only» НЕ автоматически flash — оператор-facing money-доки
   (CHANGELOG/§5/§11/§12) ревьюит glm-5.3.
 
-## 8. Deliverables-реестр (12 планов)
+## 8. Deliverables-реестр (13 планов)
 
 | План | Ветка | Merge | Коммитов | Fix-раундов |
 |---|---|---|---|---|
@@ -219,6 +218,7 @@ scoped re-review и низко-рисковые ревью — `alibaba-cn/qwen3
 | Money follow-ups (§6.13/6.1/6.7/6.6) | chore/money-followups | `4dd7842` | 8 | 2 (T2 comment direction; финал: CLI balance-бакет + docs-truthfulness) |
 | Polish follow-ups (§6.2/3/4/5/8/9/10/11/14/15) | chore/polish-followups | `5420f3b` | 15 | 3 (T5 P8-таксономия; T8(1) elevated digest-set; финал I-1 §5 recast) + T6 P7 re-dispatch (pre-commit BLOCKED) |
 | Update-ctx + trace (4.14) | feat/update-ctx-trace | `c67e66e` | 12 | 2 (T9 grep-recipe elevated; финал I-1 main.go shutdown-комментарий) |
+| Durable actor column (4.15) | feat/durable-actor-column | `dcbbdf6` | 8 | 3 (T3 webhook digest-продюсеры; T4 recordRefundAnomaly + trim; T6 stale-комментарии + changelog-tension) + финал I-1 (worker:crypto quarantine stamp) |
 
 Плюс: roadmap rewrite (`f6fb155`, `46ab401`, обновления в задачах) и controller-janitorial
 коммиты (gofmt `36a0c84`, coupling-комментарии `9697320`).
@@ -297,3 +297,30 @@ scoped re-review и низко-рисковые ревью — `alibaba-cn/qwen3
   plan-gap, минимальная правка). Оба — plan-дополнения controller-approved.
 - Ревьюеры: T1–T4/T6/T8/T9 glm-5.3, T5/T7/re-reviews qwen3.8-flash, финал qwen3.8-max-0902.
   -race гейты: T1/T4/T6/T7 зелёные (включая double-tap refundMu pin).
+
+**Durable-actor-column / 4.15 (merge `dcbbdf6`, финал «With fixes» → fix wave → re-review ALL ADDRESSED):**
+- Design rulings D1–D5 — в spec (IMPLEMENTED): обе таблицы (events+anomalies), явный
+  fact-envelope flow (НЕ ctx-extraction), литералы = 4.13-таксономия, empty→NULL
+  (NULLIF, атрибуция никогда не гейтит деньги), no trace_id-колонки, NULL-render
+  byte-identical.
+- **R1**: spec-инвентарь «5 INSERT sites» исправлен на 6 (main capture = `observePayment`,
+  не `payment_recording.go:383` — то renewal); UPDATE-disposition путь actor не трогает.
+- **R2**: actor НЕ входит в anomaly fingerprint (ingress-metadata, не fact identity;
+  same-fact-different-ingress дедупится по факту, first writer's actor wins).
+- **R3**: `PaymentEvent` model БЕЗ Actor (нет consumer; только `PaymentReviewTarget.Actor`).
+- **R4** (T1, reviewer-verified): identity_conflict synthetic row (`payment_recording.go:596`)
+  достижим только с fact==nil → NULL actor — единственно честное значение (не gap).
+- **R5** (T3 fix round, plan-gap): provider-webhook digest/invalid-receipt аномалии
+  (4 литерала + 7 adapter-legs) стемпятся в webhook.go по месту (адаптеры
+  transport-neutral, НЕ тронуты). Discovery-канал — concern эскалация имплементера.
+- **R6** (T4 fix round, plan-gap): `recordRefundAnomaly` actor = refund.Actor → fallback
+  audit.Actor; CLI `--actor` TrimSpace для паритета fact/audit.
+- **R7** (T6 elevations ×4): 6 stale-комментариев «no durable actor row» переписаны;
+  CHANGELOG 4.13-буллет помечен superseded; balance-scope уточнён (captures NULL,
+  refunds admin:<tgID>); §12 «is log-level»→«was».
+- **Финал I-1**: crypto-worker `polling_invalid_paid_invoice` quarantine без actor →
+  stamp `worker:crypto` + пин (dcfc08d). Deferred minors: все PARKED с причинами
+  (см. реестр ниже; M-3 upgrade-пин → §6.21).
+- Урок процесса (повторился 2×: T3, T4): producer-инвентарь в спеке неполон →
+  concern-эскалации имплементеров ловят gap'ы до мержа. Правило «STOP при расхождении
+  с инвентарём» в диспатчах работает.
