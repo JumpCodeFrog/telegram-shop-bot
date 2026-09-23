@@ -327,10 +327,10 @@ func (s *SQLPaymentLedgerStore) recordRefundOnce(ctx context.Context, refund Ref
 	}
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO payment_events
-		 (order_id, provider, event_kind, external_id, amount_minor, currency, scale, disposition, occurred_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, COALESCE(NULLIF(?, ''), CURRENT_TIMESTAMP))`,
+		 (order_id, provider, event_kind, external_id, amount_minor, currency, scale, disposition, occurred_at, actor)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, COALESCE(NULLIF(?, ''), CURRENT_TIMESTAMP), NULLIF(?, ''))`,
 		refund.OrderID, provider, PaymentEventRefunded, refund.ExternalID,
-		refund.AmountMinor, refund.Currency, refund.Scale, disposition, occurredAt); err != nil {
+		refund.AmountMinor, refund.Currency, refund.Scale, disposition, occurredAt, refund.Actor); err != nil {
 		return fmt.Errorf("ledger: append refund event: %w", err)
 	}
 	var orderCaptured, orderRefunded int64

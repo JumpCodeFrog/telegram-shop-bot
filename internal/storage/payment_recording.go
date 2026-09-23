@@ -382,10 +382,10 @@ func (s *SQLOrderStore) recordSubscriptionRenewalOnce(ctx context.Context, id in
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO payment_events
 		 (order_id, payment_attempt_id, provider, event_kind, external_id,
-		  amount_minor, currency, scale, disposition, occurred_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'settled', COALESCE(?, CURRENT_TIMESTAMP))`,
+		  amount_minor, currency, scale, disposition, occurred_at, actor)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'settled', COALESCE(?, CURRENT_TIMESTAMP), NULLIF(?, ''))`,
 		order.ID, attemptID, provider, PaymentEventCaptured, externalID,
-		amount, currency, scale, occurredAt); err != nil {
+		amount, currency, scale, occurredAt, fact.Actor); err != nil {
 		return fmt.Errorf("order store: append subscription renewal capture: %w", err)
 	}
 	nextState := PaymentStateSettled
@@ -459,6 +459,10 @@ func (s *SQLOrderStore) recordUnexpectedPayment(ctx context.Context, order Order
 	}
 	if fact != nil {
 		amount, currency, scale = fact.AmountMinor, fact.Currency, fact.Scale
+	}
+	var actor string
+	if fact != nil {
+		actor = fact.Actor
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -567,10 +571,10 @@ func (s *SQLOrderStore) recordUnexpectedPayment(ctx context.Context, order Order
 		result, insertErr := tx.ExecContext(ctx,
 			`INSERT OR IGNORE INTO payment_events
 			 (order_id, payment_attempt_id, provider, event_kind, external_id,
-			  amount_minor, currency, scale, disposition, occurred_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'needs_review', COALESCE(?, CURRENT_TIMESTAMP))`,
+			  amount_minor, currency, scale, disposition, occurred_at, actor)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'needs_review', COALESCE(?, CURRENT_TIMESTAMP), NULLIF(?, ''))`,
 			order.ID, attemptID, provider, PaymentEventCaptured, externalID,
-			amount, currency, scale, occurredAt)
+			amount, currency, scale, occurredAt, actor)
 		if insertErr != nil {
 			return fmt.Errorf("order store: record unexpected capture: %w", insertErr)
 		}
@@ -594,9 +598,9 @@ func (s *SQLOrderStore) recordUnexpectedPayment(ctx context.Context, order Order
 		identity := fmt.Sprintf("%s:order:%d:%s", externalID, order.ID, reason)
 		result, insertErr := tx.ExecContext(ctx,
 			`INSERT OR IGNORE INTO payment_events
-			 (order_id, provider, event_kind, external_id, amount_minor, currency, scale, disposition)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, 'needs_review')`,
-			order.ID, provider, PaymentEventIdentityConflict, identity, amount, currency, scale)
+			 (order_id, provider, event_kind, external_id, amount_minor, currency, scale, disposition, actor)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, 'needs_review', NULLIF(?, ''))`,
+			order.ID, provider, PaymentEventIdentityConflict, identity, amount, currency, scale, actor)
 		if insertErr != nil {
 			return fmt.Errorf("order store: record unexpected payment: %w", insertErr)
 		}

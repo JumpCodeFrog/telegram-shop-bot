@@ -204,6 +204,8 @@ type PaymentFact struct {
 	Scale                int
 	EntitlementExpiresAt time.Time
 	OccurredAt           time.Time
+	// Actor is the durable ingress identity (4.15); "" stores NULL.
+	Actor string
 }
 
 type PaymentEvent struct {
@@ -239,6 +241,8 @@ type PaymentAnomaly struct {
 	RawPayload        string
 	Reason            string
 	OccurredAt        time.Time
+	// Actor is the durable ingress identity (4.15); "" stores NULL.
+	Actor string
 }
 
 type Refund struct {
@@ -256,6 +260,8 @@ type Refund struct {
 	CompletedAt       sql.NullTime
 	CreatedAt         time.Time
 	OccurredAt        time.Time
+	// Actor is the durable ingress identity (4.15); "" stores NULL.
+	Actor string
 }
 
 const (
@@ -270,6 +276,8 @@ type PaymentReviewTarget struct {
 	Kind       string
 	ID         int64
 	ReasonCode string
+	// Actor is the row's ingress identity ("" when not recorded).
+	Actor string
 }
 
 type PaymentReviewCase struct {

@@ -97,13 +97,17 @@ func observePayment(ctx context.Context, tx *sql.Tx, order Order, provider, exte
 	if err != nil {
 		return 0, fmt.Errorf("order store: payment attempt id: %w", err)
 	}
+	var actor string
+	if supplied != nil {
+		actor = supplied.Actor
+	}
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO payment_events
 		 (order_id, payment_attempt_id, provider, event_kind, external_id,
-		  amount_minor, currency, scale, disposition, occurred_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'observed', COALESCE(?, CURRENT_TIMESTAMP))`,
+		  amount_minor, currency, scale, disposition, occurred_at, actor)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'observed', COALESCE(?, CURRENT_TIMESTAMP), NULLIF(?, ''))`,
 		order.ID, attemptID, provider, PaymentEventCaptured, externalID,
-		amount, currency, scale, occurredAt); err != nil {
+		amount, currency, scale, occurredAt, actor); err != nil {
 		return 0, fmt.Errorf("order store: observe payment event: %w", err)
 	}
 	return attemptID, nil
