@@ -448,6 +448,8 @@ func (s *OrderService) quarantineReceipt(ctx context.Context, receipt PaymentRec
 	if !receipt.SubscriptionExpiresAt.IsZero() {
 		rawPayload = "subscription_expires_at:" + receipt.SubscriptionExpiresAt.UTC().Format(time.RFC3339Nano)
 	}
+	// Durable actor (4.15): the receipt's ingress identity survives the
+	// quarantine (actor is NOT part of the canonical fingerprint).
 	err := recorder.RecordPaymentAnomaly(ctx, storage.PaymentAnomaly{
 		ProposedOrderID: receipt.OrderID,
 		Provider:        receipt.Provider,
@@ -459,6 +461,7 @@ func (s *OrderService) quarantineReceipt(ctx context.Context, receipt PaymentRec
 		RawPayload:      rawPayload,
 		Reason:          reason,
 		OccurredAt:      receipt.OccurredAt,
+		Actor:           receipt.Actor,
 	})
 	if err == nil {
 		return storage.ErrPaymentNeedsReview

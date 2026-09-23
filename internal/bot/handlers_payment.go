@@ -720,6 +720,8 @@ func (b *Bot) recordStarsPaymentAnomaly(ctx context.Context, msg *tgbotapi.Messa
 		amountMinor = 0
 	}
 	payloadDigest := sha256.Sum256([]byte(sp.InvoicePayload))
+	// Durable actor (4.15): the successful_payment ingress that handed us
+	// this message is the transport, mirroring the settle receipt's literal.
 	err := b.order.RecordPaymentAnomaly(ctx, storage.PaymentAnomaly{
 		ProposedOrderID: orderID,
 		Provider:        storage.PaymentMethodStars,
@@ -733,6 +735,7 @@ func (b *Bot) recordStarsPaymentAnomaly(ctx context.Context, msg *tgbotapi.Messa
 		RawPayload:      fmt.Sprintf("invoice_payload_sha256:%x", payloadDigest),
 		Reason:          reason,
 		OccurredAt:      occurredAt,
+		Actor:           "webhook:stars",
 	})
 	if err == nil || errors.Is(err, storage.ErrPaymentNeedsReview) {
 		return nil

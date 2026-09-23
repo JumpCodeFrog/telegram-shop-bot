@@ -466,9 +466,9 @@ func TestYooKassaWebhookGarbageBodyQuarantines(t *testing.T) {
 	}
 
 	var count int
-	var reason, rawPayload, externalID string
-	if err := e.db.Conn().QueryRow(`SELECT COUNT(*), reason, raw_payload, external_id
-		FROM payment_anomalies WHERE provider='yookassa'`).Scan(&count, &reason, &rawPayload, &externalID); err != nil {
+	var reason, rawPayload, externalID, actor string
+	if err := e.db.Conn().QueryRow(`SELECT COUNT(*), reason, raw_payload, external_id, COALESCE(actor, '')
+		FROM payment_anomalies WHERE provider='yookassa'`).Scan(&count, &reason, &rawPayload, &externalID, &actor); err != nil {
 		t.Fatalf("no yookassa anomaly recorded for garbage body: %v", err)
 	}
 	if count != 1 || reason != "webhook_parse_failure" {
@@ -479,6 +479,11 @@ func TestYooKassaWebhookGarbageBodyQuarantines(t *testing.T) {
 	}
 	if externalID != "" {
 		t.Fatalf("external_id = %q, want empty for an unparsable body", externalID)
+	}
+	// 4.15 durable actor: the digest quarantine carries the yookassa
+	// webhook's ingress identity.
+	if actor != "webhook:yookassa" {
+		t.Fatalf("anomaly actor = %q, want webhook:yookassa", actor)
 	}
 	if got := api.count(); got != 0 {
 		t.Fatalf("garbage body triggered %d API calls, want 0", got)
@@ -554,13 +559,19 @@ func TestYooKassaWebhookInvalidReceiptQuarantines(t *testing.T) {
 	}
 	var reason, externalID string
 	var proposed int64
-	if err := e.db.Conn().QueryRow(`SELECT reason, external_id, proposed_order_id FROM payment_anomalies
-		WHERE provider='yookassa'`).Scan(&reason, &externalID, &proposed); err != nil {
+	var actor string
+	if err := e.db.Conn().QueryRow(`SELECT reason, external_id, proposed_order_id, COALESCE(actor, '')
+		FROM payment_anomalies WHERE provider='yookassa'`).Scan(&reason, &externalID, &proposed, &actor); err != nil {
 		t.Fatalf("no yookassa anomaly recorded for the invalid receipt: %v", err)
 	}
 	if reason != "webhook_invalid_receipt" || externalID != "pay_noref" || proposed != 0 {
 		t.Fatalf("anomaly reason=%q external_id=%q proposed_order_id=%d, want webhook_invalid_receipt / pay_noref / 0",
 			reason, externalID, proposed)
+	}
+	// 4.15 durable actor: the invalid-receipt quarantine carries the
+	// yookassa webhook's ingress identity.
+	if actor != "webhook:yookassa" {
+		t.Fatalf("anomaly actor = %q, want webhook:yookassa", actor)
 	}
 	if got := e.qStr(`SELECT status FROM orders WHERE id = ?`, orderID); got != storage.OrderStatusPending {
 		t.Fatalf("order status = %q, want pending (nothing settled)", got)

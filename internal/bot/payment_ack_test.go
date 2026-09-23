@@ -173,6 +173,93 @@ func TestTelegramWebhookUndecodableStarsFieldsAreDurablyAcknowledged(t *testing.
 	}
 }
 
+// TestTelegramWebhookStarsQuarantineWritesDurableActor pins the 4.15 durable
+// actor on the bot-side stars anomaly helper (recordStarsPaymentAnomaly):
+// the invalid-order-payload quarantine row carries actor "webhook:stars" —
+// the same ingress identity the settle receipt already writes.
+func TestTelegramWebhookStarsQuarantineWritesDurableActor(t *testing.T) {
+	e := newE2EEnv(t)
+	e.bot.cfg.TelegramWebhookSecret = testTelegramWebhookSecret
+	body := telegramSuccessfulPaymentBody(15, 6240, "not-an-order", "stars-anomaly-actor-1", 500)
+	request := httptest.NewRequest(http.MethodPost, "/telegram-webhook", strings.NewReader(body))
+	request.Header.Set("X-Telegram-Bot-Api-Secret-Token", testTelegramWebhookSecret)
+	recorder := httptest.NewRecorder()
+	e.bot.TelegramWebhookHandler()(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", recorder.Code, recorder.Body.String())
+	}
+	var actor string
+	err := e.db.Conn().QueryRow(`SELECT COALESCE(actor, '') FROM payment_anomalies
+		WHERE provider = 'stars' AND external_id = 'stars-anomaly-actor-1'`).Scan(&actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if actor != "webhook:stars" {
+		t.Fatalf("actor = %q, want webhook:stars", actor)
+	}
+}
+
+// TestTelegramWebhookUndecodableStarsUpdateWritesDurableActor pins the 4.15
+// durable actor on the decode-digest quarantine
+// (quarantineUndecodableStarsUpdate): the stars_update_decode_failure row
+// carries actor "webhook:stars".
+func TestTelegramWebhookUndecodableStarsUpdateWritesDurableActor(t *testing.T) {
+	e := newE2EEnv(t)
+	e.bot.cfg.TelegramWebhookSecret = testTelegramWebhookSecret
+	body := `{"update_id":16,"message":{"message_id":1,"date":1700000000,` +
+		`"chat":{"id":6241,"type":"private"},"from":{"id":6241,"is_bot":false,"first_name":"U"},` +
+		`"successful_payment":{"currency":"XTR","total_amount":"not-an-integer",` +
+		`"invoice_payload":"opaque-value","telegram_payment_charge_id":"stars-decode-actor-1"}}}`
+	request := httptest.NewRequest(http.MethodPost, "/telegram-webhook", strings.NewReader(body))
+	request.Header.Set("X-Telegram-Bot-Api-Secret-Token", testTelegramWebhookSecret)
+	recorder := httptest.NewRecorder()
+	e.bot.TelegramWebhookHandler()(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", recorder.Code, recorder.Body.String())
+	}
+	var actor string
+	err := e.db.Conn().QueryRow(`SELECT COALESCE(actor, '') FROM payment_anomalies
+		WHERE provider = 'stars' AND reason = 'stars_update_decode_failure'`).Scan(&actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if actor != "webhook:stars" {
+		t.Fatalf("actor = %q, want webhook:stars", actor)
+	}
+}
+
+// TestTelegramWebhookStarsReceiptMismatchQuarantineWritesDurableActor pins
+// the 4.15 durable actor on the shop-layer quarantine (quarantineReceipt): a
+// signed stars receipt that fails validation (wrong amount) is quarantined
+// with the receipt's ingress identity — the actor Task 2 put on the receipt.
+func TestTelegramWebhookStarsReceiptMismatchQuarantineWritesDurableActor(t *testing.T) {
+	e := newE2EEnv(t)
+	e.bot.cfg.TelegramWebhookSecret = testTelegramWebhookSecret
+	const buyer = int64(6242)
+	e.cmd(buyer, "/start", "en")
+	orderID := e.placeOrder(buyer, e.prodReg, "")
+	// Valid order payload, deliberately under the 500-star total: the domain
+	// validation rejects the receipt and quarantineReceipt persists the fact.
+	body := telegramSuccessfulPaymentBody(17, buyer, fmt.Sprint(orderID), "stars-mismatch-actor-1", 400)
+	request := httptest.NewRequest(http.MethodPost, "/telegram-webhook", strings.NewReader(body))
+	request.Header.Set("X-Telegram-Bot-Api-Secret-Token", testTelegramWebhookSecret)
+	recorder := httptest.NewRecorder()
+	e.bot.TelegramWebhookHandler()(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", recorder.Code, recorder.Body.String())
+	}
+	var actor string
+	err := e.db.Conn().QueryRow(`SELECT COALESCE(actor, '') FROM payment_anomalies
+		WHERE provider = 'stars' AND external_id = 'stars-mismatch-actor-1'
+		  AND reason = 'receipt_mismatch'`).Scan(&actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if actor != "webhook:stars" {
+		t.Fatalf("actor = %q, want webhook:stars", actor)
+	}
+}
+
 func TestTelegramWebhookStarsStorageFailureWithholdsAcknowledgement(t *testing.T) {
 	e := newE2EEnv(t)
 	e.bot.cfg.TelegramWebhookSecret = testTelegramWebhookSecret
@@ -316,6 +403,39 @@ func TestCryptoWebhookMissingPaidAtIsQuarantinedNotSettled(t *testing.T) {
 	if got := e.qInt(`SELECT COUNT(*) FROM payment_anomalies
 		WHERE provider='crypto' AND external_id='778' AND reason='webhook_invalid_paid_invoice'`); got != 1 {
 		t.Fatalf("anomaly count = %d, want 1", got)
+	}
+	// 4.15 durable actor: the webhook_invalid_paid_invoice quarantine row
+	// carries the crypto webhook's ingress identity.
+	if got := e.qStr(`SELECT COALESCE(actor, '') FROM payment_anomalies
+		WHERE provider='crypto' AND external_id='778' AND reason='webhook_invalid_paid_invoice'`); got != "webhook:crypto" {
+		t.Fatalf("anomaly actor = %q, want webhook:crypto", got)
+	}
+}
+
+// TestCryptoWebhookSignedGarbageBodyQuarantineWritesDurableActor pins the
+// 4.15 durable actor on the crypto webhook's parse-failure quarantine: a
+// correctly signed but undecodable body produces a webhook_parse_failure
+// anomaly row carrying actor "webhook:crypto".
+func TestCryptoWebhookSignedGarbageBodyQuarantineWritesDurableActor(t *testing.T) {
+	e := newE2EEnv(t)
+	body := "not json at all"
+	request := httptest.NewRequest(http.MethodPost, "/cryptobot-webhook", strings.NewReader(body))
+	request.Header.Set("crypto-pay-api-signature", cryptoSign(body))
+	recorder := httptest.NewRecorder()
+	e.bot.CryptoBotWebhookHandler()(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("garbage status = %d, want 200 so CryptoBot stops retrying (%s)", recorder.Code, recorder.Body.String())
+	}
+	var reason, actor string
+	if err := e.db.Conn().QueryRow(`SELECT reason, COALESCE(actor, '') FROM payment_anomalies
+		WHERE provider='crypto'`).Scan(&reason, &actor); err != nil {
+		t.Fatal(err)
+	}
+	if reason != "webhook_parse_failure" {
+		t.Fatalf("reason = %q, want webhook_parse_failure", reason)
+	}
+	if actor != "webhook:crypto" {
+		t.Fatalf("actor = %q, want webhook:crypto", actor)
 	}
 }
 

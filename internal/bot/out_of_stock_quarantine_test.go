@@ -232,6 +232,12 @@ func TestYooKassaWebhookOutOfStockAfterChargeIsQuarantined(t *testing.T) {
 
 	assertOrderQuarantinedNotPaid(t, e, orderID, e.prodReg)
 	assertAnomalyQuarantine(t, e, orderID, storage.PaymentMethodYooKassa, "pay_oos")
+	// 4.15 durable actor: the out-of-stock anomaly row carries the yookassa
+	// webhook's ingress identity.
+	if got := e.qStr(`SELECT COALESCE(actor, '') FROM payment_anomalies
+		WHERE provider = 'yookassa' AND external_id = 'pay_oos'`); got != "webhook:yookassa" {
+		t.Fatalf("anomaly actor = %q, want webhook:yookassa", got)
+	}
 	if got := e.tg.count() - before; got != 0 {
 		t.Fatalf("messages sent = %d, want 0:\n%s", got, dumpCalls(e.tg.since(before)))
 	}
@@ -288,6 +294,12 @@ func TestStripeWebhookOutOfStockAfterChargeIsQuarantined(t *testing.T) {
 
 	assertOrderQuarantinedNotPaid(t, e, orderID, e.prodReg)
 	assertAnomalyQuarantine(t, e, orderID, storage.PaymentMethodStripe, "cs_oos")
+	// 4.15 durable actor: the out-of-stock anomaly row carries the stripe
+	// webhook's ingress identity.
+	if got := e.qStr(`SELECT COALESCE(actor, '') FROM payment_anomalies
+		WHERE provider = 'stripe' AND external_id = 'cs_oos'`); got != "webhook:stripe" {
+		t.Fatalf("anomaly actor = %q, want webhook:stripe", got)
+	}
 	if got := e.tg.count() - before; got != 0 {
 		t.Fatalf("messages sent = %d, want 0:\n%s", got, dumpCalls(e.tg.since(before)))
 	}
@@ -330,6 +342,12 @@ func TestNowpaymentsWebhookOutOfStockAfterChargeIsQuarantined(t *testing.T) {
 
 	assertOrderQuarantinedNotPaid(t, e, orderID, e.prodReg)
 	assertAnomalyQuarantine(t, e, orderID, storage.PaymentMethodNowpayments, "5099001122")
+	// 4.15 durable actor: the out-of-stock anomaly row carries the nowpayments
+	// webhook's ingress identity.
+	if got := e.qStr(`SELECT COALESCE(actor, '') FROM payment_anomalies
+		WHERE provider = 'nowpayments' AND external_id = '5099001122'`); got != "webhook:nowpayments" {
+		t.Fatalf("anomaly actor = %q, want webhook:nowpayments", got)
+	}
 	if got := e.tg.count() - before; got != 0 {
 		t.Fatalf("messages sent = %d, want 0:\n%s", got, dumpCalls(e.tg.since(before)))
 	}
