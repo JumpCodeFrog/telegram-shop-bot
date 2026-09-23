@@ -75,6 +75,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `/payreview` target lines and `payment-review list`; docs §12 rewritten.
   Balance-rail capture rows stay NULL by design (buyer is on the order; balance refunds carry the admin actor).
 
+- **Micro-followups batch (§6.16–21).** `/payreview` orphan cards hide the
+  dead `[Settle]` button when the anomaly row lacks amount/external-id
+  (shape-keyed UX filter; storage remains the validator). Logging: nearly all
+  handler logs now carry `trace_id` (fleet-wide `loggerFor` sweep; bot.go /
+  provider webhooks keep process/request scope); Auth middleware logs upsert
+  failures instead of swallowing them. Tests: renewal `payment_events`
+  full-shape pin, race-strict atomic flags in provider adapter tests,
+  022→023 migration upgrade pin (legacy rows keep NULL actor). Docs:
+  CLI-vs-bot reason rendering asymmetry documented; §5 wording tightened for
+  digest-only rows.
+
 ---
 
 ## [3.0.1] — 2026-09-13
