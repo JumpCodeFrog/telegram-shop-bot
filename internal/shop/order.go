@@ -60,6 +60,8 @@ type PaymentReceipt struct {
 	Scale                 int
 	OccurredAt            time.Time
 	SubscriptionExpiresAt time.Time
+	// Actor is the durable ingress identity (4.15): webhook:<provider> / worker:<provider>; "" stores NULL.
+	Actor string
 }
 
 // ValidateSubscriptionCart enforces Telegram's recurring-invoice contract:
@@ -303,6 +305,7 @@ func paymentFactFromReceipt(receipt PaymentReceipt) storage.PaymentFact {
 		PayerID: receipt.PayerID, AmountMinor: receipt.AmountMinor, Currency: receipt.Currency, Scale: receipt.Scale,
 		OccurredAt:           receipt.OccurredAt,
 		EntitlementExpiresAt: receipt.SubscriptionExpiresAt,
+		Actor:                receipt.Actor,
 	}
 }
 

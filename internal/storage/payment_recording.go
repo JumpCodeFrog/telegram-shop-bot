@@ -445,6 +445,7 @@ func anomalyFromPaymentFact(orderID int64, fact PaymentFact, reason string) Paym
 		RawPayload:      rawPayload,
 		Reason:          reason,
 		OccurredAt:      fact.OccurredAt,
+		Actor:           fact.Actor,
 	}
 }
 
@@ -522,8 +523,7 @@ func (s *SQLOrderStore) recordUnexpectedPayment(ctx context.Context, order Order
 		// The capture already exists, but this call proves it still cannot be
 		// applied safely. Preserve the reason in the anomaly inbox and move the
 		// projection to needs_review instead of returning a non-durable error.
-		_ = tx.Rollback()
-		return s.recordPaymentAnomaly(ctx, PaymentAnomaly{
+		anomaly := PaymentAnomaly{
 			ProposedOrderID: order.ID,
 			Provider:        provider,
 			ExternalID:      externalID,
@@ -531,7 +531,15 @@ func (s *SQLOrderStore) recordUnexpectedPayment(ctx context.Context, order Order
 			Currency:        currency,
 			Scale:           scale,
 			Reason:          reason,
-		}, audit)
+		}
+		// Durable actor (4.15): this branch has no fact envelope, so the
+		// ingress identity comes from the audit when one is supplied (nil-safe:
+		// the legacy path records no actor, which stores NULL).
+		if audit != nil {
+			anomaly.Actor = audit.Actor
+		}
+		_ = tx.Rollback()
+		return s.recordPaymentAnomaly(ctx, anomaly, audit)
 	}
 	if err == nil && existingOrder != order.ID {
 		reason = "identity_conflict"

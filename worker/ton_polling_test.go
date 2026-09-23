@@ -118,6 +118,16 @@ func TestTONPollingSettlesMatchingTransfer(t *testing.T) {
 		t.Fatalf("attempt provider=%s currency=%s amount=%d scale=%d status=%s",
 			provider, currency, amountMinor, scale, status)
 	}
+	// 4.15 durable actor: the on-chain settle row records the poller identity.
+	var actor string
+	if err := db.Conn().QueryRow(`
+		SELECT COALESCE(actor, '') FROM payment_events
+		WHERE order_id=? AND event_kind='captured' AND disposition='settled'`, orderID).Scan(&actor); err != nil {
+		t.Fatalf("capture event row: %v", err)
+	}
+	if actor != "worker:ton" {
+		t.Fatalf("capture actor = %q, want worker:ton", actor)
+	}
 }
 
 // TestTONPollingSkipsTransfersWithoutOrderReceipt verifies that foreign

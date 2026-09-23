@@ -221,6 +221,10 @@ func (w *CryptoBotPollingWorker) processPaidInvoices(ctx context.Context, invoic
 			slog.Error("CryptoBot polling: invalid paid invoice receipt was not quarantined", "order_id", inv.OrderID, "invoice_id", inv.InvoiceID)
 			continue
 		}
+		// Durable actor (4.15): the poller is the settle transport for this
+		// receipt — the same PendingInvoice.PaymentReceipt() builder serves the
+		// crypto webhook too, so the actor is assigned per transport here.
+		receipt.Actor = "worker:crypto"
 		outcome, err := w.orders.ConfirmPaymentReceipt(ctx, receipt)
 		if err != nil {
 			if errors.Is(err, storage.ErrProductOutOfStock) {

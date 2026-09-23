@@ -588,10 +588,15 @@ func (b *Bot) processSuccessfulPayment(ctx context.Context, msg *tgbotapi.Messag
 	if msg.From != nil {
 		payerID = msg.From.ID
 	}
+	// The barrier receipt is transport-shared (polling route and Telegram
+	// webhook both land here), so the 4.13/4.15 attribution convention keeps
+	// one literal for both: webhook:stars. Renewal and out-of-stock legs flow
+	// through this same receipt, inheriting the durable actor.
 	receipt := shop.PaymentReceipt{
 		OrderID: orderID, Provider: storage.PaymentMethodStars,
 		ExternalID: sp.TelegramPaymentChargeID, PayerID: payerID,
 		Currency: sp.Currency, AmountMinor: int64(sp.TotalAmount), Scale: 0,
+		Actor: "webhook:stars",
 	}
 	if msg.Date > 0 {
 		receipt.OccurredAt = time.Unix(int64(msg.Date), 0).UTC()

@@ -93,6 +93,10 @@ func (w *TONPollingWorker) poll(ctx context.Context) {
 				"lt", tx.LT, "hash", tx.Hash)
 			continue
 		}
+		// Durable actor (4.15): the poller is the settle transport for this
+		// receipt — the same TONTransaction.PaymentReceipt() builder is
+		// transport-neutral, so the actor is assigned here.
+		receipt.Actor = "worker:ton"
 		outcome, err := w.orders.ConfirmPaymentReceipt(ctx, receipt)
 		if err != nil {
 			// One transfer must never panic the ticker or abort the batch.

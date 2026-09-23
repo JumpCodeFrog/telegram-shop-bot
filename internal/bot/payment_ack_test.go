@@ -100,6 +100,54 @@ func TestTelegramWebhookValidStarsPaymentSettlesBeforeAcknowledgement(t *testing
 	}
 }
 
+// TestTelegramWebhookStarsSettleWritesDurableActor pins the 4.15 durable
+// actor: a webhook-driven Stars settle writes payment_events.actor =
+// "webhook:stars" (the log-level attribution of docs/payment-operations.md
+// §12 becomes a durable ledger column), and an exact replay of the same
+// webhook body keeps exactly ONE captured row carrying the FIRST writer's
+// actor.
+func TestTelegramWebhookStarsSettleWritesDurableActor(t *testing.T) {
+	e := newE2EEnv(t)
+	e.bot.cfg.TelegramWebhookSecret = testTelegramWebhookSecret
+	const buyer = int64(6210)
+	e.cmd(buyer, "/start", "en")
+	orderID := e.placeOrder(buyer, e.prodReg, "")
+	body := telegramSuccessfulPaymentBody(14, buyer, fmt.Sprint(orderID), "stars-actor-settle", 500)
+	post := func() *httptest.ResponseRecorder {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/telegram-webhook", strings.NewReader(body))
+		request.Header.Set("X-Telegram-Bot-Api-Secret-Token", testTelegramWebhookSecret)
+		e.bot.TelegramWebhookHandler()(recorder, request)
+		return recorder
+	}
+	if recorder := post(); recorder.Code != http.StatusOK {
+		t.Fatalf("settle status = %d, want 200 (%s)", recorder.Code, recorder.Body.String())
+	}
+	var actor string
+	if err := e.db.Conn().QueryRow(`SELECT COALESCE(actor, '') FROM payment_events
+		WHERE provider = 'stars' AND event_kind = 'captured' ORDER BY id DESC LIMIT 1`).Scan(&actor); err != nil {
+		t.Fatal(err)
+	}
+	if actor != "webhook:stars" {
+		t.Fatalf("actor = %q, want webhook:stars", actor)
+	}
+
+	// Exact replay of the identical webhook body: the second settle attempt is
+	// an idempotent status conflict, so exactly one captured row remains and it
+	// keeps the first writer's durable actor.
+	if recorder := post(); recorder.Code != http.StatusOK {
+		t.Fatalf("replay status = %d, want 200 (%s)", recorder.Code, recorder.Body.String())
+	}
+	if got := e.qInt(`SELECT COUNT(*) FROM payment_events
+		WHERE provider = 'stars' AND event_kind = 'captured' AND external_id = 'stars-actor-settle'`); got != 1 {
+		t.Fatalf("captured rows after replay = %d, want 1", got)
+	}
+	if got := e.qStr(`SELECT COALESCE(actor, '') FROM payment_events
+		WHERE provider = 'stars' AND event_kind = 'captured' AND external_id = 'stars-actor-settle'`); got != "webhook:stars" {
+		t.Fatalf("actor after replay = %q, want webhook:stars (first writer wins)", got)
+	}
+}
+
 func TestTelegramWebhookUndecodableStarsFieldsAreDurablyAcknowledged(t *testing.T) {
 	e := newE2EEnv(t)
 	e.bot.cfg.TelegramWebhookSecret = testTelegramWebhookSecret

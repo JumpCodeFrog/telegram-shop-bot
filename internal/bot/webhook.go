@@ -85,10 +85,12 @@ func (b *Bot) CryptoBotWebhookHandler() http.HandlerFunc {
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
+		// Durable actor (4.15): the signed webhook is the settle authority.
 		outcome, err := b.order.ConfirmPaymentReceipt(ctx, shop.PaymentReceipt{
 			OrderID: payload.OrderID, Provider: storage.PaymentMethodCrypto,
 			ExternalID: payload.InvoiceID, Currency: payload.Asset,
 			AmountMinor: payload.AmountMinor, Scale: 2, OccurredAt: payload.OccurredAt,
+			Actor: "webhook:crypto",
 		})
 		if err != nil {
 			if errors.Is(err, storage.ErrProductOutOfStock) {
@@ -96,6 +98,7 @@ func (b *Bot) CryptoBotWebhookHandler() http.HandlerFunc {
 					OrderID: payload.OrderID, Provider: storage.PaymentMethodCrypto,
 					ExternalID: payload.InvoiceID, Currency: payload.Asset,
 					AmountMinor: payload.AmountMinor, Scale: 2, OccurredAt: payload.OccurredAt,
+					Actor: "webhook:crypto",
 				}, "out_of_stock_after_charge")
 				if recordErr == nil || errors.Is(recordErr, storage.ErrPaymentNeedsReview) {
 					w.WriteHeader(http.StatusOK)
@@ -233,6 +236,10 @@ func (b *Bot) YooKassaWebhookHandler() http.HandlerFunc {
 			return
 		}
 
+		// Durable actor (4.15): the signed notification + authoritative refetch
+		// is the settle transport for this receipt.
+		receipt.Actor = "webhook:yookassa"
+
 		outcome, err := b.order.ConfirmPaymentReceipt(ctx, receipt)
 		if err != nil {
 			// Same idempotent-ACK error classes as the crypto webhook:
@@ -345,6 +352,10 @@ func (b *Bot) StripeWebhookHandler() http.HandlerFunc {
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
+
+		// Durable actor (4.15): the signed session body is the settle
+		// transport for this receipt.
+		receipt.Actor = "webhook:stripe"
 
 		outcome, err := b.order.ConfirmPaymentReceipt(ctx, receipt)
 		if err != nil {
@@ -460,6 +471,10 @@ func (b *Bot) NowpaymentsWebhookHandler() http.HandlerFunc {
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
+
+		// Durable actor (4.15): the signed IPN is the settle transport for
+		// this receipt.
+		receipt.Actor = "webhook:nowpayments"
 
 		outcome, err := b.order.ConfirmPaymentReceipt(ctx, receipt)
 		if err != nil {

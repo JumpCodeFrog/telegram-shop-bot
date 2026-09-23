@@ -181,6 +181,13 @@ func TestCryptoWebhookOutOfStockAfterChargeIsQuarantined(t *testing.T) {
 
 	assertOrderQuarantinedNotPaid(t, e, orderID, e.prodReg)
 	assertUnexpectedPaymentQuarantine(t, e, orderID, storage.PaymentMethodCrypto, "9611")
+	// 4.15 durable actor: the webhook-driven needs_review capture row carries
+	// the crypto webhook's ingress identity, not NULL.
+	if got := e.qStr(`SELECT COALESCE(actor, '') FROM payment_events
+		WHERE order_id = ? AND provider = 'crypto' AND external_id = '9611'
+		  AND event_kind = 'captured' AND disposition = 'needs_review'`, orderID); got != "webhook:crypto" {
+		t.Fatalf("capture actor = %q, want webhook:crypto", got)
+	}
 	if got := e.tg.count() - before; got != 0 {
 		t.Fatalf("messages sent = %d, want 0 (nothing settled, nothing to announce):\n%s",
 			got, dumpCalls(e.tg.since(before)))
@@ -239,6 +246,14 @@ func TestYooKassaWebhookOutOfStockAfterChargeIsQuarantined(t *testing.T) {
 	}
 	assertAnomalyRedeliveryUpgraded(t, e, orderID, storage.PaymentMethodYooKassa, "pay_oos")
 	assertOrderQuarantinedNotPaid(t, e, orderID, e.prodReg)
+	// 4.15 durable actor: the guard-upgraded needs_review capture row carries
+	// the yookassa webhook's ingress identity — the receipt the refetch
+	// rebuilt on the redelivery kept its durable actor.
+	if got := e.qStr(`SELECT COALESCE(actor, '') FROM payment_events
+		WHERE order_id = ? AND provider = 'yookassa' AND external_id = 'pay_oos'
+		  AND event_kind = 'captured' AND disposition = 'needs_review'`, orderID); got != "webhook:yookassa" {
+		t.Fatalf("capture actor = %q, want webhook:yookassa", got)
+	}
 	if got := e.tg.count() - before; got != 0 {
 		t.Fatalf("redelivery sent %d messages, want 0:\n%s", got, dumpCalls(e.tg.since(before)))
 	}

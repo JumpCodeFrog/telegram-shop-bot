@@ -859,6 +859,15 @@ func TestE2E_SubscriptionLifecycle(t *testing.T) {
 	if got := e.qInt(`SELECT COUNT(*) FROM payment_attempts WHERE external_id='ch-sub-2' AND status='succeeded'`); got != 1 {
 		t.Fatalf("renewal attempt rows = %d, want 1 succeeded ch-sub-2", got)
 	}
+	// 4.15 durable actor: the renewal capture row (captured/settled, ch-sub-2)
+	// carries the same webhook:stars ingress identity the settle log has — the
+	// receipt → paymentFactFromReceipt → recordSubscriptionRenewalOnce flow
+	// preserves it.
+	if got := e.qStr(`SELECT COALESCE(actor, '') FROM payment_events
+		WHERE provider = 'stars' AND external_id = 'ch-sub-2'
+		  AND event_kind = 'captured' AND disposition = 'settled'`); got != "webhook:stars" {
+		t.Fatalf("renewal capture actor = %q, want webhook:stars", got)
+	}
 	subsAfter, err := e.bot.subs.ListActiveByUser(t.Context(), buyer)
 	if err != nil || len(subsAfter) != 1 || !subsAfter[0].ExpiresAt.After(subs[0].ExpiresAt) {
 		t.Fatalf("renewal did not extend the expiry: %v (err %v)", subsAfter, err)

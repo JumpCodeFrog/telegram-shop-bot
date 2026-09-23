@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -115,5 +116,87 @@ func TestPaymentActorRoundTrip(t *testing.T) {
 	}
 	if unset.Valid {
 		t.Fatalf("actor on empty-actor event = %q, want NULL", unset.String)
+	}
+}
+
+// TestAnomalyFromPaymentFactCarriesActor pins the settle-path anomaly
+// translation (Task 1 review carried fix): identity-conflict and
+// resolved-replay mismatch rows built from a PaymentFact keep its durable
+// ingress identity instead of dropping it.
+func TestAnomalyFromPaymentFactCarriesActor(t *testing.T) {
+	fact := PaymentFact{
+		Provider: PaymentMethodStars, ExternalID: "actor-conflict-1",
+		AmountMinor: 100, Currency: "XTR", Scale: 0, Actor: "webhook:stars",
+	}
+	anomaly := anomalyFromPaymentFact(7, fact, "identity_conflict")
+	if anomaly.Actor != "webhook:stars" {
+		t.Fatalf("anomaly actor = %q, want webhook:stars", anomaly.Actor)
+	}
+	empty := fact
+	empty.Actor = ""
+	if anomaly := anomalyFromPaymentFact(7, empty, "identity_conflict"); anomaly.Actor != "" {
+		t.Fatalf("empty-actor fact produced anomaly actor %q, want \"\"", anomaly.Actor)
+	}
+}
+
+// TestRecordUnexpectedPaymentExistingCaptureAnomalyActor pins the
+// "capture exists but still cannot be applied" branch (Task 1 review carried
+// fix): the anomaly inbox row copies the ingress audit's actor when an
+// audited caller supplies one, and stays NULL for the legacy nil-audit path.
+func TestRecordUnexpectedPaymentExistingCaptureAnomalyActor(t *testing.T) {
+	db, err := New(filepath.Join(t.TempDir(), "unexpected-actor.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	ctx := context.Background()
+	store := NewSQLOrderStore(db)
+
+	res, err := db.Conn().Exec(`INSERT INTO orders
+		(user_id,total_stars,status,order_state,payment_state,fulfillment_state)
+		VALUES (42,100,'paid','placed','settled','unfulfilled')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	orderID, _ := res.LastInsertId()
+	order, err := store.loadPaymentOrder(ctx, orderID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, externalID := range []string{"actor-audit-1", "actor-audit-2"} {
+		if _, err := db.Conn().Exec(`INSERT INTO payment_attempts
+			(order_id,provider,external_id,payer_id,amount_minor,currency,scale,status)
+			VALUES (?,'stars',?,42,100,'XTR',0,'succeeded')`, orderID, externalID); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Audited caller: the anomaly inherits the audit's ingress identity.
+	audit := PaymentIngressAudit{Actor: "webhook:stars", Reason: "redelivery re-quarantined"}
+	if err := store.recordUnexpectedPayment(ctx, *order, "stars", "actor-audit-1",
+		"second_charge", nil, &audit); !errors.Is(err, ErrPaymentNeedsReview) {
+		t.Fatalf("audited error = %v, want ErrPaymentNeedsReview", err)
+	}
+	var actor string
+	if err := db.Conn().QueryRowContext(ctx, `SELECT COALESCE(actor, '') FROM payment_anomalies
+		WHERE external_id = 'actor-audit-1'`).Scan(&actor); err != nil {
+		t.Fatal(err)
+	}
+	if actor != "webhook:stars" {
+		t.Fatalf("anomaly actor = %q, want webhook:stars", actor)
+	}
+
+	// Legacy caller without an audit: nil-safe, the anomaly stores NULL.
+	if err := store.recordUnexpectedPayment(ctx, *order, "stars", "actor-audit-2",
+		"second_charge", nil, nil); !errors.Is(err, ErrPaymentNeedsReview) {
+		t.Fatalf("legacy error = %v, want ErrPaymentNeedsReview", err)
+	}
+	var nullActor sql.NullString
+	if err := db.Conn().QueryRowContext(ctx, `SELECT actor FROM payment_anomalies
+		WHERE external_id = 'actor-audit-2'`).Scan(&nullActor); err != nil {
+		t.Fatal(err)
+	}
+	if nullActor.Valid {
+		t.Fatalf("legacy anomaly actor = %q, want NULL", nullActor.String)
 	}
 }

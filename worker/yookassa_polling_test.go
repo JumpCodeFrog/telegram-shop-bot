@@ -125,6 +125,18 @@ func TestYooKassaPollingSettlesPendingOrder(t *testing.T) {
 		t.Fatalf("attempt provider=%s external_id=%s currency=%s amount=%d scale=%d status=%s",
 			provider, externalID, currency, amountMinor, scale, status)
 	}
+	// 4.15 durable actor: the polling settle row records the poller identity —
+	// the same payment.PaymentReceipt() builder serves the webhook transport
+	// too, so the actor is assigned per transport at the call site.
+	var actor string
+	if err := db.Conn().QueryRow(`
+		SELECT COALESCE(actor, '') FROM payment_events
+		WHERE order_id=? AND event_kind='captured' AND disposition='settled'`, orderID).Scan(&actor); err != nil {
+		t.Fatalf("capture event row: %v", err)
+	}
+	if actor != "worker:yookassa" {
+		t.Fatalf("capture actor = %q, want worker:yookassa", actor)
+	}
 	if stock := yooKassaStock(t, ctx, db, productID); stock != 4 {
 		t.Fatalf("stock=%d, want 4 (decremented exactly once at settlement)", stock)
 	}

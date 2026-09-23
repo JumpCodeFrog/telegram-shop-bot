@@ -112,6 +112,12 @@ func TestPollingSkipsUnpaidInvoices(t *testing.T) {
 	if len(conf.receipts) != 2 || conf.receipts[0].AmountMinor != 200 || conf.receipts[1].AmountMinor != 400 {
 		t.Fatalf("receipts = %+v", conf.receipts)
 	}
+	// 4.15 durable actor: the poller stamps its transport identity on every
+	// receipt it forwards (persisted as payment_events.actor downstream).
+	if conf.receipts[0].Actor != "worker:crypto" || conf.receipts[1].Actor != "worker:crypto" {
+		t.Fatalf("receipt actors = %q/%q, want worker:crypto twice",
+			conf.receipts[0].Actor, conf.receipts[1].Actor)
+	}
 }
 
 // TestPollingConfirmConflictDoesNotNotify verifies that an already-confirmed
