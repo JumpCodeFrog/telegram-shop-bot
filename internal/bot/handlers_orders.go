@@ -15,7 +15,7 @@ func (b *Bot) handleOrders(ctx context.Context, msg *tgbotapi.Message) {
 func (b *Bot) sendOrders(ctx context.Context, chatID, userID int64, msgID int, lang string) {
 	orders, err := b.order.GetUserOrders(ctx, userID)
 	if err != nil {
-		b.logger.Error("get user orders", "error", err)
+		b.loggerFor(ctx).Error("get user orders", "error", err)
 		b.sendOrEditStyled(chatID, msgID, b.t(lang, "error_load_orders"), "", nil)
 		return
 	}

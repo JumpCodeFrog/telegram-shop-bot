@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"log/slog"
 	"shop_bot/internal/storage"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
@@ -12,8 +13,13 @@ type UserStore interface {
 }
 
 // Auth upserts the Telegram user into storage before the update proceeds,
-// using the per-update context carried by the chain (roadmap 4.14).
-func Auth(userStore UserStore) func(next func(ctx context.Context, update tgbotapi.Update)) func(ctx context.Context, update tgbotapi.Update) {
+// using the per-update context carried by the chain (roadmap 4.14). Upsert
+// failures are logged as warnings (with the user id) instead of being
+// swallowed: a missing user row breaks every later handler that reads it.
+func Auth(userStore UserStore, logger *slog.Logger) func(next func(ctx context.Context, update tgbotapi.Update)) func(ctx context.Context, update tgbotapi.Update) {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return func(next func(ctx context.Context, update tgbotapi.Update)) func(ctx context.Context, update tgbotapi.Update) {
 		return func(ctx context.Context, update tgbotapi.Update) {
 			var tgUser *tgbotapi.User
@@ -33,7 +39,9 @@ func Auth(userStore UserStore) func(next func(ctx context.Context, update tgbota
 				}
 
 				// Foreground upsert so the user row exists for later handlers.
-				_ = userStore.Upsert(ctx, user)
+				if err := userStore.Upsert(ctx, user); err != nil {
+					logger.Warn("auth: user upsert failed", "user_id", user.TelegramID, "error", err)
+				}
 			}
 
 			next(ctx, update)

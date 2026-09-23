@@ -24,7 +24,7 @@ func (b *Bot) handleOrdersAll(ctx context.Context, msg *tgbotapi.Message) {
 	statusFilter := strings.TrimSpace(msg.CommandArguments())
 	orders, err := b.order.GetAllOrders(ctx, statusFilter)
 	if err != nil {
-		b.logger.Error("get all orders", "status", statusFilter, "error", err)
+		b.loggerFor(ctx).Error("get all orders", "status", statusFilter, "error", err)
 		b.send(tgbotapi.NewMessage(msg.Chat.ID, b.t(lang, "admin_orders_load_failed")))
 		return
 	}
@@ -64,7 +64,7 @@ func (b *Bot) handleOrderCard(ctx context.Context, msg *tgbotapi.Message) {
 		if errors.Is(err, storage.ErrNotFound) {
 			b.send(tgbotapi.NewMessage(msg.Chat.ID, fmt.Sprintf(b.t(lang, "admin_order_not_found"), id)))
 		} else {
-			b.logger.Error("get order card", "order_id", id, "error", err)
+			b.loggerFor(ctx).Error("get order card", "order_id", id, "error", err)
 			b.send(tgbotapi.NewMessage(msg.Chat.ID, b.t(lang, "admin_orders_load_failed")))
 		}
 		return
@@ -73,7 +73,7 @@ func (b *Bot) handleOrderCard(ctx context.Context, msg *tgbotapi.Message) {
 	// not hide the order itself.
 	user, err := b.users.GetByTelegramID(ctx, order.UserID)
 	if err != nil {
-		b.logger.Error("load order card user", "order_id", id, "user_id", order.UserID, "error", err)
+		b.loggerFor(ctx).Error("load order card user", "order_id", id, "user_id", order.UserID, "error", err)
 		user = nil
 	}
 
@@ -131,7 +131,7 @@ func (b *Bot) handleSetDelivered(ctx context.Context, msg *tgbotapi.Message) {
 	}
 	order, err := b.order.SetDelivered(ctx, id)
 	if err != nil {
-		b.logger.Error("set delivered", "order_id", id, "error", err)
+		b.loggerFor(ctx).Error("set delivered", "order_id", id, "error", err)
 		b.send(tgbotapi.NewMessage(msg.Chat.ID, b.t(lang, "admin_set_delivered_failed")))
 		return
 	}
@@ -211,7 +211,7 @@ func (b *Bot) handleExportOrders(ctx context.Context, msg *tgbotapi.Message) {
 
 	orders, err := b.order.GetAllOrders(ctx, "")
 	if err != nil {
-		b.logger.Error("export orders", "error", err)
+		b.loggerFor(ctx).Error("export orders", "error", err)
 		b.send(tgbotapi.NewMessage(msg.Chat.ID, b.t(lang, "admin_export_failed")))
 		return
 	}
@@ -248,7 +248,7 @@ func (b *Bot) handleExportOrders(ctx context.Context, msg *tgbotapi.Message) {
 	}
 	writer.Flush()
 	if err := writer.Error(); err != nil {
-		b.logger.Error("flush order export csv", "error", err)
+		b.loggerFor(ctx).Error("flush order export csv", "error", err)
 		b.send(tgbotapi.NewMessage(msg.Chat.ID, b.t(lang, "admin_export_failed")))
 		return
 	}

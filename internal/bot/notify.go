@@ -61,7 +61,7 @@ func (b *Bot) notifyAdmins(ctx context.Context, kind AdminEvent, text string) {
 		params.AddNonZero64("chat_id", groupID)
 		params.AddNonZero("message_thread_id", threadID)
 		if _, err := b.api.MakeRequest("sendMessage", params); err != nil {
-			b.logger.Error("notify admins: group send", "chat_id", groupID, "thread_id", threadID, "error", err)
+			b.loggerFor(ctx).Error("notify admins: group send", "chat_id", groupID, "thread_id", threadID, "error", err)
 		}
 		return
 	}

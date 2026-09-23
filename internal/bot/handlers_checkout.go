@@ -43,7 +43,7 @@ func (b *Bot) handlePromoInput(ctx context.Context, msg *tgbotapi.Message) {
 			b.sendOrEditStyled(chatID, 0, b.t(lang, "promo_not_found"), "", nil)
 			return
 		}
-		b.logger.Error("get promo", "error", err)
+		b.loggerFor(ctx).Error("get promo", "error", err)
 		b.sendOrEditStyled(chatID, 0, b.t(lang, "error_promo_check"), "", nil)
 		return
 	}
@@ -57,7 +57,7 @@ func (b *Bot) handlePromoInput(ctx context.Context, msg *tgbotapi.Message) {
 	// Check if user has already used this promo.
 	used, err := b.promos.HasUserUsedPromo(ctx, promo.ID, userID)
 	if err != nil {
-		b.logger.Error("check promo usage", "error", err)
+		b.loggerFor(ctx).Error("check promo usage", "error", err)
 		b.sendOrEditStyled(chatID, 0, b.t(lang, "error_promo_check"), "", nil)
 		return
 	}
@@ -69,7 +69,7 @@ func (b *Bot) handlePromoInput(ctx context.Context, msg *tgbotapi.Message) {
 	// Fetch cart to show updated totals.
 	view, err := b.cart.Get(ctx, userID)
 	if err != nil {
-		b.logger.Error("get cart for promo", "error", err)
+		b.loggerFor(ctx).Error("get cart for promo", "error", err)
 		b.sendOrEditStyled(chatID, 0, b.t(lang, "error_load_cart"), "", nil)
 		return
 	}
@@ -124,7 +124,7 @@ func (b *Bot) onOrderConfirm(ctx context.Context, chatID, userID int64, msgID in
 
 	view, err := b.cart.Get(ctx, userID)
 	if err != nil {
-		b.logger.Error("get cart for order confirm", "error", err)
+		b.loggerFor(ctx).Error("get cart for order confirm", "error", err)
 		return
 	}
 
@@ -139,7 +139,7 @@ func (b *Bot) onOrderConfirm(ctx context.Context, chatID, userID int64, msgID in
 	if cartHasSubscription(view) && b.subs != nil {
 		active, subErr := b.subs.ListActiveByUser(ctx, userID)
 		if subErr != nil {
-			b.logger.Error("check active subscription before checkout", "user_id", userID, "error", subErr)
+			b.loggerFor(ctx).Error("check active subscription before checkout", "user_id", userID, "error", subErr)
 			b.sendOrEditStyled(chatID, msgID, b.t(lang, "error_short"), "", nil)
 			return
 		}
@@ -165,7 +165,7 @@ func (b *Bot) onOrderConfirm(ctx context.Context, chatID, userID int64, msgID in
 				b.sendOrEditStyled(chatID, 0, b.t(lang, "promo_expired"), "", nil)
 				return
 			}
-			b.logger.Error("get promo for order confirm", "error", err)
+			b.loggerFor(ctx).Error("get promo for order confirm", "error", err)
 			b.sendOrEditStyled(chatID, 0, b.t(lang, "error_promo_check"), "", nil)
 			return
 		}
@@ -178,7 +178,7 @@ func (b *Bot) onOrderConfirm(ctx context.Context, chatID, userID int64, msgID in
 
 		used, err := b.promos.HasUserUsedPromo(ctx, promo.ID, userID)
 		if err != nil {
-			b.logger.Error("check promo usage for order confirm", "error", err)
+			b.loggerFor(ctx).Error("check promo usage for order confirm", "error", err)
 			b.sendOrEditStyled(chatID, 0, b.t(lang, "error_promo_check"), "", nil)
 			return
 		}
@@ -189,7 +189,7 @@ func (b *Bot) onOrderConfirm(ctx context.Context, chatID, userID int64, msgID in
 
 		userOrders, err := b.order.GetUserOrders(ctx, userID)
 		if err != nil {
-			b.logger.Error("get user orders for promo validation", "error", err)
+			b.loggerFor(ctx).Error("get user orders for promo validation", "error", err)
 			b.sendOrEditStyled(chatID, 0, b.t(lang, "error_promo_check"), "", nil)
 			return
 		}
@@ -225,14 +225,14 @@ func (b *Bot) onOrderConfirm(ctx context.Context, chatID, userID int64, msgID in
 				fmt.Sprintf(b.t(lang, "error_insufficient_stock"), stockErr.ProductName, stockErr.Have), "", nil)
 			return
 		}
-		b.logger.Error("create order", "error", err)
+		b.loggerFor(ctx).Error("create order", "error", err)
 		b.sendOrEditStyled(chatID, msgID, b.t(lang, "order_create_error"), "", nil)
 		return
 	}
 
 	createdOrder, err := b.order.GetOrder(ctx, orderID)
 	if err != nil {
-		b.logger.Error("load created order for payment summary", "order_id", orderID, "error", err)
+		b.loggerFor(ctx).Error("load created order for payment summary", "order_id", orderID, "error", err)
 		b.sendOrEditStyled(chatID, msgID, b.t(lang, "error_short"), "", StyledKeyboard{
 			{Btn(b.t(lang, "btn_orders"), "back:orders"), Btn(b.t(lang, "btn_menu"), "back:menu")},
 		})
@@ -263,7 +263,7 @@ func (b *Bot) onOrderConfirm(ctx context.Context, chatID, userID int64, msgID in
 		if bal, balErr := b.balances.GetBalance(ctx, userID); balErr == nil {
 			balanceUSD = bal
 		} else if !errors.Is(balErr, storage.ErrNotFound) {
-			b.logger.Warn("load buyer balance for payment keyboard", "user_id", userID, "error", balErr)
+			b.loggerFor(ctx).Warn("load buyer balance for payment keyboard", "user_id", userID, "error", balErr)
 		}
 	}
 	text := b.formatPaymentMethodsText(lang, orderID, view, cryptoOK, yookassaOK, stripeOK, tonOK, nowpaymentsOK)

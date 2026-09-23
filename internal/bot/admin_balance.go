@@ -59,7 +59,7 @@ func (b *Bot) handleSetBalance(ctx context.Context, msg *tgbotapi.Message) {
 			// Zero/NaN/Inf amounts are malformed input, not a store failure.
 			send(b.t(lang, "admin_setbalance_usage"))
 		default:
-			b.logger.Error("adjust balance", "target_user_id", targetID, "error", err)
+			b.loggerFor(ctx).Error("adjust balance", "target_user_id", targetID, "error", err)
 			send(b.t(lang, "error_short"))
 		}
 		return

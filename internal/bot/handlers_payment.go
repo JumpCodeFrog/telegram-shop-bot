@@ -21,7 +21,7 @@ import (
 func (b *Bot) onPayStars(ctx context.Context, cbID string, chatID, userID int64, msgID int, data, lang string) {
 	orderID, err := parseIDFromCallback(data, "pay:stars:")
 	if err != nil {
-		b.logger.Error("parse pay:stars callback", "error", err)
+		b.loggerFor(ctx).Error("parse pay:stars callback", "error", err)
 		b.ack(cbID)
 		return
 	}
@@ -36,21 +36,21 @@ func (b *Bot) onPayStars(ctx context.Context, cbID string, chatID, userID int64,
 			b.alert(cbID, b.t(lang, "order_already_paid"))
 			return
 		}
-		b.logger.Error("load payable order for stars payment", "order_id", orderID, "error", err)
+		b.loggerFor(ctx).Error("load payable order for stars payment", "order_id", orderID, "error", err)
 		b.alert(cbID, b.t(lang, "error_short"))
 		return
 	}
 	// Subscription products need a recurring invoice (subscription_period).
 	_, subDays, err := b.orderSubscriptionProduct(ctx, target)
 	if err != nil {
-		b.logger.Error("detect subscription product for stars payment", "order_id", orderID, "error", err)
+		b.loggerFor(ctx).Error("detect subscription product for stars payment", "order_id", orderID, "error", err)
 		b.alert(cbID, b.t(lang, "error_short"))
 		return
 	}
 
 	b.ack(cbID)
 	if err := b.stars.SendInvoice(chatID, orderID, target.TotalStars, target.Items, payment.SubscriptionPeriodSeconds(subDays)); err != nil {
-		b.logger.Error("send stars invoice", "error", err)
+		b.loggerFor(ctx).Error("send stars invoice", "error", err)
 		b.send(tgbotapi.NewMessage(chatID, b.t(lang, "payment_error")))
 		return
 	}
@@ -59,7 +59,7 @@ func (b *Bot) onPayStars(ctx context.Context, cbID string, chatID, userID int64,
 func (b *Bot) onOrderCancel(ctx context.Context, cbID string, chatID, userID int64, msgID int, data, lang string) {
 	orderID, err := parseIDFromCallback(data, "order:cancel:")
 	if err != nil {
-		b.logger.Error("parse order:cancel callback", "error", err)
+		b.loggerFor(ctx).Error("parse order:cancel callback", "error", err)
 		b.ack(cbID)
 		return
 	}
@@ -73,13 +73,13 @@ func (b *Bot) onOrderCancel(ctx context.Context, cbID string, chatID, userID int
 			b.alert(cbID, b.t(lang, "order_already_paid"))
 			return
 		}
-		b.logger.Error("load payable order for cancel", "order_id", orderID, "error", err)
+		b.loggerFor(ctx).Error("load payable order for cancel", "order_id", orderID, "error", err)
 		b.alert(cbID, b.t(lang, "error_short"))
 		return
 	}
 
 	if err := b.order.CancelOrder(ctx, orderID, userID); err != nil {
-		b.logger.Error("cancel order", "order_id", orderID, "user_id", userID, "error", err)
+		b.loggerFor(ctx).Error("cancel order", "order_id", orderID, "user_id", userID, "error", err)
 		b.alert(cbID, b.t(lang, "error_short"))
 		return
 	}
@@ -115,7 +115,7 @@ func (b *Bot) onPayCrypto(ctx context.Context, cbID string, chatID, userID int64
 
 	orderID, err := parseIDFromCallback(data, "pay:crypto:")
 	if err != nil {
-		b.logger.Error("parse pay:crypto callback", "error", err)
+		b.loggerFor(ctx).Error("parse pay:crypto callback", "error", err)
 		b.ack(cbID)
 		return
 	}
@@ -130,14 +130,14 @@ func (b *Bot) onPayCrypto(ctx context.Context, cbID string, chatID, userID int64
 			b.alert(cbID, b.t(lang, "order_already_paid"))
 			return
 		}
-		b.logger.Error("load payable order for crypto payment", "order_id", orderID, "error", err)
+		b.loggerFor(ctx).Error("load payable order for crypto payment", "order_id", orderID, "error", err)
 		b.alert(cbID, b.t(lang, "error_short"))
 		return
 	}
 
 	// Subscription products are payable with Telegram Stars only.
 	if _, subDays, subErr := b.orderSubscriptionProduct(ctx, target); subErr != nil {
-		b.logger.Error("detect subscription product for crypto payment", "order_id", orderID, "error", subErr)
+		b.loggerFor(ctx).Error("detect subscription product for crypto payment", "order_id", orderID, "error", subErr)
 		b.alert(cbID, b.t(lang, "error_short"))
 		return
 	} else if subDays > 0 {
@@ -158,7 +158,7 @@ func (b *Bot) onPayCrypto(ctx context.Context, cbID string, chatID, userID int64
 	desc := fmt.Sprintf(b.t(lang, "crypto_invoice_desc"), orderID)
 	invoice, err := b.crypto.CreateInvoice(ctx, orderID, target.TotalUSD, desc)
 	if err != nil {
-		b.logger.Error("create crypto invoice", "error", err)
+		b.loggerFor(ctx).Error("create crypto invoice", "error", err)
 		b.send(tgbotapi.NewMessage(chatID, b.t(lang, "payment_error")))
 		return
 	}
@@ -184,7 +184,7 @@ func (b *Bot) onPayYooKassa(ctx context.Context, cbID string, chatID, userID int
 
 	orderID, err := parseIDFromCallback(data, "pay:yookassa:")
 	if err != nil {
-		b.logger.Error("parse pay:yookassa callback", "error", err)
+		b.loggerFor(ctx).Error("parse pay:yookassa callback", "error", err)
 		b.ack(cbID)
 		return
 	}
@@ -199,14 +199,14 @@ func (b *Bot) onPayYooKassa(ctx context.Context, cbID string, chatID, userID int
 			b.alert(cbID, b.t(lang, "order_already_paid"))
 			return
 		}
-		b.logger.Error("load payable order for card payment", "order_id", orderID, "error", err)
+		b.loggerFor(ctx).Error("load payable order for card payment", "order_id", orderID, "error", err)
 		b.alert(cbID, b.t(lang, "error_short"))
 		return
 	}
 
 	// Subscription products are payable with Telegram Stars only.
 	if _, subDays, subErr := b.orderSubscriptionProduct(ctx, target); subErr != nil {
-		b.logger.Error("detect subscription product for card payment", "order_id", orderID, "error", subErr)
+		b.loggerFor(ctx).Error("detect subscription product for card payment", "order_id", orderID, "error", subErr)
 		b.alert(cbID, b.t(lang, "error_short"))
 		return
 	} else if subDays > 0 {
@@ -235,7 +235,7 @@ func (b *Bot) onPayYooKassa(ctx context.Context, cbID string, chatID, userID int
 	desc := fmt.Sprintf(b.t(lang, "yookassa_invoice_desc"), orderID)
 	invoice, err := b.yookassa.CreatePayment(ctx, orderID, amountMinor, desc)
 	if err != nil {
-		b.logger.Error("create yookassa payment", "error", err)
+		b.loggerFor(ctx).Error("create yookassa payment", "error", err)
 		b.send(tgbotapi.NewMessage(chatID, b.t(lang, "payment_error")))
 		return
 	}
@@ -261,7 +261,7 @@ func (b *Bot) onPayStripe(ctx context.Context, cbID string, chatID, userID int64
 
 	orderID, err := parseIDFromCallback(data, "pay:stripe:")
 	if err != nil {
-		b.logger.Error("parse pay:stripe callback", "error", err)
+		b.loggerFor(ctx).Error("parse pay:stripe callback", "error", err)
 		b.ack(cbID)
 		return
 	}
@@ -276,14 +276,14 @@ func (b *Bot) onPayStripe(ctx context.Context, cbID string, chatID, userID int64
 			b.alert(cbID, b.t(lang, "order_already_paid"))
 			return
 		}
-		b.logger.Error("load payable order for stripe payment", "order_id", orderID, "error", err)
+		b.loggerFor(ctx).Error("load payable order for stripe payment", "order_id", orderID, "error", err)
 		b.alert(cbID, b.t(lang, "error_short"))
 		return
 	}
 
 	// Subscription products are payable with Telegram Stars only.
 	if _, subDays, subErr := b.orderSubscriptionProduct(ctx, target); subErr != nil {
-		b.logger.Error("detect subscription product for stripe payment", "order_id", orderID, "error", subErr)
+		b.loggerFor(ctx).Error("detect subscription product for stripe payment", "order_id", orderID, "error", subErr)
 		b.alert(cbID, b.t(lang, "error_short"))
 		return
 	} else if subDays > 0 {
@@ -311,7 +311,7 @@ func (b *Bot) onPayStripe(ctx context.Context, cbID string, chatID, userID int64
 
 	invoice, err := b.stripe.CreateCheckoutSession(ctx, orderID, amountCents, b.t(lang, "stripe_invoice_desc"))
 	if err != nil {
-		b.logger.Error("create stripe checkout session", "error", err)
+		b.loggerFor(ctx).Error("create stripe checkout session", "error", err)
 		b.send(tgbotapi.NewMessage(chatID, b.t(lang, "payment_error")))
 		return
 	}
@@ -337,7 +337,7 @@ func (b *Bot) onPayTON(ctx context.Context, cbID string, chatID, userID int64, m
 
 	orderID, err := parseIDFromCallback(data, "pay:ton:")
 	if err != nil {
-		b.logger.Error("parse pay:ton callback", "error", err)
+		b.loggerFor(ctx).Error("parse pay:ton callback", "error", err)
 		b.ack(cbID)
 		return
 	}
@@ -352,14 +352,14 @@ func (b *Bot) onPayTON(ctx context.Context, cbID string, chatID, userID int64, m
 			b.alert(cbID, b.t(lang, "order_already_paid"))
 			return
 		}
-		b.logger.Error("load payable order for ton payment", "order_id", orderID, "error", err)
+		b.loggerFor(ctx).Error("load payable order for ton payment", "order_id", orderID, "error", err)
 		b.alert(cbID, b.t(lang, "error_short"))
 		return
 	}
 
 	// Subscription products are payable with Telegram Stars only.
 	if _, subDays, subErr := b.orderSubscriptionProduct(ctx, target); subErr != nil {
-		b.logger.Error("detect subscription product for ton payment", "order_id", orderID, "error", subErr)
+		b.loggerFor(ctx).Error("detect subscription product for ton payment", "order_id", orderID, "error", subErr)
 		b.alert(cbID, b.t(lang, "error_short"))
 		return
 	} else if subDays > 0 {
@@ -403,7 +403,7 @@ func (b *Bot) onPayNowpayments(ctx context.Context, cbID string, chatID, userID 
 
 	orderID, err := parseIDFromCallback(data, "pay:nowpayments:")
 	if err != nil {
-		b.logger.Error("parse pay:nowpayments callback", "error", err)
+		b.loggerFor(ctx).Error("parse pay:nowpayments callback", "error", err)
 		b.ack(cbID)
 		return
 	}
@@ -418,14 +418,14 @@ func (b *Bot) onPayNowpayments(ctx context.Context, cbID string, chatID, userID 
 			b.alert(cbID, b.t(lang, "order_already_paid"))
 			return
 		}
-		b.logger.Error("load payable order for nowpayments payment", "order_id", orderID, "error", err)
+		b.loggerFor(ctx).Error("load payable order for nowpayments payment", "order_id", orderID, "error", err)
 		b.alert(cbID, b.t(lang, "error_short"))
 		return
 	}
 
 	// Subscription products are payable with Telegram Stars only.
 	if _, subDays, subErr := b.orderSubscriptionProduct(ctx, target); subErr != nil {
-		b.logger.Error("detect subscription product for nowpayments payment", "order_id", orderID, "error", subErr)
+		b.loggerFor(ctx).Error("detect subscription product for nowpayments payment", "order_id", orderID, "error", subErr)
 		b.alert(cbID, b.t(lang, "error_short"))
 		return
 	} else if subDays > 0 {
@@ -450,7 +450,7 @@ func (b *Bot) onPayNowpayments(ctx context.Context, cbID string, chatID, userID 
 
 	invoice, err := b.nowpayments.CreateInvoice(ctx, orderID, amountCents, b.t(lang, "nowpayments_invoice_desc"))
 	if err != nil {
-		b.logger.Error("create nowpayments invoice", "error", err)
+		b.loggerFor(ctx).Error("create nowpayments invoice", "error", err)
 		b.send(tgbotapi.NewMessage(chatID, b.t(lang, "payment_error")))
 		return
 	}
@@ -475,7 +475,7 @@ func (b *Bot) onPayNowpayments(ctx context.Context, cbID string, chatID, userID 
 func (b *Bot) onPayBalance(ctx context.Context, cbID string, chatID, userID int64, msgID int, data, lang string) {
 	orderID, err := parseIDFromCallback(data, "pay:balance:")
 	if err != nil {
-		b.logger.Error("parse pay:balance callback", "error", err)
+		b.loggerFor(ctx).Error("parse pay:balance callback", "error", err)
 		b.ack(cbID)
 		return
 	}
@@ -490,14 +490,14 @@ func (b *Bot) onPayBalance(ctx context.Context, cbID string, chatID, userID int6
 			b.alert(cbID, b.t(lang, "order_already_paid"))
 			return
 		}
-		b.logger.Error("load payable order for balance payment", "order_id", orderID, "error", err)
+		b.loggerFor(ctx).Error("load payable order for balance payment", "order_id", orderID, "error", err)
 		b.alert(cbID, b.t(lang, "error_short"))
 		return
 	}
 
 	// Subscription products are payable with Telegram Stars only.
 	if _, subDays, subErr := b.orderSubscriptionProduct(ctx, target); subErr != nil {
-		b.logger.Error("detect subscription product for balance payment", "order_id", orderID, "error", subErr)
+		b.loggerFor(ctx).Error("detect subscription product for balance payment", "order_id", orderID, "error", subErr)
 		b.alert(cbID, b.t(lang, "error_short"))
 		return
 	} else if subDays > 0 {
@@ -512,7 +512,7 @@ func (b *Bot) onPayBalance(ctx context.Context, cbID string, chatID, userID int6
 			// Report the CURRENT balance; a lookup failure degrades to 0.
 			balance, balErr := b.balances.GetBalance(ctx, userID)
 			if balErr != nil {
-				b.logger.Warn("load balance for insufficient-funds alert", "user_id", userID, "error", balErr)
+				b.loggerFor(ctx).Warn("load balance for insufficient-funds alert", "user_id", userID, "error", balErr)
 			}
 			b.alert(cbID, fmt.Sprintf(b.t(lang, "balance_insufficient"), balance))
 		case errors.Is(err, storage.ErrOrderStatusConflict):
@@ -520,7 +520,7 @@ func (b *Bot) onPayBalance(ctx context.Context, cbID string, chatID, userID int6
 		case errors.Is(err, shop.ErrBalanceSubscriptionUnsupported):
 			b.alert(cbID, b.t(lang, "sub_stars_only"))
 		default:
-			b.logger.Error("confirm balance payment", "order_id", orderID, "error", err)
+			b.loggerFor(ctx).Error("confirm balance payment", "order_id", orderID, "error", err)
 			b.alert(cbID, b.t(lang, "error_short"))
 		}
 		return

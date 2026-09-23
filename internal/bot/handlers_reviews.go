@@ -69,7 +69,7 @@ func (b *Bot) sendReviewInvite(ctx context.Context, order *storage.Order) {
 	}
 	text := b.i18n.Tf(lang, "review_invite", order.ID)
 	if err := b.sendStyled(order.UserID, text, "", reviewInviteKeyboard(order.ID)); err != nil {
-		b.logger.Warn("send review invite", "order_id", order.ID, "error", err)
+		b.loggerFor(ctx).Warn("send review invite", "order_id", order.ID, "error", err)
 	}
 }
 
@@ -117,7 +117,7 @@ func (b *Bot) onReviewRate(ctx context.Context, cbID string, chatID, userID int6
 
 	order, err := b.order.GetOrder(ctx, orderID)
 	if err != nil && !errors.Is(err, storage.ErrNotFound) {
-		b.logger.Error("review: load order", "order_id", orderID, "error", err)
+		b.loggerFor(ctx).Error("review: load order", "order_id", orderID, "error", err)
 		b.alert(cbID, b.t(lang, "review_error"))
 		return
 	}
@@ -130,14 +130,14 @@ func (b *Bot) onReviewRate(ctx context.Context, cbID string, chatID, userID int6
 	for _, pid := range productIDs {
 		// Re-rating resets any previous text; the FSM step below re-collects it.
 		if err := b.reviews.Upsert(ctx, storage.Review{ProductID: pid, UserID: userID, OrderID: orderID, Rating: rating}); err != nil {
-			b.logger.Error("review: upsert rating", "order_id", orderID, "product_id", pid, "error", err)
+			b.loggerFor(ctx).Error("review: upsert rating", "order_id", orderID, "product_id", pid, "error", err)
 			b.alert(cbID, b.t(lang, "review_error"))
 			return
 		}
 	}
 
 	if err := b.fsm.SetReviewState(ctx, userID, &storage.ReviewState{OrderID: orderID, Rating: rating}, reviewStateTTL); err != nil {
-		b.logger.Warn("review: set fsm state", "user_id", userID, "error", err)
+		b.loggerFor(ctx).Warn("review: set fsm state", "user_id", userID, "error", err)
 	}
 
 	b.ack(cbID)
@@ -170,7 +170,7 @@ func (b *Bot) handleReviewTextInput(ctx context.Context, msg *tgbotapi.Message, 
 
 	order, err := b.order.GetOrder(ctx, state.OrderID)
 	if err != nil && !errors.Is(err, storage.ErrNotFound) {
-		b.logger.Error("review: load order for text", "order_id", state.OrderID, "error", err)
+		b.loggerFor(ctx).Error("review: load order for text", "order_id", state.OrderID, "error", err)
 		b.send(tgbotapi.NewMessage(chatID, b.t(lang, "review_error")))
 		return
 	}
@@ -182,7 +182,7 @@ func (b *Bot) handleReviewTextInput(ctx context.Context, msg *tgbotapi.Message, 
 
 	for _, pid := range productIDs {
 		if err := b.reviews.Upsert(ctx, storage.Review{ProductID: pid, UserID: userID, OrderID: state.OrderID, Rating: state.Rating, Text: text}); err != nil {
-			b.logger.Error("review: upsert text", "order_id", state.OrderID, "product_id", pid, "error", err)
+			b.loggerFor(ctx).Error("review: upsert text", "order_id", state.OrderID, "product_id", pid, "error", err)
 			b.send(tgbotapi.NewMessage(chatID, b.t(lang, "review_error")))
 			return
 		}
@@ -194,13 +194,13 @@ func (b *Bot) handleReviewTextInput(ctx context.Context, msg *tgbotapi.Message, 
 func (b *Bot) onReviewList(ctx context.Context, chatID int64, msgID int, data, lang string) {
 	prodID, err := parseIDFromCallback(data, "review:list:")
 	if err != nil {
-		b.logger.Error("parse review list callback", "data", data, "error", err)
+		b.loggerFor(ctx).Error("parse review list callback", "data", data, "error", err)
 		return
 	}
 
 	reviews, err := b.reviews.ListByProduct(ctx, prodID, 3)
 	if err != nil {
-		b.logger.Error("review: list by product", "product_id", prodID, "error", err)
+		b.loggerFor(ctx).Error("review: list by product", "product_id", prodID, "error", err)
 		b.sendOrEditStyled(chatID, msgID, b.t(lang, "review_error"), "", nil)
 		return
 	}
@@ -237,7 +237,7 @@ func (b *Bot) handleReviewsAdmin(ctx context.Context, msg *tgbotapi.Message) {
 
 	reviews, err := b.reviews.ListRecent(ctx, 10)
 	if err != nil {
-		b.logger.Error("review: list recent", "error", err)
+		b.loggerFor(ctx).Error("review: list recent", "error", err)
 		b.send(tgbotapi.NewMessage(msg.Chat.ID, b.t(lang, "review_error")))
 		return
 	}
@@ -260,7 +260,7 @@ func (b *Bot) handleReviewsAdmin(ctx context.Context, msg *tgbotapi.Message) {
 		kb = append(kb, []StyledButton{BtnDanger(fmt.Sprintf("🗑 #%d", r.ID), fmt.Sprintf("review:del:%d", r.ID))})
 	}
 	if err := b.sendStyled(msg.Chat.ID, strings.TrimRight(sb.String(), "\n"), "", kb); err != nil {
-		b.logger.Error("review: send admin list", "error", err)
+		b.loggerFor(ctx).Error("review: send admin list", "error", err)
 	}
 }
 
@@ -269,12 +269,12 @@ func (b *Bot) handleReviewsAdmin(ctx context.Context, msg *tgbotapi.Message) {
 func (b *Bot) onReviewDelete(ctx context.Context, chatID int64, data, lang string) {
 	id, err := parseIDFromCallback(data, "review:del:")
 	if err != nil {
-		b.logger.Error("parse review delete callback", "data", data, "error", err)
+		b.loggerFor(ctx).Error("parse review delete callback", "data", data, "error", err)
 		return
 	}
 
 	if err := b.reviews.Delete(ctx, id); err != nil {
-		b.logger.Error("review: delete", "review_id", id, "error", err)
+		b.loggerFor(ctx).Error("review: delete", "review_id", id, "error", err)
 		b.send(tgbotapi.NewMessage(chatID, b.t(lang, "review_error")))
 		return
 	}
@@ -286,7 +286,7 @@ func (b *Bot) onReviewDelete(ctx context.Context, chatID int64, data, lang strin
 func (b *Bot) productRating(ctx context.Context, productID int64) (float64, int64) {
 	avg, count, err := b.reviews.ProductRating(ctx, productID)
 	if err != nil {
-		b.logger.Warn("product rating", "product_id", productID, "error", err)
+		b.loggerFor(ctx).Warn("product rating", "product_id", productID, "error", err)
 		return 0, 0
 	}
 	return avg, count

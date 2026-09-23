@@ -51,9 +51,9 @@ func (b *Bot) handleStart(ctx context.Context, msg *tgbotapi.Message) {
 			if allowed {
 				_ = b.referrals.SetReferrer(ctx, msg.From.ID, referrer.ID)
 				// Bonus will be awarded on first purchase (Anti-Fraud)
-				b.logger.Info("referral link used", "user_id", msg.From.ID, "referrer_id", referrer.ID)
+				b.loggerFor(ctx).Info("referral link used", "user_id", msg.From.ID, "referrer_id", referrer.ID)
 			} else {
-				b.logger.Warn("referral limit reached", "referrer_id", referrer.ID)
+				b.loggerFor(ctx).Warn("referral limit reached", "referrer_id", referrer.ID)
 			}
 		}
 	}

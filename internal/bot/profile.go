@@ -13,14 +13,14 @@ func (b *Bot) handleProfile(ctx context.Context, msg *tgbotapi.Message) {
 func (b *Bot) sendProfile(ctx context.Context, chatID, userID int64, msgID int, lang string) {
 	user, err := b.users.GetByTelegramID(ctx, userID)
 	if err != nil {
-		b.logger.Error("get profile user", "error", err)
+		b.loggerFor(ctx).Error("get profile user", "error", err)
 		b.sendOrEditStyled(chatID, msgID, b.t(lang, "error_load_profile"), "", nil)
 		return
 	}
 
 	orders, err := b.order.GetUserOrders(ctx, userID)
 	if err != nil {
-		b.logger.Error("get profile orders", "error", err)
+		b.loggerFor(ctx).Error("get profile orders", "error", err)
 		b.sendOrEditStyled(chatID, msgID, b.t(lang, "error_load_profile"), "", nil)
 		return
 	}

@@ -208,7 +208,7 @@ func newE2EEnvWithConfig(t *testing.T, mutate func(*config.Config)) *e2eEnv {
 		// The production chain minus rate limiting (its per-user token bucket
 		// would silently drop mid-journey updates) and logging. Auth stays:
 		// it upserts users exactly like production.
-		handle: middleware.Auth(b.users)(b.route),
+		handle: middleware.Auth(b.users, logger)(b.route),
 	}
 	env.seedCatalog()
 	return env

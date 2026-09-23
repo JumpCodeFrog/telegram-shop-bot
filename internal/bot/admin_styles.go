@@ -90,7 +90,7 @@ func (b *Bot) onAdminSetStyle(ctx context.Context, chatID int64, msgID int, data
 	style := rest[sep+1:]
 
 	if err := b.uiSettings.SetButtonStyle(ctx, key, style); err != nil {
-		b.logger.Error("set button style", "key", key, "style", style, "error", err)
+		b.loggerFor(ctx).Error("set button style", "key", key, "style", style, "error", err)
 		b.send(tgbotapi.NewMessage(chatID, b.t(lang, "admin_btnstyle_save_failed")))
 		return
 	}

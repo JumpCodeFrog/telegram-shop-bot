@@ -106,7 +106,7 @@ func payReviewReasons(item storage.PaymentReviewCase) string {
 func (b *Bot) sendPayReviewList(ctx context.Context, chatID int64, msgID int, lang string) {
 	cases, err := b.listAllPaymentReviews(ctx)
 	if err != nil {
-		b.logger.Error("list payment reviews", "error", err)
+		b.loggerFor(ctx).Error("list payment reviews", "error", err)
 		b.sendOrEditStyled(chatID, msgID, b.t(lang, "admin_payreview_failed"), "", StyledKeyboard{})
 		return
 	}
@@ -320,7 +320,7 @@ func (b *Bot) sendPayReviewCard(ctx context.Context, chatID int64, msgID int, re
 			b.sendOrEditStyled(chatID, msgID, b.t(lang, "admin_payrev_case_gone"), "", StyledKeyboard{})
 			return
 		}
-		b.logger.Error("load payment review case", "error", err)
+		b.loggerFor(ctx).Error("load payment review case", "error", err)
 		b.sendOrEditStyled(chatID, msgID, b.t(lang, "admin_payreview_failed"), "", StyledKeyboard{})
 		return
 	}
@@ -393,7 +393,7 @@ func (b *Bot) onAdminPayReviewPreview(ctx context.Context, chatID int64, msgID i
 		case errors.Is(err, storage.ErrPaymentReviewConflict), errors.Is(err, storage.ErrOrderStatusConflict):
 			b.sendOrEditStyled(chatID, msgID, b.t(lang, "admin_payrev_conflict"), "", StyledKeyboard{})
 		default:
-			b.logger.Error("preview payment review", "error", err)
+			b.loggerFor(ctx).Error("preview payment review", "error", err)
 			b.sendOrEditStyled(chatID, msgID, b.t(lang, "admin_payreview_failed"), "", StyledKeyboard{})
 		}
 		return
@@ -447,7 +447,7 @@ func (b *Bot) onAdminPayReviewConfirm(ctx context.Context, chatID int64, msgID i
 	case errors.Is(err, storage.ErrPaymentReviewConflict) || errors.Is(err, storage.ErrOrderStatusConflict):
 		b.sendOrEditStyled(chatID, msgID, b.t(lang, "admin_payrev_conflict"), "", StyledKeyboard{})
 	default:
-		b.logger.Error("resolve payment review", "error", err)
+		b.loggerFor(ctx).Error("resolve payment review", "error", err)
 		b.sendOrEditStyled(chatID, msgID, b.t(lang, "admin_payreview_failed"), "", StyledKeyboard{})
 	}
 }

@@ -13,21 +13,21 @@ import (
 func (b *Bot) onWishlistToggle(ctx context.Context, cbID string, chatID, userID int64, msgID int, data, lang string) {
 	prodID, err := parseIDFromCallback(data, "wish:")
 	if err != nil {
-		b.logger.Error("parse wish callback", "error", err)
+		b.loggerFor(ctx).Error("parse wish callback", "error", err)
 		b.ack(cbID)
 		return
 	}
 
 	inWishlist, err := b.wishlist.IsInWishlist(ctx, userID, prodID)
 	if err != nil {
-		b.logger.Error("check wishlist", "error", err)
+		b.loggerFor(ctx).Error("check wishlist", "error", err)
 		b.alert(cbID, b.t(lang, "error_short"))
 		return
 	}
 
 	if inWishlist {
 		if err := b.wishlist.Remove(ctx, userID, prodID); err != nil {
-			b.logger.Error("wishlist remove", "error", err)
+			b.loggerFor(ctx).Error("wishlist remove", "error", err)
 			b.alert(cbID, b.t(lang, "error_short"))
 			return
 		}
@@ -35,12 +35,12 @@ func (b *Bot) onWishlistToggle(ctx context.Context, cbID string, chatID, userID 
 	} else {
 		p, err := b.catalog.GetProduct(ctx, prodID)
 		if err != nil {
-			b.logger.Error("get product for wishlist", "error", err)
+			b.loggerFor(ctx).Error("get product for wishlist", "error", err)
 			b.alert(cbID, b.t(lang, "error_short"))
 			return
 		}
 		if err := b.wishlist.Add(ctx, userID, prodID, p.PriceUSD, p.Stock); err != nil {
-			b.logger.Error("wishlist add", "error", err)
+			b.loggerFor(ctx).Error("wishlist add", "error", err)
 			b.alert(cbID, b.t(lang, "error_short"))
 			return
 		}
@@ -56,13 +56,13 @@ func (b *Bot) onWishlistToggle(ctx context.Context, cbID string, chatID, userID 
 func (b *Bot) onWishlistRemove(ctx context.Context, cbID string, chatID, userID int64, msgID int, data, lang string) {
 	prodID, err := parseIDFromCallback(data, "wish:rm:")
 	if err != nil {
-		b.logger.Error("parse wish remove callback", "error", err)
+		b.loggerFor(ctx).Error("parse wish remove callback", "error", err)
 		b.ack(cbID)
 		return
 	}
 
 	if err := b.wishlist.Remove(ctx, userID, prodID); err != nil {
-		b.logger.Error("wishlist remove", "error", err)
+		b.loggerFor(ctx).Error("wishlist remove", "error", err)
 		b.alert(cbID, b.t(lang, "error_short"))
 		return
 	}
@@ -94,7 +94,7 @@ func (b *Bot) handleWishlist(ctx context.Context, msg *tgbotapi.Message) {
 func (b *Bot) sendWishlist(ctx context.Context, chatID, userID int64, msgID int, lang string) {
 	products, err := b.wishlist.GetUserWishlist(ctx, userID)
 	if err != nil {
-		b.logger.Error("get user wishlist", "error", err)
+		b.loggerFor(ctx).Error("get user wishlist", "error", err)
 		b.send(tgbotapi.NewMessage(chatID, b.t(lang, "error_short")))
 		return
 	}

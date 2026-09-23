@@ -21,7 +21,7 @@ func (b *Bot) handleInlineQuery(ctx context.Context, iq *tgbotapi.InlineQuery) {
 
 	products, err := b.products.SearchProducts(ctx, iq.Query)
 	if err != nil {
-		b.logger.Error("inline query: search products", "query", iq.Query, "error", err)
+		b.loggerFor(ctx).Error("inline query: search products", "query", iq.Query, "error", err)
 		_, _ = b.api.Request(tgbotapi.InlineConfig{
 			InlineQueryID: iq.ID,
 			Results:       []interface{}{},
