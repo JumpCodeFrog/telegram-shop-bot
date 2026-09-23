@@ -5,11 +5,11 @@
 
 ## 1. Состояние
 
-- **main = `dcbbdf6`**, на 144 коммита впереди `origin/main` (мерж 4.15 durable-actor-column).
+- **main = `f1dd838`**, на 154 коммита впереди `origin/main` (мерж micro-followups).
   **НЕ запушено** — push только с явного согласия владельца. Все фичевые ветки сохранены.
-- **Roadmap 4.15 ЗАКРЫТ 23.09.2026** (merge `dcbbdf6`): durable actor в `payment_events`/
-  `payment_anomalies` (миграция 023), spec IMPLEMENTED. **Roadmap §4 полностью закрыт**
-  (4.3 отложен решением). Остаток работы: §6 micro-followups (12, 16–20 + 21).
+- **Roadmap §4 полностью закрыт** (4.14 ✅ `c67e66e`, 4.15 ✅ `dcbbdf6`; 4.3 отложен).
+  **HANDOFF §6 закрыт полностью** (16–21 ✅ 23.09.2026, plan micro-followups), кроме
+  отложенного решением 12 (TON re-scans) и нового 22 (из финал-ревью батча).
 - Ворота на HEAD: `go build` + `go vet` + `gofmt -l internal/ cmd/ worker/` (пусто) +
   `go test ./...` — зелёные; `-race` на money-пакетах зелёный.
 - Роадмап (§4) закрыт полностью, кроме отложенного решением 4.3 и остатков 4.14/4.15.
@@ -163,6 +163,13 @@ Stripe, YooKassa, баланса; crypto/ton/nowpayments — вручную в �
 21. Upgrade-пин для миграций: 022→023 (и будущих) — есть только fresh-DB schema-тест;
     harness-прецедент в `migration_020_test.go` (4.15 финал, M-3). Косметика надёжности.
     ✅ закрыто 23.09.2026, план docs/superpowers/plans/2026-09-23-micro-followups.md
+22. `/payreview` orphan-карточки refunded-kind (`refund_parent_not_found` /
+    `refund_identity_conflict` / `refund_exceeds_payment` / `refund_invalid_provider_fact`,
+    ledger.go:158-167): default-ветка предлагает `[Settle]`, который storage никогда не
+    примет (refunded kind требует `accepted_refund`), и НЕ предлагает `[Refund]`, который
+    `explicitNoAttemptAnomalyDecision` принял бы при наличии external+related ids
+    (micro-followups финал, observation #4 — pre-existing, shape-фильтр §6.17 только
+    сокращает мёртвые кнопки). Reason-aware mapping действий для refunded-orphans.
 
 ## 7. Процесс (как велась работа — воспроизводим)
 
@@ -214,7 +221,7 @@ scoped re-review и низко-рисковые ревью — `alibaba-cn/qwen3
 - Ревьюер-модель: «docs-only» НЕ автоматически flash — оператор-facing money-доки
   (CHANGELOG/§5/§11/§12) ревьюит glm-5.3.
 
-## 8. Deliverables-реестр (13 планов)
+## 8. Deliverables-реестр (14 планов)
 
 | План | Ветка | Merge | Коммитов | Fix-раундов |
 |---|---|---|---|---|
@@ -231,6 +238,7 @@ scoped re-review и низко-рисковые ревью — `alibaba-cn/qwen3
 | Polish follow-ups (§6.2/3/4/5/8/9/10/11/14/15) | chore/polish-followups | `5420f3b` | 15 | 3 (T5 P8-таксономия; T8(1) elevated digest-set; финал I-1 §5 recast) + T6 P7 re-dispatch (pre-commit BLOCKED) |
 | Update-ctx + trace (4.14) | feat/update-ctx-trace | `c67e66e` | 12 | 2 (T9 grep-recipe elevated; финал I-1 main.go shutdown-комментарий) |
 | Durable actor column (4.15) | feat/durable-actor-column | `dcbbdf6` | 8 | 3 (T3 webhook digest-продюсеры; T4 recordRefundAnomaly + trim; T6 stale-комментарии + changelog-tension) + финал I-1 (worker:crypto quarantine stamp) |
+| Micro-followups (§6.16–21) | chore/micro-followups | `f1dd838` | 8 | 3 (T1 R17 CORRECTED после pre-authorized BLOCKED; T2 +2 atomic-сайта; T3 NOWPayments sibling) + T4 fix (acceptance leg); финал: **Yes** без fixes |
 
 Плюс: roadmap rewrite (`f6fb155`, `46ab401`, обновления в задачах) и controller-janitorial
 коммиты (gofmt `36a0c84`, coupling-комментарии `9697320`).
@@ -336,3 +344,29 @@ scoped re-review и низко-рисковые ревью — `alibaba-cn/qwen3
 - Урок процесса (повторился 2×: T3, T4): producer-инвентарь в спеке неполон →
   concern-эскалации имплементеров ловят gap'ы до мержа. Правило «STOP при расхождении
   с инвентарём» в диспатчах работает.
+
+**Micro-followups / §6.16–21 (merge `f1dd838`, финал «Yes» без fixes):**
+- **R16**: §6.16 resolved as document-as-designed (CLI `safeReviewCode` — сознательная
+  санитизация парсимого key=value вывода; бот-карточка — raw). Код не тронут.
+- **R17 CORRECTED** (T1 pre-authorized BLOCKED поймал план-дефект): storage settle-gate
+  богаче двух конъюнктов (amount/currency/scale/external∨legacy/kind=captured/no-attempt).
+  Предикат фильтра оставлен `(amount>0 && external_id!="")`: точное разделение на
+  production-reachable строках (остальные конъюнкты write-enforced/unreachable/уже мертвы
+  сегодня — фильтр строго СОКРАЩАЕТ мёртвые кнопки); attempt-collision незеркалируем
+  любым in-row фильтром → storage fail-closed. Комментарий у фильтра фиксирует это.
+- **R18a**: renewal-пин расширяет `TestE2E_SubscriptionLifecycle` (amount vs live
+  `orders.total_stars`, charge `ch-sub-2`).
+- **R20**: sweep-правило (ctx-param only; bot.go/webhook.go/update_ctx.go исключены);
+  148 конверсий, 5 законных остатков (ctx-less helpers), 0 double-wrap; reviewer
+  механически сверил все пары 1:1.
+- **R20b**: `middleware.Auth(users, logger)`; upsert-swallow → Warn (без trace_id —
+  middleware-пакет не видит bot ctx-key, нет circular import; pinned в auth_test).
+- Fix-расширения по ходу: T2 +2 unlisted yookassa atomic-сайта (repo-grep: cross-goroutine
+  bool-флагов больше нет нигде); T3 NOWPayments §8 sibling qualification; T4 acceptance-leg
+  (doc-comment overclaim — Important от ревьюера, brief-дефект).
+- Триаж финала (все PARKED): whitespace-vs-TrimSpace asymmetry (unreachable), e2e line-ref
+  comment rot, TON §7 loose wording (unknown_order — другой класс; кандидат в будущий
+  docs-проход), T4 probe-strictness, report-арифметика, CHANGELOG exclusions
+  parenthetical. Новый хвост → §6.22 (refunded-orphan action mapping, финал observation #4).
+- Урок: concern-эскалации имплементеров + pre-authorized BLOCKED поймали 3 план-дефекта
+  до коммита в этом батче (T1 predicate, T2 2 сайта, T4 overclaim) — дисциплина окупается.
