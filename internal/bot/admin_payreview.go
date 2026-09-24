@@ -245,9 +245,10 @@ func (b *Bot) findReviewCase(ctx context.Context, ref payReviewRef) (storage.Pay
 // row admits only terminal dismissal. Orphan cards (no local order) offer only
 // the actions that can actually pass against the storage decision gates
 // (payment_resolutions.go): digest-only facts fail every decision, path-5
-// refund orphans pass Refund pre-recovery and Dismiss post-recovery, other
-// capture orphans pass Settle (compensated) only when fully shaped (§6.17).
-// Attached cases keep the three
+// refund orphans pass Refund pre-recovery and Dismiss post-recovery, refunded
+// orphans pass Refund (accepted_refund) only with the full money tuple
+// (§6.22), other capture orphans pass Settle (compensated) only when fully
+// shaped (§6.17). Attached cases keep the three
 // candidate projections — the preview validates them against ledger evidence.
 // This is a UX filter, never a gate: storage remains the final validator, and
 // a filtered-out action that storage would accept is a bug, not a policy.
@@ -269,6 +270,21 @@ func payReviewActions(item storage.PaymentReviewCase) []string {
 			// digests plus the Stars undecodable-update digest.
 			return nil
 		default:
+			t := item.Targets[0]
+			// Refunded-kind orphan (refund ingress failures): storage accepts
+			// ONLY accepted_refund and only with the full money tuple —
+			// amount + refund id + parent capture id
+			// (explicitNoAttemptAnomalyDecision refunded branch). Dismiss is
+			// deliberately not offered: with no refunds row recorded it is
+			// fail-closed until evidence arrives (trap-card polarity).
+			// Kind-keyed, not reason-keyed: reasons rot, kinds are
+			// schema-checked.
+			if t.EventKind == storage.PaymentEventRefunded {
+				if t.AmountMinor > 0 && t.ExternalID != "" && t.RelatedExternalID != "" {
+					return []string{payReviewActionRefund}
+				}
+				return nil
+			}
 			// Shape-keyed gate (§6.17, R17 CORRECTED): mirrors the in-row
 			// shape conjuncts of the storage settle precondition
 			// (explicitNoAttemptAnomalyDecision). Exact on production-reachable

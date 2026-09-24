@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -726,7 +727,10 @@ func TestListPaymentReviewsTargetsCarryActor(t *testing.T) {
 // TestListPaymentReviewsAnomalyTargetsCarryShape pins the 4.15 §6.17 read-back:
 // anomaly targets surface their row's fact shape (amount, external id) so the
 // bot can mirror the storage settle precondition; event targets keep zero
-// values.
+// values. Extended by §6.22: anomaly targets also carry the row's event kind
+// and related (parent capture) external id — the refunded-orphan money tuple
+// conjuncts — while event targets carry their event kind (agreeing with the
+// kind inside their event_<kind> ReasonCode) and a zero related id.
 func TestListPaymentReviewsAnomalyTargetsCarryShape(t *testing.T) {
 	db, err := New(filepath.Join(t.TempDir(), "review-target-shape.db"))
 	if err != nil {
@@ -757,6 +761,16 @@ func TestListPaymentReviewsAnomalyTargetsCarryShape(t *testing.T) {
 	if err := store.RecordPaymentAnomaly(ctx, orphan); !errors.Is(err, ErrPaymentNeedsReview) {
 		t.Fatalf("orphan anomaly error=%v", err)
 	}
+	// A refunded-kind orphan with the full money tuple, kind and parent
+	// capture id included (§6.22 read-back).
+	refunded := PaymentAnomaly{
+		Provider: PaymentMethodStars, EventKind: PaymentEventRefunded,
+		ExternalID: "shape-refund", RelatedExternalID: "shape-parent",
+		AmountMinor: 100, Currency: "XTR", Scale: 0, Reason: "refund_parent_not_found",
+	}
+	if err := store.RecordPaymentAnomaly(ctx, refunded); !errors.Is(err, ErrPaymentNeedsReview) {
+		t.Fatalf("refunded orphan anomaly error=%v", err)
+	}
 
 	rowID := func(table, externalID string) int64 {
 		t.Helper()
@@ -770,23 +784,27 @@ func TestListPaymentReviewsAnomalyTargetsCarryShape(t *testing.T) {
 	wantShape := map[string]struct {
 		amount   int64
 		external string
+		kind     string
+		related  string
 	}{
-		fmt.Sprintf("%s:%d", PaymentReviewTargetEvent, rowID("payment_events", "shape-event")):         {amount: 0, external: ""},
-		fmt.Sprintf("%s:%d", PaymentReviewTargetAnomaly, rowID("payment_anomalies", "shape-attached")): {amount: 250, external: "shape-attached"},
-		fmt.Sprintf("%s:%d", PaymentReviewTargetAnomaly, rowID("payment_anomalies", "shape-orphan")):   {amount: 100, external: "shape-orphan"},
+		fmt.Sprintf("%s:%d", PaymentReviewTargetEvent, rowID("payment_events", "shape-event")):         {amount: 0, external: "", kind: PaymentEventCaptured, related: ""},
+		fmt.Sprintf("%s:%d", PaymentReviewTargetAnomaly, rowID("payment_anomalies", "shape-attached")): {amount: 250, external: "shape-attached", kind: PaymentEventCaptured, related: ""},
+		fmt.Sprintf("%s:%d", PaymentReviewTargetAnomaly, rowID("payment_anomalies", "shape-orphan")):   {amount: 100, external: "shape-orphan", kind: PaymentEventCaptured, related: ""},
+		fmt.Sprintf("%s:%d", PaymentReviewTargetAnomaly, rowID("payment_anomalies", "shape-refund")):   {amount: 100, external: "shape-refund", kind: PaymentEventRefunded, related: "shape-parent"},
 	}
 
 	cases, err := NewSQLPaymentLedgerStore(db).ListPaymentReviews(ctx, PaymentMethodStars)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var attachedTargets, orphanTargets int
+	var attachedTargets, orphanCases int
 	for _, item := range cases {
 		switch item.OrderID {
 		case orderID:
 			attachedTargets = len(item.Targets)
 		case 0:
-			orphanTargets = len(item.Targets)
+			// Every detached fact is exposed as its own single-target case.
+			orphanCases++
 		}
 		for _, target := range item.Targets {
 			key := fmt.Sprintf("%s:%d", target.Kind, target.ID)
@@ -794,15 +812,22 @@ func TestListPaymentReviewsAnomalyTargetsCarryShape(t *testing.T) {
 			if !ok {
 				t.Fatalf("unexpected target %s", key)
 			}
-			if target.AmountMinor != want.amount || target.ExternalID != want.external {
-				t.Fatalf("target %s shape=(%d,%q) want (%d,%q)", key,
-					target.AmountMinor, target.ExternalID, want.amount, want.external)
+			if target.AmountMinor != want.amount || target.ExternalID != want.external ||
+				target.EventKind != want.kind || target.RelatedExternalID != want.related {
+				t.Fatalf("target %s shape=(%d,%q,%q,%q) want (%d,%q,%q,%q)", key,
+					target.AmountMinor, target.ExternalID, target.EventKind, target.RelatedExternalID,
+					want.amount, want.external, want.kind, want.related)
+			}
+			if target.Kind == PaymentReviewTargetEvent &&
+				target.EventKind != strings.TrimPrefix(target.ReasonCode, "event_") {
+				t.Fatalf("event target %s kind=%q disagrees with reason %q",
+					key, target.EventKind, target.ReasonCode)
 			}
 			delete(wantShape, key)
 		}
 	}
-	if attachedTargets != 2 || orphanTargets != 1 {
-		t.Fatalf("attached/orphan target counts=%d/%d cases=%+v", attachedTargets, orphanTargets, cases)
+	if attachedTargets != 2 || orphanCases != 2 {
+		t.Fatalf("attached targets/orphan cases=%d/%d cases=%+v", attachedTargets, orphanCases, cases)
 	}
 	if len(wantShape) != 0 {
 		t.Fatalf("missing targets=%v", wantShape)

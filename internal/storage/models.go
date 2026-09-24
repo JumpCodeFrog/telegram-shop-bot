@@ -282,6 +282,11 @@ type PaymentReviewTarget struct {
 	// §6.17) — populated for anomaly targets only; zero for event/order targets.
 	AmountMinor int64
 	ExternalID  string
+	// EventKind is the row's event kind ("captured"/"refunded") — populated for
+	// event and anomaly targets. RelatedExternalID is the parent capture's id —
+	// anomaly targets only (zero for event/order targets).
+	EventKind         string
+	RelatedExternalID string
 }
 
 type PaymentReviewCase struct {
