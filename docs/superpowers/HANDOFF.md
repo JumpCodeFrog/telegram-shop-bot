@@ -390,3 +390,12 @@ scoped re-review и низко-рисковые ревью — `alibaba-cn/qwen3
   post-evidence Dismiss остаётся CLI-only. Если станет operator-annoyance: добавить
   `Currency` в target shape (механизм read-back уже есть).
 - Janitorial incl.: §6.22 ✅ indent-фикс (5→4), in-code comment residual acknowledgment.
+
+**Cross-branch session review (23.09.2026, qwen3.8-max-0902, дельта 716b4ba..ce97792 — 4 ветки сессии):**
+вердикт **bug-free**, все 6 пар взаимодействий clean. Minor (принят, зафиксирован в коде
+admin_payreview.go): зеркало фильтров §6.17/§6.22 неполно в обе стороны — currency-конъюнкт
+не зеркалится (только патологические строки, fail-visible) и legacy_capture_unverifiable
+исключение (orphan-unreachable). Если станет operator-annoyance: `Currency` в
+PaymentReviewTarget — механизм read-back есть. Informational для эксплуатации: Stars polling
+settles атрибутированы `webhook:stars` (раздельный литерал, по дизайну); provider-webhook
+settle-логи без trace_id (4.14 scope); 30s budget теперь per-update (не per-handler).

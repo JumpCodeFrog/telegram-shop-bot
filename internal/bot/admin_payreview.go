@@ -293,7 +293,11 @@ func payReviewActions(item storage.PaymentReviewCase) []string {
 			// (explicitNoAttemptAnomalyDecision). Exact on production-reachable
 			// rows; the unmirrorable attempt-collision conjunct stays
 			// fail-closed in storage. Fail-closed UX: ambiguous rows lose the
-			// button, CLI stays available.
+			// button, CLI stays available. Residuals (cross-branch review
+			// 23.09): currency is unmirrored (pathological rows only —
+			// fails visible at preview); the legacy_capture_unverifiable
+			// external-id exception is orphan-unreachable (migration-017
+			// rows are always attached).
 			if item.Targets[0].AmountMinor > 0 && item.Targets[0].ExternalID != "" {
 				return []string{payReviewActionSettle}
 			}
