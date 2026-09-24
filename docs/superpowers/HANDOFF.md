@@ -5,11 +5,11 @@
 
 ## 1. Состояние
 
-- **main = `f1dd838`**, на 154 коммита впереди `origin/main` (мерж micro-followups).
+- **main = `14acb60`**, на 158 коммитов впереди `origin/main` (мерж §6.22 payreview-refunded-orphans).
   **НЕ запушено** — push только с явного согласия владельца. Все фичевые ветки сохранены.
-- **Roadmap §4 полностью закрыт** (4.14 ✅ `c67e66e`, 4.15 ✅ `dcbbdf6`; 4.3 отложен).
-  **HANDOFF §6 закрыт полностью** (16–21 ✅ 23.09.2026, plan micro-followups), кроме
-  отложенного решением 12 (TON re-scans) и нового 22 (из финал-ревью батча).
+- **Roadmap §4 и HANDOFF §6 полностью закрыты** (§6.22 ✅ 23.09.2026), кроме
+  отложенного решением §6.12 (TON re-scans до роста объёмов). Открытой работы нет —
+  только push-чеклист (§5) по команде владельца.
 - Ворота на HEAD: `go build` + `go vet` + `gofmt -l internal/ cmd/ worker/` (пусто) +
   `go test ./...` — зелёные; `-race` на money-пакетах зелёный.
 - Роадмап (§4) закрыт полностью, кроме отложенного решением 4.3 и остатков 4.14/4.15.
@@ -170,8 +170,8 @@ Stripe, YooKassa, баланса; crypto/ton/nowpayments — вручную в �
     `explicitNoAttemptAnomalyDecision` принял бы при наличии external+related ids
     (micro-followups финал, observation #4 — pre-existing, shape-фильтр §6.17 только
     сокращает мёртвые кнопки). Reason-aware mapping действий для refunded-orphans.
-     ✅ закрыто 23.09.2026, план
-     docs/superpowers/plans/2026-09-23-payreview-refunded-orphans.md
+    ✅ закрыто 23.09.2026, план
+    docs/superpowers/plans/2026-09-23-payreview-refunded-orphans.md
 
 ## 7. Процесс (как велась работа — воспроизводим)
 
@@ -223,7 +223,7 @@ scoped re-review и низко-рисковые ревью — `alibaba-cn/qwen3
 - Ревьюер-модель: «docs-only» НЕ автоматически flash — оператор-facing money-доки
   (CHANGELOG/§5/§11/§12) ревьюит glm-5.3.
 
-## 8. Deliverables-реестр (14 планов)
+## 8. Deliverables-реестр (15 планов)
 
 | План | Ветка | Merge | Коммитов | Fix-раундов |
 |---|---|---|---|---|
@@ -241,6 +241,7 @@ scoped re-review и низко-рисковые ревью — `alibaba-cn/qwen3
 | Update-ctx + trace (4.14) | feat/update-ctx-trace | `c67e66e` | 12 | 2 (T9 grep-recipe elevated; финал I-1 main.go shutdown-комментарий) |
 | Durable actor column (4.15) | feat/durable-actor-column | `dcbbdf6` | 8 | 3 (T3 webhook digest-продюсеры; T4 recordRefundAnomaly + trim; T6 stale-комментарии + changelog-tension) + финал I-1 (worker:crypto quarantine stamp) |
 | Micro-followups (§6.16–21) | chore/micro-followups | `f1dd838` | 8 | 3 (T1 R17 CORRECTED после pre-authorized BLOCKED; T2 +2 atomic-сайта; T3 NOWPayments sibling) + T4 fix (acceptance leg); финал: **Yes** без fixes |
+| Payreview refunded-orphans (§6.22) | fix/payreview-refunded-orphans | `14acb60` | 2 | 0; финал: **Yes** без fixes |
 
 Плюс: roadmap rewrite (`f6fb155`, `46ab401`, обновления в задачах) и controller-janitorial
 коммиты (gofmt `36a0c84`, coupling-комментарии `9697320`).
@@ -372,3 +373,20 @@ scoped re-review и низко-рисковые ревью — `alibaba-cn/qwen3
   parenthetical. Новый хвост → §6.22 (refunded-orphan action mapping, финал observation #4).
 - Урок: concern-эскалации имплементеров + pre-authorized BLOCKED поймали 3 план-дефекта
   до коммита в этом батче (T1 predicate, T2 2 сайта, T4 overclaim) — дисциплина окупается.
+
+**Payreview refunded-orphans / §6.22 (merge `14acb60`, финал «Yes» без fixes):**
+- **R22a**: ветка key'уется по `EventKind` (schema-checked данные), НЕ по reason-строке
+  (замкнутое множество причин гнилось бы).
+- **R22b**: Dismiss на refunded-orphan НЕ предлагается — storage отвергает empty-decision
+  до появления evidence-строк (полярность trap-карточки); только `[Refund]` при полном
+  money-tuple, иначе CLI-only.
+- **R22c**: event-targets тоже несут EventKind (колонка уже сканировалась), RelatedExternalID
+  — только anomaly-targets.
+- Финал-ревью (qwen3.8-max) подтвердил по широкой линзе: НИКАКАЯ bot-поверхность (кнопка
+  или crafted callback) не ведёт к settle/compensated на refunded-orphan; TOCTOU-discipline
+  preview→confirm сохранена; CHANGELOG-claim истинен против гейта.
+- Residual (принят, зафиксирован в коде комментарием): replay уже-succeeded refund id
+  (evidence row существует) незеркалируем shape-фильтром — fails visible at preview,
+  post-evidence Dismiss остаётся CLI-only. Если станет operator-annoyance: добавить
+  `Currency` в target shape (механизм read-back уже есть).
+- Janitorial incl.: §6.22 ✅ indent-фикс (5→4), in-code comment residual acknowledgment.

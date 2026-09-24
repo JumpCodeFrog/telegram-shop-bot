@@ -278,7 +278,10 @@ func payReviewActions(item storage.PaymentReviewCase) []string {
 			// deliberately not offered: with no refunds row recorded it is
 			// fail-closed until evidence arrives (trap-card polarity).
 			// Kind-keyed, not reason-keyed: reasons rot, kinds are
-			// schema-checked.
+			// schema-checked. Residual (final-review): a replayed
+			// already-succeeded refund id (evidence row exists) is
+			// unmirrorable here — it fails visible at preview; post-evidence
+			// Dismiss stays CLI-only.
 			if t.EventKind == storage.PaymentEventRefunded {
 				if t.AmountMinor > 0 && t.ExternalID != "" && t.RelatedExternalID != "" {
 					return []string{payReviewActionRefund}
